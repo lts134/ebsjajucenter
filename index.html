@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>자기주도학습센터 CS 관리 시스템</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
   <div id="root"></div>
@@ -34,7 +35,8 @@
       search: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg>`,
       logOut: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>`,
       plus: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>`,
-      trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`
+      trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+      download: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`
     };
 
     // 상태 관리
@@ -105,6 +107,57 @@
       }
 
       filteredCases = filtered;
+    }
+
+    // Excel 다운로드 기능
+    function downloadExcel() {
+      // 다운로드할 데이터 준비
+      const dataToExport = filteredCases.map(c => ({
+        '사례번호': c.caseId,
+        '센터': c.centerName,
+        '유형': c.category,
+        '상태': c.status,
+        '제목': c.title,
+        '내용': c.content,
+        '담당자': c.contactName || '',
+        '연락처': c.contactPhone || '',
+        '이메일': c.contactEmail || '',
+        '등록일시': new Date(c.createdAt).toLocaleString('ko-KR'),
+        '수정일시': new Date(c.updatedAt).toLocaleString('ko-KR')
+      }));
+
+      if (dataToExport.length === 0) {
+        alert('다운로드할 데이터가 없습니다.');
+        return;
+      }
+
+      // 워크북 생성
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(dataToExport);
+
+      // 컬럼 너비 설정
+      ws['!cols'] = [
+        { wch: 15 }, // 사례번호
+        { wch: 12 }, // 센터
+        { wch: 8 },  // 유형
+        { wch: 8 },  // 상태
+        { wch: 30 }, // 제목
+        { wch: 50 }, // 내용
+        { wch: 12 }, // 담당자
+        { wch: 15 }, // 연락처
+        { wch: 25 }, // 이메일
+        { wch: 20 }, // 등록일시
+        { wch: 20 }  // 수정일시
+      ];
+
+      XLSX.utils.book_append_sheet(wb, ws, "CS사례");
+
+      // 파일명 생성 (날짜 포함)
+      const today = new Date().toISOString().split('T')[0];
+      const filename = `CS사례_${today}.xlsx`;
+
+      // 다운로드
+      XLSX.writeFile(wb, filename);
     }
 
     // 로그인
@@ -246,7 +299,7 @@
                     type="text"
                     id="loginId"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="센터 아이디 입력"
+                    placeholder="센터 아이디"
                   />
                 </div>
                 
@@ -256,7 +309,7 @@
                     type="password"
                     id="loginPassword"
                     class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    placeholder="비밀번호 입력"
+                    placeholder="센터 비밀번호"
                   />
                 </div>
                 
@@ -269,7 +322,8 @@
               </form>
 
               <div class="mt-6 p-4 bg-gray-50 rounded-lg text-sm text-gray-600">
-                <p class="font-medium mb-2">아이디 분실시 문의는 010-9968-8597:</p>
+                <p class="font-medium mb-2">아이디 비밀번호 분실문의:</p>
+                <p>• 010-9968-8597</p>
               </div>
 
               <div class="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
@@ -300,6 +354,10 @@
               </div>
               <div class="flex items-center gap-3">
                 ${currentUser.isAdmin ? `
+                  <button id="downloadBtn" class="flex items-center gap-2 px-4 py-2 text-green-600 hover:bg-green-50 rounded-lg transition-colors text-sm font-medium">
+                    ${icons.download}
+                    Excel 다운로드
+                  </button>
                   <button id="resetBtn" class="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm">
                     ${icons.trash}
                     전체 삭제
@@ -498,91 +556,4 @@
                             </button>
                           ` : ''}
                         </div>
-                        <button onclick="handleDeleteCase('${caseItem.id}')" class="px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors flex items-center gap-1 justify-center">
-                          ${icons.trash}
-                          삭제
-                        </button>
-                      </div>
-                    ` : ''}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        </div>
-      `;
-
-      // 이벤트 리스너
-      const logoutBtn = document.getElementById('logoutBtn');
-      if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
-
-      const resetBtn = document.getElementById('resetBtn');
-      if (resetBtn) resetBtn.addEventListener('click', handleResetData);
-
-      const newCaseBtn = document.getElementById('newCaseBtn');
-      if (newCaseBtn) newCaseBtn.addEventListener('click', () => {
-        showNewCase = true;
-        render();
-      });
-
-      const searchInput = document.getElementById('searchInput');
-      if (searchInput) {
-        searchInput.addEventListener('input', (e) => {
-          searchTerm = e.target.value;
-          filterCases();
-          render();
-        });
-      }
-
-      const statusFilter = document.getElementById('statusFilter');
-      if (statusFilter) {
-        statusFilter.addEventListener('change', (e) => {
-          filterStatus = e.target.value;
-          filterCases();
-          render();
-        });
-      }
-
-      const categoryFilter = document.getElementById('categoryFilter');
-      if (categoryFilter) {
-        categoryFilter.addEventListener('change', (e) => {
-          filterCategory = e.target.value;
-          filterCases();
-          render();
-        });
-      }
-
-      const newCaseForm = document.getElementById('newCaseForm');
-      if (newCaseForm) {
-        newCaseForm.addEventListener('submit', (e) => {
-          e.preventDefault();
-          newCase = {
-            category: document.getElementById('caseCategory').value,
-            title: document.getElementById('caseTitle').value,
-            content: document.getElementById('caseContent').value,
-            contactName: document.getElementById('contactName').value,
-            contactPhone: document.getElementById('contactPhone').value,
-            contactEmail: document.getElementById('contactEmail').value
-          };
-          handleSubmitCase();
-        });
-
-        const cancelBtn = document.getElementById('cancelBtn');
-        if (cancelBtn) {
-          cancelBtn.addEventListener('click', () => {
-            showNewCase = false;
-            render();
-          });
-        }
-      }
-    }
-
-    // 전역 함수로 등록
-    window.handleUpdateStatus = handleUpdateStatus;
-    window.handleDeleteCase = handleDeleteCase;
-
-    // 초기 렌더링
-    render();
-  </script>
-</body>
-</html>
+                        <button onclick="handleDeleteCase('${caseItem.id}')" class="px-3 py-1
