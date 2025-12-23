@@ -556,4 +556,94 @@
                             </button>
                           ` : ''}
                         </div>
-                        <button onclick="handleDeleteCase('${caseItem.id}')" class="px-3 py-1
+                        <button onclick="handleDeleteCase('${caseItem.id}')" class="px-3 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200 transition-colors flex items-center gap-1 justify-center">
+                          ${icons.trash}
+                          삭제
+                        </button>
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+
+      // 이벤트 리스너
+      const logoutBtn = document.getElementById('logoutBtn');
+      if (logoutBtn) logoutBtn.addEventListener('click', handleLogout);
+
+      const downloadBtn = document.getElementById('downloadBtn');
+      if (downloadBtn) downloadBtn.addEventListener('click', downloadExcel);
+
+      const resetBtn = document.getElementById('resetBtn');
+      if (resetBtn) resetBtn.addEventListener('click', handleResetData);
+
+      const newCaseBtn = document.getElementById('newCaseBtn');
+      if (newCaseBtn) newCaseBtn.addEventListener('click', () => {
+        showNewCase = true;
+        render();
+      });
+
+      const searchInput = document.getElementById('searchInput');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          searchTerm = e.target.value;
+          filterCases();
+          render();
+        });
+      }
+
+      const statusFilter = document.getElementById('statusFilter');
+      if (statusFilter) {
+        statusFilter.addEventListener('change', (e) => {
+          filterStatus = e.target.value;
+          filterCases();
+          render();
+        });
+      }
+
+      const categoryFilter = document.getElementById('categoryFilter');
+      if (categoryFilter) {
+        categoryFilter.addEventListener('change', (e) => {
+          filterCategory = e.target.value;
+          filterCases();
+          render();
+        });
+      }
+
+      const newCaseForm = document.getElementById('newCaseForm');
+      if (newCaseForm) {
+        newCaseForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          newCase = {
+            category: document.getElementById('caseCategory').value,
+            title: document.getElementById('caseTitle').value,
+            content: document.getElementById('caseContent').value,
+            contactName: document.getElementById('contactName').value,
+            contactPhone: document.getElementById('contactPhone').value,
+            contactEmail: document.getElementById('contactEmail').value
+          };
+          handleSubmitCase();
+        });
+
+        const cancelBtn = document.getElementById('cancelBtn');
+        if (cancelBtn) {
+          cancelBtn.addEventListener('click', () => {
+            showNewCase = false;
+            render();
+          });
+        }
+      }
+    }
+
+    // 전역 함수로 등록
+    window.handleUpdateStatus = handleUpdateStatus;
+    window.handleDeleteCase = handleDeleteCase;
+
+    // 초기 렌더링
+    render();
+  </script>
+</body>
+</html>
