@@ -7,6 +7,7 @@
 - 없는 모듈만 자동 설치(이미 있으면 건너뜀) → 브라우저에 앱이 열림. 종료: 터미널에서 Ctrl+C
 - Claude API 키: 실행 전 `set ANTHROPIC_API_KEY=...` 또는 앱의 **설정** 화면에 세션 한정 입력 → **연결 테스트**로 모델·왕복시간 확인
   - 키가 없으면 규칙 기반(정규식·동의어 사전)으로 동작. 심사용 시연은 Claude 경로 권장
+  - 요구서 원문의 전화·이메일·주민번호·계좌 패턴은 Claude에 보내기 전 자동 마스킹. ⑧ 도구 결과에서는 직원 이름 필드 제거
   - 워크스페이스에 묶이지 않은 키는 `ANTHROPIC_WORKSPACE_ID`(wrkspc_…)도 필요(설정 화면에 칸 있음). 워크스페이스 안에서 만든 키는 불필요
   - 호출에는 API 크레딧이 있어야 함(콘솔 Plans & Billing). 잔액 0이면 "credit balance is too low"로 거절됨
   - 모델은 `CLAUDE_MODEL`로 지정. 비우면 `llm.py`의 후보 순서(sonnet-4-6 → sonnet-5 → sonnet-4-5 → haiku-4-5)로 자동 시도
@@ -34,7 +35,7 @@
 제출용 ZIP: `python make_submission_zip.py` → `../dist/` (이력 DB·출력물·캐시 제외)
 
 ## 점검
-- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 45건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
+- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 55건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
 - `python check_llm.py` → 샘플 4건 + 실전형 5건(`testcases.py`, 전부 가상)을 규칙/Claude 양쪽으로 추출해 정답표와 비교
 - 결과: `storage/llm_check_<날짜>.md`(채점표 + 사례별 추출 결과 + 호출 기록) / `.json`
 - 규칙 경로는 이 사례들에 맞춰 조정된 것이므로 100%가 당연함. Claude 경로 점수와 오류 유형이 실제 점검 대상
@@ -51,7 +52,7 @@
 | `draft.py` / `hwpx_out.py` | 회신 초안·충족 검사 / HWPX 템플릿 치환 |
 | `assist.py` / `history_qa.py` | 사유 문구 후보·예상 후속 질문(규칙+Claude) / 이력 질의 도구 7종·도구 호출 루프 사용 |
 | `check_llm.py` / `testcases.py` | 추출 품질 점검 / 점검 사례·정답표 |
-| `tests/` / `run_checks.py` | pytest 단위 테스트 45건·화면 흐름(①~⑧) / 전체 점검 한 번에 |
+| `tests/` / `run_checks.py` | pytest 단위 테스트 55건·화면 흐름(①~⑧) / 전체 점검 한 번에 |
 | `make_submission_zip.py` | 제출용 ZIP 생성(DB·캐시 제외) |
 | `make_sample_data.py` / `make_template.py` | 가상 데이터 / 샘플 회신 템플릿 생성(실데이터 교체 시 불필요) |
 | `docs/` | 시연 시나리오 · 화면 캡처 · 캡처 스크립트 · 작업일지 |

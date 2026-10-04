@@ -87,19 +87,22 @@ CREATE TABLE IF NOT EXISTS diff_reasons (      -- 차이 사유(담당자 입력
 
 _initialized = set()
 
+CORRUPT_MARKERS = ("file is not a database", "malformed", "not a database", "unsupported file format")
+
 def connect(_retry=True):
+    """연결. 잠금('database is locked')은 timeout 안에서 기다리고, 파일 손상이 확실할 때만 .broken으로 비켜 두고 새로 만든다."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     try:
-        con = sqlite3.connect(DB_PATH)
+        con = sqlite3.connect(DB_PATH, timeout=15)
         con.row_factory = sqlite3.Row
         if str(DB_PATH) not in _initialized:      # 스키마 생성·마이그레이션은 프로세스당 1회
             con.executescript(SCHEMA)
             _migrate(con)
             _initialized.add(str(DB_PATH))
         return con
-    except sqlite3.OperationalError:
-        # 손상된 DB 파일이면 이름을 바꿔 두고 새로 만든다
-        if not _retry: raise
+    except sqlite3.DatabaseError as e:
+        if not _retry or not any(m in str(e).lower() for m in CORRUPT_MARKERS):
+            raise                                   # 잠금·권한 등은 그대로 올려 사용자에게 보인다(데이터를 비켜 두지 않음)
         for suffix in ("", "-journal"):
             f = Path(str(DB_PATH) + suffix)
             if f.exists():
@@ -128,9 +131,15 @@ def add_request(requester, received_date, due_date, title, raw_text, source_file
         "INSERT INTO requests(requester,received_date,due_date,title,raw_text,source_file,created_at) VALUES(?,?,?,?,?,?,?)",
         (requester, received_date, due_date, title, raw_text, source_file, now()))
     rid = cur.lastrowid
-    for i, it in enumerate(items, 1):
+    def _s(v):                                   # NaN·None → None, 그 외 문자열
+        return None if v is None or (isinstance(v, float) and v != v) else str(v).strip() or None
+    seq = 0
+    for it in items:
+        text = _s(it.get("item_text"))
+        if not text: continue                    # 빈 행(데이터 에디터에서 추가만 하고 비운 행)은 저장하지 않음
+        seq += 1
         con.execute("INSERT INTO items(request_id,seq,item_text,indicator,base_date,unit,period) VALUES(?,?,?,?,?,?,?)",
-                    (rid, i, it.get("item_text"), it.get("indicator"), it.get("base_date"), it.get("unit"), it.get("period")))
+                    (rid, seq, text, _s(it.get("indicator")), _s(it.get("base_date")), _s(it.get("unit")), _s(it.get("period"))))
     con.commit(); con.close()
     return rid
 

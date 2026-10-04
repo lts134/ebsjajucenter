@@ -70,8 +70,9 @@ def explain_error(e: Exception) -> str:
     return f"{type(e).__name__}: {m[:300]}"
 
 def _model_order() -> list[str]:
+    """사용자가 고른 CLAUDE_MODEL이 가장 먼저, 다음은 이 프로세스에서 성공한 모델, 그다음 후보 순."""
     pref = (os.environ.get("CLAUDE_MODEL") or "").strip()
-    order = ([_RESOLVED] if _RESOLVED else []) + ([pref] if pref else []) + CANDIDATES
+    order = ([pref] if pref else []) + ([_RESOLVED] if _RESOLVED else []) + CANDIDATES
     seen, out = set(), []
     for m in order:
         if m and m not in seen: seen.add(m); out.append(m)
@@ -135,7 +136,7 @@ def ask_json(prompt: str, system: str | None = None, max_tokens: int = 2000, exp
         return parse_json(raw2, expect)
 
 def model_label() -> str:
-    return _RESOLVED or os.environ.get("CLAUDE_MODEL") or CANDIDATES[0]
+    return (os.environ.get("CLAUDE_MODEL") or "").strip() or _RESOLVED or CANDIDATES[0]
 
 def estimate_cost(model: str | None, input_tokens, output_tokens) -> float | None:
     """단가표에 있는 모델만 추정(USD). 없으면 None."""

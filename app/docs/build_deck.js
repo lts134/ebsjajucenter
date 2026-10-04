@@ -255,7 +255,7 @@ box(6.2, 2.1, 2.6, 1.5, "검색·제안", "search(문자 n-gram, 외부 API 없�
 box(0.8, 3.8, 2.5, 1.5, "대조·점검 (코드)", "compare(pandas) · pii\n차이·단서·점검표·출처");
 box(3.5, 3.8, 2.5, 1.5, "초안·출력·보조", "draft · hwpx_out\nassist(사유 후보·후속 질문) · history_qa(조회 도구 7종)");
 box(6.2, 3.8, 2.6, 1.5, "이력 DB (SQLite 1파일)", "requests · items · submissions\nsubmission_values(출처) · diff_reasons · drafts · reviews");
-box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 45건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
+box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 55건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
 // 우: API
 box(9.3, 1.5, 3.45, 2.3, "Claude API (선택)", "llm.py 공통 호출\n· 모델 자동 대체(404 → 다음 후보)\n· 구조화 출력(JSON 스키마) + 미지원 시 텍스트 파싱\n· 도구 호출 루프(⑧), 429·5xx 재시도, 타임아웃\n· 호출별 모델·지연·토큰·추정 비용 기록", C.accent1, C.background1);
 box(9.3, 4.0, 3.45, 1.5, "밖으로 나가는 것", "요구서 문안 · 센터 단위 확정 집계값 · 담당자 입력 사유 · 산출 근거 메타\n(개인 단위 원자료는 전달하지 않음)", C.background2);
@@ -268,7 +268,7 @@ s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "구현" });
 s.addText("검증 결과 — 실측치", { placeholder: "title" });
 stat(s, 0.6, 1.5, 3.0, "25 / 25", "요구서 추출 필수 쌍 재현\nClaude 경로 · 9사례 · 초과·오탐 0\n(9/28·10/04 두 차례, sonnet-4-6)");
 stat(s, 3.7, 1.5, 3.0, "4.6초", "요구서 1건 추출 평균 지연\n(10/04, 9건, JSON 스키마 포함)");
-stat(s, 6.8, 1.5, 3.0, "45", "pytest 단위 테스트 통과\n(추출·대조·HWPX·초안·LLM·도구 루프·사유 후보·후속 질문)");
+stat(s, 6.8, 1.5, 3.0, "55", "pytest 단위 테스트 통과\n(모듈 테스트 45 + 코드 리뷰 회귀 10)");
 stat(s, 9.9, 1.5, 3.0, "9 / 9", "화면 ①~⑧+설정 흐름 구동\nAppTest + 실제 브라우저, 오류 0");
 const rows = [
   [{ text: "항목", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "결과", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "비고", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }],
@@ -278,17 +278,18 @@ const rows = [
   ["HWPX 출력", "12행 표 확장, XML 정형성, 자리표시자 잔존 0", "한글에서 타이핑해 run이 쪼개진 자리표시자도 치환(10-04 보강)"],
   ["입력 견고성", "cp949 CSV, '2026. 6. 30.', '67.8%', '1,234', 빈 행, 다중 시트", "오류는 행 번호·허용 컬럼명과 함께 표시"],
   ["AI 보조 3종 실호출", "③ 후보 전부 단서·과거 사유 인용 · ④ 1순위 질문 '타 기관 제출값과의 차이' · ⑧ 요구번호·제출일 명시, 없는 이력은 '없음'", "2026-10-04 claude-sonnet-4-6. 지연: 후보 15초·초안 12초·후속 질문 23~28초·질의 6~25초"],
+  ["독립 코드 리뷰", "결함 15건 중 14건 수정(DB 잠금 오판·빈 항목 크래시·모델 설정 미반영·중복 행·엑셀 날짜 단서 등), 회귀 테스트 10건", "미수정 1건: 키를 프로세스 환경변수에 두는 구조(한 PC 한 사람 전제로 명시)"],
 ];
-s.addTable(rows, { x: 0.6, y: 3.3, w: 12.1, colW: [2.6, 5.0, 4.5], fontSize: 10, color: H.dk1, border: { type: "solid", color: H.accent6, pt: 0.75 }, fill: { color: H.lt1 }, valign: "middle", margin: 0.06, objectName: "verify-table" });
+s.addTable(rows, { x: 0.6, y: 3.2, w: 12.1, colW: [2.6, 5.0, 4.5], fontSize: 9.5, color: H.dk1, border: { type: "solid", color: H.accent6, pt: 0.75 }, fill: { color: H.lt1 }, valign: "middle", margin: 0.06, objectName: "verify-table" });
 s.addNotes("규칙 경로 100%는 사례에 맞춘 결과라 자랑거리가 아닙니다. Claude 경로가 실제 점검 대상이고, 1차에서 놓친 연도 없는 날짜를 프롬프트 규칙으로 보완했습니다.");
 
 // ---------- 보안·비용 ----------
 s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "구현" });
 s.addText("보안과 비용", { placeholder: "title" });
 card(s, 0.6, 1.5, 5.95, 5.0, "보안 설계", "", { titleSize: 17 });
-bullets(s, ["API 키는 환경변수 또는 설정 화면 세션 한정 입력 — 파일에 저장하지 않음",
+bullets(s, ["API 키는 환경변수 또는 설정 화면에 이 실행 동안만 입력 — 파일에 저장하지 않음",
   "이력 DB는 PC 로컬 SQLite. 외부로는 요구서 문안·센터 단위 확정값·입력 사유·근거 메타, ⑧은 질문과 조회된 레코드만 전송. 조회 도구는 읽기 전용",
-  "개인 단위 원자료(출결 명단)는 올리지 않음. ③ 집계값·④ 초안에서 개인정보 패턴 검사(주민번호·전화·이메일·학생 식별어)",
+  "요구서 원문의 전화·이메일·주민번호·계좌 패턴은 Claude 전송 전 자동 마스킹. ⑧ 도구 결과에서 직원 이름 제거. ③ 집계값·④ 초안도 개인정보 패턴 검사",
   "국정원 생성형 AI 보안 가이드라인의 '비공개·개인정보 입력 금지, 생성물 재검증' 원칙과 정렬",
   "API가 막힌 망에서도 규칙 경로로 전 기능 동작"], 0.85, 2.2, 5.45, 4.1, 12.5);
 card(s, 6.75, 1.5, 5.95, 5.0, "비용 (추정)", "", { titleSize: 17 });

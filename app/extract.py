@@ -1,11 +1,17 @@
 """요구서 분석: 요청 주체·접수일·제출기한·요구 항목(지표명·기준일·기간·단위) 추출.
 ANTHROPIC_API_KEY가 있으면 Claude API, 없으면 규칙 기반(정규식)으로 동작. 두 경로의 출력 형식은 같다.
 항목 필드: item_text(원문) / indicator(사전 지표명 또는 null) / base_date(YYYY-MM-DD 또는 null) / period(기간 표현 또는 null) / unit(센터별·전체·연도별·월별 또는 null)"""
-import re, datetime as dt
+import os, re, datetime as dt
 from normalize import normalize_all, CANON
 import llm
 
 INDICATORS = list(CANON)
+
+def today() -> dt.date:
+    """연도 없는 날짜의 연도 보완 기준. 환경변수 APP_TODAY(YYYY-MM-DD)가 있으면 그 날(테스트·시연 재현용)."""
+    v = (os.environ.get("APP_TODAY") or "").strip()
+    try: return dt.date.fromisoformat(v) if v else dt.date.today()
+    except ValueError: return dt.date.today()
 ITEM_FIELDS = ["item_text", "indicator", "base_date", "period", "unit"]
 
 # 항목 줄머리: 1. 1) (1) ① 가. 가) ○ - · • □ ■
@@ -22,7 +28,7 @@ def _norm_date(s: str, year_hint: int | None = None) -> str | None:
         return f"{y:04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
     m = re.search(r"(?<!\d)(\d{1,2})\s*(?:월|/)\s*(\d{1,2})\s*일?(?!\d)", s)
     if m:
-        y = year_hint or dt.date.today().year
+        y = year_hint or today().year
         return f"{y:04d}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
     return None
 
@@ -54,6 +60,9 @@ def rule_based(text: str) -> dict:
     m = (re.search(r"(?:제출\s*기한|기한|제출일)\s*[|:：]?\s*([0-9년월일.\-/' ]+)", text)
          or re.search(r"([0-9년월일.\-/' ]+?)\s*(?:\([가-힣]\))?\s*(?:오전|오후)?\s*(?:\d{1,2}:\d{2})?\s*까지", text))
     if m: out["due_date"] = _norm_date(m.group(1), yh)
+    if yh is None and out["due_date"]: yh = int(out["due_date"][:4])       # 접수일이 없으면 기한의 연도를, 그것도 없으면 문서의 다른 연도를 힌트로
+    if yh is None:
+        m4 = re.search(r"(?<!\d)(20\d{2})(?!\d)", text); yh = int(m4.group(1)) if m4 else None
     for line in text.splitlines():
         s = line.strip().lstrip("| ").strip()
         if not re.match(BULLET, s): continue
@@ -114,7 +123,7 @@ def schema() -> dict:
             "required": ["requester", "received_date", "due_date", "title", "items"]}
 
 def llm_based(text: str) -> dict:
-    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), dt.date.today().isoformat(), text), SYSTEM, 3000, purpose="요구서 추출", schema=schema())
+    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), today().isoformat(), text), SYSTEM, 3000, purpose="요구서 추출", schema=schema())
     items = []
     for it in res.get("items") or []:
         if not isinstance(it, dict) or not it.get("item_text"): continue
@@ -127,10 +136,15 @@ def llm_based(text: str) -> dict:
     return res
 
 def extract(text: str) -> tuple[dict, str]:
-    """(결과, 사용한 방식) 반환. Claude 오류 시 규칙 기반으로 대체하고 '_error'에 사유."""
+    """(결과, 사용한 방식) 반환. Claude에는 개인정보 패턴(전화·이메일·주민번호·계좌)을 마스킹한 원문을 보낸다('_redacted'에 치환 수).
+    Claude 오류 시 규칙 기반으로 대체하고 '_error'에 사유."""
     if llm.available():
         try:
-            return llm_based(text), f"Claude API ({llm.model_label()})"
+            import pii
+            safe, n = pii.redact(text)
+            res = llm_based(safe)
+            if n: res["_redacted"] = n
+            return res, f"Claude API ({llm.model_label()})" + (f" · 개인정보 패턴 {n}건 마스킹 후 전송" if n else "")
         except Exception as e:
             r = rule_based(text); r["_error"] = f"{type(e).__name__}: {e}"
             return r, "규칙 기반(API 오류로 대체)"

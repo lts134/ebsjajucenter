@@ -13,31 +13,55 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"indicator": {"type": "string"}, "base_date": {"type": "string", "description": "YYYY-MM-DD"}}, "required": ["indicator", "base_date"]}},
     {"name": "diff_reasons", "description": "담당자가 입력한 수치 차이 사유 기록(최근순). indicator로 좁힐 수 있음.",
      "input_schema": {"type": "object", "properties": {"indicator": {"type": "string"}}}},
+    {"name": "indicator_history", "description": "지표 1개의 제출 이력을 요구서·제출본 단위로 요약(요청 주체·제출일·기준일·값 건수·원자료 버전·추출시점). '어디에 언제 냈나' 질문은 이 도구 하나로 답할 수 있다.",
+     "input_schema": {"type": "object", "properties": {"indicator": {"type": "string"}, "base_date": {"type": "string", "description": "선택. YYYY-MM-DD"}}, "required": ["indicator"]}},
     {"name": "overview", "description": "요구서 현황(기한·확정 제출본 수)과 요청 주체별·반복 지표 통계.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "indicators", "description": "지표 사전(정규 지표명과 동의어)과 데이터 카탈로그(출처·담당).", "input_schema": {"type": "object", "properties": {}}},
 ]
+
+PERSON_KEYS = ("submitted_by", "entered_by", "reviewer")   # 직원 이름은 API로 보내지 않는다
+
+def _strip(obj):
+    """도구 결과에서 사람 이름 필드 제거(재귀)."""
+    if isinstance(obj, dict): return {k: _strip(v) for k, v in obj.items() if k not in PERSON_KEYS}
+    if isinstance(obj, list): return [_strip(x) for x in obj]
+    return obj
 
 def _values(submission_id: int, center: str | None = None):
     rows = db.get_values(submission_id)
     if center: rows = [r for r in rows if str(r.get("center")) == center]
     return [{k: v for k, v in r.items() if k not in ("id", "submission_id")} for r in rows]
 
-HANDLERS = {
+def _indicator_history(indicator: str, base_date: str | None = None):
+    con = db.connect()
+    q = """SELECT r.id AS request_id, r.requester, r.title, s.id AS submission_id, s.submitted_date, s.status, v.base_date,
+                  COUNT(*) AS n_values, MIN(v.extract_date) AS extract_date, MIN(v.source_version) AS source_version, MIN(v.definition) AS definition
+           FROM submission_values v JOIN submissions s ON s.id=v.submission_id JOIN requests r ON r.id=s.request_id
+           WHERE v.indicator=?""" + (" AND v.base_date=?" if base_date else "") + " GROUP BY s.id, v.base_date ORDER BY s.submitted_date DESC"
+    rows = con.execute(q, (indicator, base_date) if base_date else (indicator,)).fetchall(); con.close()
+    return [dict(r) for r in rows]
+
+_RAW = {
     "search_requests": lambda keyword: db.search_requests(keyword),
     "request_detail": lambda request_id: db.request_detail(int(request_id)),
     "submission_values": lambda submission_id, center=None: _values(int(submission_id), center),
     "past_values_for": lambda indicator, base_date: [{k: r[k] for k in ("center", "value", "base_date", "submitted_date", "requester", "request_title", "definition", "calc_period", "extract_date", "source_version")} for r in db.past_values_for(indicator, base_date)],
+    "indicator_history": lambda indicator, base_date=None: _indicator_history(indicator, base_date),
     "diff_reasons": lambda indicator=None: db.all_reasons(indicator),
     "overview": lambda: {"requests": db.request_overview(), "by_requester": db.requester_stats()[0], "by_indicator": db.requester_stats()[1]},
     "indicators": lambda: {"지표 사전": normalize.CANON, "데이터 카탈로그": {k: {"출처": v[0], "담당": v[1]} for k, v in suggest.CATALOG.items()}},
 }
+def _wrap(fn):
+    def h(*a, **kw): return _strip(fn(*a, **kw))
+    return h
+HANDLERS = {name: _wrap(fn) for name, fn in _RAW.items()}
 
 SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 이력 DB를 조회해 답하는 보조입니다.
 규칙:
 (1) 반드시 도구로 조회한 결과만 근거로 답하고, 조회되지 않은 것은 '이력에 없음'이라고 말합니다. 원인·배경을 추측하지 않습니다('~로 보입니다', '~와 연관' 금지). 같은 지표·기준일의 제출값이 서로 다른 센터가 보이면 답하기 전에 반드시 diff_reasons를 호출해 기록된 사유를 그대로 인용하고, 기록이 없으면 '사유 기록 없음'이라고 적습니다.
 (2) 수치는 레코드 값을 그대로 인용합니다. 평균·합계·차이값·증감률을 계산하지 않습니다. 두 값이 다르면 두 값을 나란히 보여 주고 '다름'이라고만 표시합니다.
 (3) 답에는 근거가 된 요구번호(#id)·제출본번호·제출일·요청 주체를 적습니다.
-(4) 날짜 표현('작년', '7월')은 먼저 search_requests나 past_values_for로 범위를 확인합니다.
+(4) '어떤 지표를 어디에 언제 냈나'는 indicator_history 하나로 먼저 확인하고, 센터별 값이 필요할 때만 past_values_for·submission_values를 씁니다. 날짜 표현('작년', '7월')은 조회 결과의 날짜로 범위를 확인합니다.
 (5) 한국어 설명체로 간결하게. 이모지·장식 기호를 쓰지 않고, 도구 이름(search_requests, diff_reasons 등)을 답에 쓰지 않습니다('차이 사유 기록'처럼 우리말로). 표가 적절하면 마크다운 표. 사용자에게 "조회를 요청해 달라"고 하지 말고 필요한 도구를 직접 호출합니다."""
 
 def ask(question: str) -> dict:

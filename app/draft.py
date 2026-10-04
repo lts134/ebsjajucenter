@@ -75,9 +75,10 @@ def coverage_check(items: list[dict], draft: dict, values: pd.DataFrame) -> pd.D
     for i, it in enumerate(items, 1):
         ind, bd = it.get("indicator"), it.get("base_date")
         has_val = bool(len(values) and ind and bd and ((values["indicator"] == ind) & (values["base_date"] == bd)).any())
-        mentioned = bool(ind and ind in text) or (it.get("item_text", "")[:10] in text)
+        head = (it.get("item_text") or "")[:10]
+        mentioned = bool(ind and ind in text) or (bool(head) and head in text)
         bd_ok = (bd in text) if bd else None
-        flagged = "[확인 필요" in text and (it.get("item_text", "")[:10] in text)
+        flagged = "[확인 필요" in text and bool(head) and head in text
         status = "충족" if (mentioned and has_val) else ("미확인 표시" if flagged else "누락")
         rows.append({"번호": i, "요구 항목": it.get("item_text"), "지표": ind, "기준일": bd, "초안 언급": mentioned,
                      "기준일 언급": bd_ok, "확정 수치": has_val, "판정": status})

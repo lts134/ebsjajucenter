@@ -21,17 +21,25 @@ def list_sheets(file) -> list[str]:
 def _read_csv(data: bytes) -> pd.DataFrame:
     last = None
     for enc in ENCODINGS:
-        try: return pd.read_csv(io.BytesIO(data), encoding=enc)
+        try: return pd.read_csv(io.BytesIO(data), encoding=enc, skip_blank_lines=False)   # 빈 줄도 행으로 읽어 엑셀 행 번호를 맞춘다
         except UnicodeDecodeError as e: last = e
     raise ValueError(f"CSV 인코딩을 판별하지 못했습니다(시도: {', '.join(ENCODINGS)}). 엑셀에서 'CSV UTF-8'로 다시 저장하세요. ({last})")
 
 def normalize_date_str(v):
-    """'2026. 6. 30.' / \"'26.6.30\" / '2026년 6월 30일' → '2026-06-30'. 그 외는 그대로(pandas가 해석)."""
+    """'2026. 6. 30.' / \"'26.6.30\" / '2026년 6월 30일' → '2026-06-30'(extract._norm_date 공유). 그 외는 그대로(pandas가 해석)."""
     if v is None or (isinstance(v, float) and pd.isna(v)) or not isinstance(v, str): return v
-    m = re.search(r"'?(\d{4}|\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})", v.strip())
-    if not m: return v
-    y = int(m.group(1)); y = y + 2000 if y < 100 else y
-    return f"{y:04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    from extract import _norm_date
+    return _norm_date(v) or v
+
+def clean_text(v):
+    """근거 필드(정의·집계기간·추출시점·원자료 버전): 엑셀 날짜 셀은 'YYYY-MM-DD'로, 문자열은 공백 정리. 비면 None.
+    같은 날짜가 한 파일엔 글자로, 다른 파일엔 날짜 셀로 들어 있어도 '변경'으로 오판하지 않게 한다."""
+    if v is None or (isinstance(v, float) and pd.isna(v)): return None
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d") if getattr(v, "hour", 0) == 0 and getattr(v, "minute", 0) == 0 else v.strftime("%Y-%m-%d %H:%M")
+    s = re.sub(r"\s+", " ", str(v)).strip()
+    s = re.sub(r"^(\d{4}-\d{2}-\d{2}) 00:00:00$", r"\1", s)
+    return s or None
 
 def clean_number(v):
     """'67.8%', '1,234', ' 60.3 ' → 숫자. 비어 있으면 NaN."""
@@ -75,7 +83,11 @@ def load_values(file, sheet: str | int | None = None) -> pd.DataFrame:
     df["value"] = df["value"].map(clean_number)
     for c in ["definition", "calc_period", "extract_date", "source_version"]:
         if c not in df.columns: df[c] = None
-        else: df[c] = df[c].map(lambda v: None if (v is None or (isinstance(v, float) and pd.isna(v))) else str(v).strip())
+        else: df[c] = df[c].map(clean_text)
+    dup = df[df.duplicated(KEY, keep=False)]
+    if len(dup):
+        rows = sorted(dup["source_row"].tolist())
+        raise ValueError(f"같은 지표·센터·기준일이 중복된 행: {rows[:10]}{' …' if len(rows) > 10 else ''}. 한 기준일에 센터당 한 행만 두세요.")
     return df.reset_index(drop=True)
 
 def compare(new_df: pd.DataFrame, old_df: pd.DataFrame, tol: float = 0.0) -> pd.DataFrame:

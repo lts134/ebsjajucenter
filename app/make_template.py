@@ -6,17 +6,12 @@ from pathlib import Path
 SRC = Path(__file__).parent.parent / "테스트_HWPX_치환_행추가_v2.hwpx"
 DST = Path(__file__).parent / "templates" / "회신서식_샘플.hwpx"
 
-def esc(s): return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+from hwpx_out import LEAF_P, _para_with_text
 
 def set_text(cell, text):
-    """셀 첫 문단만 남기고 텍스트 교체"""
-    paras = list(re.finditer(r"<hp:p\b(?:(?!<hp:p\b).)*?</hp:p>", cell, flags=re.S))
-    p = paras[0].group(0)
-    p = re.sub(r"<hp:linesegarray>.*?</hp:linesegarray>", "", p, flags=re.S)
-    m = re.search(r"(<hp:run\b[^>]*?)(/>|>(.*?)</hp:run>)", p, flags=re.S)
-    inner = re.sub(r"<hp:t\b[^>]*>.*?</hp:t>|<hp:t\b[^>]*/>", "", m.group(3) or "", flags=re.S)
-    p = p[:m.start()] + f"{m.group(1)}><hp:t>{esc(text)}</hp:t>{inner}</hp:run>" + p[m.end():]
-    return cell[:paras[0].start()] + p + cell[paras[-1].end():]
+    """셀 첫 문단만 남기고 텍스트 교체(치환 로직은 hwpx_out과 공유)"""
+    paras = list(re.finditer(LEAF_P, cell, flags=re.S))
+    return cell[:paras[0].start()] + _para_with_text(paras[0].group(0), text) + cell[paras[-1].end():]
 
 def main():
     z = zipfile.ZipFile(SRC)

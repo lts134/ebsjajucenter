@@ -1,5 +1,7 @@
 """llm.py를 가짜 클라이언트로 검증: 구조화 출력, 400 폴백, 404 모델 대체, 코드펜스 파싱, 재요청, 비용 추정, 오류 설명."""
-import pytest, anthropic, httpx2 as httpx, llm
+import pytest, anthropic, llm
+try: import httpx2 as httpx
+except ImportError: import httpx
 
 class _U: input_tokens = 1000; output_tokens = 300
 class _B:

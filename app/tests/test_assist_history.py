@@ -1,5 +1,7 @@
 """기능 1·2·3: 사유 후보, 후속 질문, 이력 질의(도구 루프)."""
-import pandas as pd, anthropic, httpx2 as httpx
+import pandas as pd, anthropic
+try: import httpx2 as httpx
+except ImportError: import httpx
 import assist, history_qa, llm
 
 ROW = {"indicator": "등원율", "center": "센터C", "base_date": "2026-06-30", "old_value": 66.4, "new_value": 67.8,

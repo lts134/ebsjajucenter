@@ -9,7 +9,7 @@ REQUIRED = {
     "streamlit": "streamlit>=1.50",
     "pandas": "pandas>=2.0",
     "openpyxl": "openpyxl>=3.1",
-    "anthropic": "anthropic>=0.30",
+    "anthropic": "anthropic>=1.8",
     "pypdf": "pypdf>=4.0",
     "docx": "python-docx>=1.1",
 }

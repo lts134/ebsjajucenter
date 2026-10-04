@@ -75,7 +75,7 @@ def foresee_rule(req: dict, items: list[dict], values: pd.DataFrame, reasons: di
     missing = [it for it in items if it.get("indicator") and (not len(values) or not ((values["indicator"] == it["indicator"]) & (values["base_date"] == it.get("base_date"))).any())]
     if missing:
         qs.append({"질문": f"[확인 필요]로 남긴 {len(missing)}개 항목({', '.join(sorted({m['indicator'] for m in missing}))})은 언제 제출하는가", "근거": "초안에 확정 수치 없는 항목", "준비할 자료": "항목별 산출 일정·담당", "가능성": "높음"})
-    if any(re.search(r"산출|정의|방식", it.get("item_text", "")) for it in items) or any(it.get("indicator") == "등원율" for it in items):
+    if any(re.search(r"산출|정의|방식", it.get("item_text") or "") for it in items) or any(it.get("indicator") == "등원율" for it in items):
         qs.append({"질문": "등원율의 정의(분모·분자)와 집계 기간, 원자료는 무엇인가", "근거": "비율 지표는 산출 방식 질의가 잦음", "준비할 자료": "지표 정의서, 집계 기간, 원자료 출처", "가능성": "중간"})
     if any(it.get("period") and not it.get("base_date") for it in items):
         qs.append({"질문": "기간 요구 항목(연도별·최근 3년)의 기준 시점을 어떻게 잡았는가", "근거": "기준일 없는 기간 항목 존재", "준비할 자료": "연도별 기준 시점 명시", "가능성": "중간"})

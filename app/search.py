@@ -6,7 +6,8 @@ import db
 
 def _grams(text: str, n: int = 2) -> Counter:
     t = re.sub(r"\s+", "", text or "").lower()
-    return Counter(t[i:i + n] for i in range(max(len(t) - n + 1, 1)))
+    if len(t) < n: return Counter()              # 빈 글자는 어떤 것과도 닮지 않음(1.0 오판 방지)
+    return Counter(t[i:i + n] for i in range(len(t) - n + 1))
 
 def _cos(a: Counter, b: Counter) -> float:
     if not a or not b: return 0.0

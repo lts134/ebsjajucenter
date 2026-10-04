@@ -41,6 +41,11 @@ with st.sidebar:
         st.caption(f"추정 비용 ${u['cost_usd']:.4f}" + (f" (단가 미상 {u['cost_unknown_calls']}회 제외)" if u['cost_unknown_calls'] else "") + " · 구조화 출력 " + f"{u['structured_calls']}회")
     st.caption(f"이력 DB: {db.DB_PATH.name}")
 
+@st.cache_data(show_spinner=False, max_entries=20)
+def render_hwpx_cached(tpl_bytes: bytes, fill_json: str, rows_json: str) -> bytes:
+    """같은 템플릿·문안·수치면 다시 만들지 않는다(글자 입력마다 재실행되는 Streamlit 특성 대비)."""
+    return hwpx_out.render(tpl_bytes, json.loads(fill_json), json.loads(rows_json))
+
 def read_doc(uploaded) -> str:
     try:
         return docread.read(uploaded.name, uploaded.getvalue())
@@ -137,7 +142,7 @@ elif page == "② 새 요구서 분석":
         st.session_state.update(new_req=res, new_how=how, new_text=text, new_name=name)
     if "new_req" in st.session_state:
         res = st.session_state["new_req"]
-        st.caption(f"추출 방식: {st.session_state['new_how']} · 지표 정규화: 동의어 사전{' + Claude' if HAS_API else ''}")
+        st.caption(f"추출 방식: {st.session_state['new_how']} · 지표 정규화: 동의어 사전{' + Claude' if HAS_API else ''}" + (" · 요구서의 전화·이메일 등은 마스킹된 채 전송됨" if res.get("_redacted") else ""))
         st.write({"요청 주체": res.get("requester"), "접수일": res.get("received_date"), "제출기한": res.get("due_date"), "제목": res.get("title")})
         if res.get("_error"): st.warning(f"Claude 호출 오류로 규칙 기반 결과입니다: {res['_error']}")
         sim_req = search.similar_requests(text)
@@ -299,11 +304,11 @@ elif page == "④ 회신 초안·HWPX":
                     "요구항목": "\n".join(f"{i}. {it['item_text']}" for i, it in enumerate(items, 1)),
                     "본문": d["본문"], "차이사유": d["차이사유"], "산출근거": d["산출근거"], "담당자": USER}
             rows = [{"no": i + 1, "indicator": v["indicator"], "center": v["center"], "base_date": v["base_date"], "value": v["value"]} for i, (_, v) in enumerate(values.iterrows())]
-            out = hwpx_out.render(tpl_bytes, fill, rows)
+            out = render_hwpx_cached(tpl_bytes, json.dumps(fill, ensure_ascii=False, sort_keys=True), json.dumps(rows, ensure_ascii=False, default=str))
             fname = f"회신_{req['id']}_{dt.date.today()}.hwpx"
             c1, c2, c3 = st.columns(3)
             c1.download_button("회신 HWPX 다운로드", out, file_name=fname)
-            ckb = io.BytesIO(); pd.DataFrame(st.session_state.get("last_checklist") or []).to_excel(ckb, index=False)
+            ckb = io.BytesIO(); pd.DataFrame(ck_now or []).to_excel(ckb, index=False)   # 이 요구서의 점검표만(다른 요구서 것을 섞지 않음)
             zb = io.BytesIO()
             with zipfile.ZipFile(zb, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(fname, out)
@@ -342,9 +347,8 @@ elif page == "⑥ 이력 조회":
     reqs = db.list_requests()
     kw = st.text_input("검색 (요청 주체·제목·항목 원문·요구서 본문에서 찾기)", placeholder="예: 등원율, 의원실, 2026-06-30")
     if kw.strip():
-        k = kw.strip().lower()
-        reqs = [r for r in reqs if k in " ".join(str(r.get(c) or "") for c in ("requester", "title", "raw_text", "received_date", "due_date")).lower()
-                or any(k in str(it.get("item_text") or "").lower() or k in str(it.get("indicator") or "").lower() for it in db.get_items(r["id"]))]
+        ids = {r["id"] for r in db.search_requests(kw.strip(), limit=200)}
+        reqs = [r for r in reqs if r["id"] in ids]
         st.caption(f"검색 결과 {len(reqs)}건")
     if not reqs: st.info("등록된 요구서가 없습니다." if not kw.strip() else "검색 결과가 없습니다.")
     for r in reqs:
@@ -402,6 +406,7 @@ elif page == "⑧ 이력에 묻기":
     if go:
         with st.spinner("이력 조회 중…"):
             res = history_qa.ask(q) if HAS_API else {"text": None, "trace": [], "how": "키 없음 — 키워드 검색"}
+            if not (res.get("text") or "").strip(): res["text"] = None           # 빈 응답도 '답 없음'으로 보고 키워드 검색으로 보완
             kw = history_qa.keyword_search(q) if res.get("text") is None else None
         st.session_state.setdefault("qa_log", []).insert(0, {"q": q, "res": res, "kw": kw})
         st.session_state["qa_log"] = st.session_state["qa_log"][:5]
@@ -430,11 +435,11 @@ elif page == "⑧ 이력에 묻기":
 else:
     st.header("설정")
     st.subheader("Claude API")
-    st.write("키는 환경변수 `ANTHROPIC_API_KEY`로 두거나, 아래에 이 실행 동안만 입력합니다(파일에 저장되지 않음). 없으면 규칙 기반으로 동작합니다.")
+    st.write("키는 환경변수 `ANTHROPIC_API_KEY`로 두거나, 아래에 입력합니다. 입력한 키는 이 앱 실행(프로세스)이 끝날 때까지만 메모리에 있고 파일에 저장되지 않습니다. 한 PC에서 한 사람이 쓰는 전제이며, 여러 사람이 같은 실행을 공유하면 키도 공유됩니다. 없으면 규칙 기반으로 동작합니다.")
     st.code('set ANTHROPIC_API_KEY=sk-ant-...   (cmd)\n$env:ANTHROPIC_API_KEY="sk-ant-..."   (PowerShell)')
-    key = st.text_input("API 키(세션 한정)", type="password")
+    key = st.text_input("API 키(이 실행 동안만)", type="password").strip()
     if key:
-        os.environ["ANTHROPIC_API_KEY"] = key.strip()
+        os.environ["ANTHROPIC_API_KEY"] = key
         if not HAS_API: st.rerun()                                      # 사이드바 상태·④ 'Claude 추가 점검' 버튼을 바로 갱신
         st.success("이 세션에 적용됨. 아래 연결 테스트로 확인하세요.")
     ws = st.text_input("워크스페이스 ID(ANTHROPIC_WORKSPACE_ID, wrkspc_…) — 키가 워크스페이스에 묶여 있지 않을 때만 필요", os.environ.get("ANTHROPIC_WORKSPACE_ID", ""), type="password")

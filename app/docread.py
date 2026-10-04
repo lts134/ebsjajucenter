@@ -1,8 +1,6 @@
 """요구서·회신 문서 본문 추출: txt / hwpx / pdf / docx → 문단 텍스트(표는 '셀 | 셀' 형태)."""
 import io, re, zipfile
-
-LEAF_P = r"<hp:p\b(?:(?!<hp:p\b).)*?</hp:p>"
-LEAF_TBL = r"<hp:tbl\b(?:(?!<hp:tbl\b).)*?</hp:tbl>"
+from hwpx_out import LEAF_P, LEAF_TBL, _para_text
 
 def _hwpx_text(data: bytes) -> str:
     z = zipfile.ZipFile(io.BytesIO(data))
@@ -21,12 +19,7 @@ def _hwpx_text(data: bytes) -> str:
     return "\n".join(x for x in out if x.strip())
 
 def _paras(fragment: str) -> list[str]:
-    res = []
-    for p in re.findall(LEAF_P, fragment, flags=re.S):
-        t = "".join(re.findall(r"<hp:t[^>]*>(.*?)</hp:t>", p, flags=re.S))
-        t = re.sub(r"<[^>]+>", "", t).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&").replace("&quot;", '"')
-        if t.strip(): res.append(t.strip())
-    return res
+    return [t for p in re.findall(LEAF_P, fragment, flags=re.S) if (t := _para_text(p).strip())]
 
 def _pdf_text(data: bytes) -> str:
     from pypdf import PdfReader
