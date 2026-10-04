@@ -234,7 +234,7 @@ elif page == "③ 수치 대조·점검표":
         hits = pii.scan_df(new_df.drop(columns=["source_file", "source_sheet", "source_row"], errors="ignore"), "새 집계값")
         if hits: st.error(f"개인정보 의심 패턴 {len(hits)}건"); st.dataframe(pd.DataFrame(hits), width="stretch")
         else: st.success("개인정보 의심 패턴 없음")
-        buf = io.BytesIO(); ck.to_excel(buf, index=False)
+        buf = io.BytesIO(); pii.excel_safe(ck).to_excel(buf, index=False)
         st.download_button("점검표 엑셀", buf.getvalue(), file_name=f"정합성점검표_{dt.date.today()}.xlsx")
         if st.button("사유 저장 + 새 제출본 확정 → ④로", type="primary", disabled=target is None):
             sid = db.add_submission(target["id"], str(dt.date.today()), USER, "새 집계값", "confirmed", "③ 대조 후 확정", new_df.to_dict("records"))
@@ -308,12 +308,12 @@ elif page == "④ 회신 초안·HWPX":
             fname = f"회신_{req['id']}_{dt.date.today()}.hwpx"
             c1, c2, c3 = st.columns(3)
             c1.download_button("회신 HWPX 다운로드", out, file_name=fname)
-            ckb = io.BytesIO(); pd.DataFrame(ck_now or []).to_excel(ckb, index=False)   # 이 요구서의 점검표만(다른 요구서 것을 섞지 않음)
+            ckb = io.BytesIO(); pii.excel_safe(pd.DataFrame(ck_now or [])).to_excel(ckb, index=False)   # 이 요구서의 점검표만(다른 요구서 것을 섞지 않음)
             zb = io.BytesIO()
             with zipfile.ZipFile(zb, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(fname, out)
                 zf.writestr("정합성점검표.xlsx", ckb.getvalue())
-                vb = io.BytesIO(); values.to_excel(vb, index=False); zf.writestr("확정수치.xlsx", vb.getvalue())
+                vb = io.BytesIO(); pii.excel_safe(values).to_excel(vb, index=False); zf.writestr("확정수치.xlsx", vb.getvalue())
                 fs = st.session_state.get("foresee")
                 zf.writestr("근거_사유_메타.json", json.dumps({"요구": req, "제출본": sid, "차이 사유": {" | ".join(k): v for k, v in reasons_raw.items()}, "산출 근거": prov, "초안": d,
                                                           "예상 후속 질문": fs[1] if fs and fs[0] == req["id"] else None, "생성일": str(dt.date.today())}, ensure_ascii=False, indent=2, default=str))
@@ -384,7 +384,7 @@ elif page == "⑦ 현황·통계":
         st.dataframe(view.style.apply(_row_style, axis=1), width="stretch", hide_index=True)
         st.caption("노랑: 진행 중이며 기한 3일 이내 · 빨강: 기한 경과(미제출)")
         rows = [{"요구번호": r["id"], "요청 주체": r["requester"], "접수일": r["received_date"], "제출기한": r["due_date"], "제목": r["title"], "항목": it["item_text"], "지표": it["indicator"], "기준일": it["base_date"], "단위": it["unit"], "확정 제출본 수": r["n_confirmed"], "최근 제출일": r["last_submitted"]} for r in ov for it in db.get_items(r["id"])]
-        lb = io.BytesIO(); pd.DataFrame(rows).to_excel(lb, index=False)
+        lb = io.BytesIO(); pii.excel_safe(pd.DataFrame(rows)).to_excel(lb, index=False)
         st.download_button("관리대장 엑셀 내보내기", lb.getvalue(), file_name=f"요구자료_관리대장_{dt.date.today()}.xlsx")
         st.divider()
         by_req, by_ind = db.requester_stats()
@@ -462,7 +462,8 @@ else:
     st.divider()
     st.write("회신 템플릿: `templates/` 폴더의 HWPX. 실제 부서 서식을 한글에서 열어 {{수신}} {{제목}} {{본문}} {{row.center}} 같은 자리표시자를 넣고 저장하면 그대로 사용됩니다.")
     st.write("지표 동의어 사전: `normalize.py`의 CANON. 데이터 카탈로그: `suggest.py`의 CATALOG.")
-    if st.button("이력 DB 초기화(전체 삭제)"):
+    sure = st.checkbox("이력 DB를 전부 삭제하는 데 동의합니다(되돌릴 수 없음)")
+    if st.button("이력 DB 초기화(전체 삭제)", disabled=not sure):
         db.reset(); st.session_state.clear(); st.rerun()
     if st.button("샘플 데이터·템플릿 다시 생성"):
         import importlib, make_sample_data

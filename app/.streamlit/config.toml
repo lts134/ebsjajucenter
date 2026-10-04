@@ -3,3 +3,4 @@ gatherUsageStats = false
 
 [server]
 headless = false
+address = "localhost"   # 같은 망의 다른 PC가 접속하지 못하게(한 PC 한 사람 전제)

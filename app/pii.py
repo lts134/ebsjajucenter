@@ -38,6 +38,26 @@ def scan_df(df: pd.DataFrame, name: str = "") -> list[dict]:
                 hits += scan_text(v, f"{name} {col} {rn}행")
     return hits
 
+FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
+
+def excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """엑셀로 내보내기 전: 수식으로 해석될 수 있는 글자('=', '+', '-', '@', 탭, CR)로 시작하는 문자열 셀 앞에 작은따옴표를 붙인다.
+    외부에서 온 요구서 문구·업로드 셀 값이 그대로 엑셀 수식이 되는 것(수식 주입)을 막는다. 음수 숫자는 숫자형이라 영향 없음."""
+    out = df.copy()
+    for col in out.columns:
+        if pd.api.types.is_string_dtype(out[col]) or out[col].dtype == object:   # pandas 3의 'str' dtype도 포함
+            out[col] = out[col].astype(object).map(lambda v: ("'" + v) if isinstance(v, str) and v[:1] in FORMULA_LEAD and not v.lstrip("-+").replace(".", "", 1).isdigit() else v)
+    cols = [("'" + str(c)) if str(c)[:1] in FORMULA_LEAD else c for c in out.columns]
+    out.columns = cols
+    return out
+
+def redact_obj(obj):
+    """dict/list 안의 모든 문자열에 redact 적용(API로 보내는 도구 결과·입력용)."""
+    if isinstance(obj, str): return redact(obj)[0]
+    if isinstance(obj, dict): return {k: redact_obj(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)): return [redact_obj(x) for x in obj]
+    return obj
+
 MASK = {"주민등록번호": "[주민번호]", "휴대전화": "[전화번호]", "일반전화": "[전화번호]", "이메일": "[이메일]", "계좌번호 의심": "[계좌번호]"}
 
 def redact(text: str) -> tuple[str, int]:

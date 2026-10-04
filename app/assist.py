@@ -3,7 +3,7 @@
 2) foresee: 회신 초안·수치·대조 결과를 보고 요구 주체가 던질 법한 후속 질문과 준비할 자료를 예측."""
 import json, re
 import pandas as pd
-import llm, db
+import llm, db, pii
 
 # ---------- 1) 차이 사유 후보 ----------
 def _parse_clue(clue: str) -> list[tuple[str, str, str]]:
@@ -96,8 +96,8 @@ def foresee(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict, c
                 for p in db.past_values_for(ind, bd)[:40]:
                     history.append({"지표": ind, "기준일": bd, "요청 주체": p["requester"], "제출일": p["submitted_date"]})
         hist_summary = sorted({(h["지표"], h["기준일"], h["요청 주체"], h["제출일"]) for h in history})
-        payload = {"요구": {k: req.get(k) for k in ("requester", "received_date", "due_date", "title")},
-                   "요구 항목": list(dict.fromkeys(it.get("item_text") for it in items if it.get("item_text"))),   # 지표 분리로 중복된 원문은 한 번만
+        payload = {"요구": pii.redact_obj({k: req.get(k) for k in ("requester", "received_date", "due_date", "title")}),
+                   "요구 항목": pii.redact_obj(list(dict.fromkeys(it.get("item_text") for it in items if it.get("item_text")))),   # 중복 원문 제거 + 연락처 마스킹
                    "확정 수치 요약": {"지표": sorted({v for v in values["indicator"]}) if len(values) else [], "센터 수": int(values["center"].nunique()) if len(values) else 0, "기준일": sorted({v for v in values["base_date"]}) if len(values) else []},
                    "대조 결과(코드)": [{"센터": r.get("center") or r.get("센터"), "판정": r.get("판정"), "단서": r.get("단서")} for r in (checklist or []) if str(r.get("판정")) == "차이"],
                    "담당자 입력 사유": {" ".join(k): v for k, v in reasons.items() if v},

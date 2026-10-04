@@ -1,6 +1,6 @@
 """⑧ 이력에 묻기: 자연어 질문 → Claude가 이력 DB 조회 도구를 골라 호출 → 조회 결과만 근거로 답한다.
 도구는 읽기 전용이며 DB 함수를 그대로 감싼다. 키가 없으면 keyword_search(규칙)만 제공."""
-import db, normalize, suggest, llm
+import db, normalize, suggest, llm, pii
 
 TOOLS = [
     {"name": "search_requests", "description": "요청 주체·제목·원문·항목·지표에 키워드가 포함된 요구서를 찾는다(최근순).",
@@ -52,7 +52,7 @@ _RAW = {
     "indicators": lambda: {"지표 사전": normalize.CANON, "데이터 카탈로그": {k: {"출처": v[0], "담당": v[1]} for k, v in suggest.CATALOG.items()}},
 }
 def _wrap(fn):
-    def h(*a, **kw): return _strip(fn(*a, **kw))
+    def h(*a, **kw): return pii.redact_obj(_strip(fn(*a, **kw)))   # 직원 이름 제거 + 전화·이메일 등 마스킹 후 API로
     return h
 HANDLERS = {name: _wrap(fn) for name, fn in _RAW.items()}
 

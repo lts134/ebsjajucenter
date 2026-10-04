@@ -4,7 +4,7 @@
 AI는 수치를 계산하거나 사유를 만들지 않는다: 입력으로 받은 값만 사용한다."""
 import json
 import pandas as pd
-import llm
+import llm, pii
 
 def _fmt(v):
     return f"{v:,.1f}" if isinstance(v, float) else str(v)
@@ -46,8 +46,8 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 회신 �
 
 def llm_draft(req, items, values, reasons, provenance, checklist=None) -> dict:
     cs = compare_summary(checklist)
-    payload = {"요구": {k: req.get(k) for k in ("requester", "received_date", "due_date", "title")},
-               "요구 항목": unique_texts(items),
+    payload = {"요구": pii.redact_obj({k: req.get(k) for k in ("requester", "received_date", "due_date", "title")}),
+               "요구 항목": pii.redact_obj(unique_texts(items)),
                "확정 수치": values[["indicator", "center", "base_date", "value"]].to_dict("records") if len(values) else [],
                "차이 사유(담당자 입력)": {" ".join(k): v for k, v in reasons.items() if v},
                "과거 제출값 대조 결과(코드 판정)": cs or "대조 결과 없음 — 사유가 입력된 센터 외에는 차이 유무를 언급하지 말 것",
@@ -93,7 +93,7 @@ def coverage_check_llm(items, draft, values: pd.DataFrame | None = None, checkli
                   "(3) 초안의 숫자 중 확정 수치 표와 다르거나 표에 없는 것 (4) 근거 없는 단정·평가 표현을 번호를 붙여 간단히 지적하세요. "
                   "'[확인 필요]'로 남긴 항목은 담당자가 채울 자리이고, '담당자 입력 사유'는 담당자가 확인해 적은 것이므로 둘 다 지적하지 마세요. 없으면 '문제 없음'. 초안을 다시 쓰지는 마세요.\n"
                   "요구 항목: %s\n확정 수치: %s\n과거 제출값 대조 결과(코드 판정): %s\n담당자 입력 사유: %s\n산출 근거(제출값 파일에 기록된 값): %s\n초안: %s"
-                  % (json.dumps(unique_texts(items), ensure_ascii=False), json.dumps(vals, ensure_ascii=False, default=str),
+                  % (json.dumps(pii.redact_obj(unique_texts(items)), ensure_ascii=False), json.dumps(vals, ensure_ascii=False, default=str),
                      json.dumps(compare_summary(checklist) or "없음", ensure_ascii=False),
                      json.dumps({" ".join(k): v for k, v in (reasons or {}).items() if v}, ensure_ascii=False),
                      json.dumps(provenance or {}, ensure_ascii=False, default=str), json.dumps(draft, ensure_ascii=False)))
