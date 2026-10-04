@@ -1,0 +1,269 @@
+"""SQLite 이력 저장소. 요청 → 항목 → 제출본 → 제출값(산출 근거 포함) → 차이 사유."""
+import sqlite3, os, datetime as dt
+from pathlib import Path
+
+DB_PATH = Path(os.environ.get("HISTORY_DB", Path(__file__).parent / "storage" / "history.db"))
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS requests (          -- 요구서
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    requester TEXT,            -- 요청 주체(의원실·감사 등)
+    received_date TEXT,        -- 접수일
+    due_date TEXT,             -- 제출기한
+    title TEXT,                -- 요구 제목
+    raw_text TEXT,             -- 요구서 원문
+    source_file TEXT,
+    created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS items (             -- 요구 항목(요구서 1건에 여러 개)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER,
+    seq INTEGER,
+    item_text TEXT,            -- 항목 원문
+    indicator TEXT,            -- 지표명(정규화)
+    base_date TEXT,            -- 기준일
+    unit TEXT,                 -- 대상 단위(센터별·전체 등)
+    period TEXT,               -- 기간 표현(2024~2026, 최근 3년 등)
+    FOREIGN KEY(request_id) REFERENCES requests(id)
+);
+CREATE TABLE IF NOT EXISTS submissions (       -- 제출본
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER,
+    submitted_date TEXT,
+    submitted_by TEXT,
+    file_name TEXT,
+    status TEXT,               -- draft / confirmed
+    note TEXT,
+    created_at TEXT,
+    FOREIGN KEY(request_id) REFERENCES requests(id)
+);
+CREATE TABLE IF NOT EXISTS submission_values ( -- 제출값 + 산출 근거
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER,
+    indicator TEXT,
+    center TEXT,
+    base_date TEXT,
+    value REAL,
+    definition TEXT,           -- 지표 정의
+    calc_period TEXT,          -- 집계기간
+    extract_date TEXT,         -- 원자료 추출 시점
+    source_version TEXT,       -- 원자료 버전
+    source_file TEXT,          -- 출처 파일명
+    source_sheet TEXT,         -- 출처 시트
+    source_row INTEGER,        -- 출처 행 번호(엑셀 기준)
+    FOREIGN KEY(submission_id) REFERENCES submissions(id)
+);
+CREATE TABLE IF NOT EXISTS drafts (         -- 회신 초안(문안·출력 파일)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER,
+    request_id INTEGER,
+    title TEXT, body TEXT, reasons_text TEXT, provenance_text TEXT,
+    hwpx_name TEXT,
+    status TEXT,               -- draft / review_requested / approved / rejected
+    created_at TEXT,
+    FOREIGN KEY(submission_id) REFERENCES submissions(id)
+);
+CREATE TABLE IF NOT EXISTS reviews (        -- 팀장 검토 이력
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    draft_id INTEGER,
+    reviewer TEXT,
+    decision TEXT,             -- approved / rejected / comment
+    comment TEXT,
+    created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS diff_reasons (      -- 차이 사유(담당자 입력)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER,
+    indicator TEXT,
+    center TEXT,
+    base_date TEXT,
+    old_value REAL,
+    new_value REAL,
+    reason TEXT,
+    entered_by TEXT,
+    created_at TEXT
+);
+"""
+
+_initialized = set()
+
+def connect(_retry=True):
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.row_factory = sqlite3.Row
+        if str(DB_PATH) not in _initialized:      # 스키마 생성·마이그레이션은 프로세스당 1회
+            con.executescript(SCHEMA)
+            _migrate(con)
+            _initialized.add(str(DB_PATH))
+        return con
+    except sqlite3.OperationalError:
+        # 손상된 DB 파일이면 이름을 바꿔 두고 새로 만든다
+        if not _retry: raise
+        for suffix in ("", "-journal"):
+            f = Path(str(DB_PATH) + suffix)
+            if f.exists():
+                try: f.rename(str(f) + ".broken")
+                except OSError: pass
+        return connect(_retry=False)
+
+def _migrate(con):
+    """구버전 DB에 새 컬럼 추가"""
+    cols = {r[1] for r in con.execute("PRAGMA table_info(submission_values)")}
+    for c, t in [("source_file", "TEXT"), ("source_sheet", "TEXT"), ("source_row", "INTEGER")]:
+        if c not in cols:
+            con.execute(f"ALTER TABLE submission_values ADD COLUMN {c} {t}")
+    icols = {r[1] for r in con.execute("PRAGMA table_info(items)")}
+    if "period" not in icols:
+        con.execute("ALTER TABLE items ADD COLUMN period TEXT")
+    con.commit()
+
+def now():
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# ---------- 요구서 ----------
+def add_request(requester, received_date, due_date, title, raw_text, source_file, items):
+    con = connect()
+    cur = con.execute(
+        "INSERT INTO requests(requester,received_date,due_date,title,raw_text,source_file,created_at) VALUES(?,?,?,?,?,?,?)",
+        (requester, received_date, due_date, title, raw_text, source_file, now()))
+    rid = cur.lastrowid
+    for i, it in enumerate(items, 1):
+        con.execute("INSERT INTO items(request_id,seq,item_text,indicator,base_date,unit,period) VALUES(?,?,?,?,?,?,?)",
+                    (rid, i, it.get("item_text"), it.get("indicator"), it.get("base_date"), it.get("unit"), it.get("period")))
+    con.commit(); con.close()
+    return rid
+
+def list_requests():
+    con = connect()
+    rows = con.execute("SELECT * FROM requests ORDER BY received_date DESC, id DESC").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def get_items(request_id):
+    con = connect()
+    rows = con.execute("SELECT * FROM items WHERE request_id=? ORDER BY seq", (request_id,)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+# ---------- 제출본 ----------
+def add_submission(request_id, submitted_date, submitted_by, file_name, status, note, values):
+    con = connect()
+    cur = con.execute(
+        "INSERT INTO submissions(request_id,submitted_date,submitted_by,file_name,status,note,created_at) VALUES(?,?,?,?,?,?,?)",
+        (request_id, submitted_date, submitted_by, file_name, status, note, now()))
+    sid = cur.lastrowid
+    con.executemany(
+        "INSERT INTO submission_values(submission_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        [(sid, v["indicator"], v["center"], v["base_date"], v["value"], v.get("definition"), v.get("calc_period"),
+          v.get("extract_date"), v.get("source_version"), v.get("source_file"), v.get("source_sheet"), v.get("source_row")) for v in values])
+    con.commit(); con.close()
+    return sid
+
+def list_submissions(request_id=None):
+    con = connect()
+    q = "SELECT s.*, r.title AS request_title, r.requester FROM submissions s JOIN requests r ON r.id=s.request_id"
+    rows = con.execute(q + (" WHERE s.request_id=?" if request_id else "") + " ORDER BY s.submitted_date DESC",
+                       (request_id,) if request_id else ()).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def get_values(submission_id):
+    con = connect()
+    rows = con.execute("SELECT * FROM submission_values WHERE submission_id=?", (submission_id,)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def past_values_for(indicator, base_date):
+    """같은 지표·기준일로 과거에 제출한 값 전부(제출본 정보 포함)."""
+    con = connect()
+    rows = con.execute("""
+        SELECT v.*, s.submitted_date, s.file_name, s.status, r.requester, r.title AS request_title
+        FROM submission_values v JOIN submissions s ON s.id=v.submission_id JOIN requests r ON r.id=s.request_id
+        WHERE v.indicator=? AND v.base_date=? AND s.status='confirmed'
+        ORDER BY s.submitted_date DESC""", (indicator, base_date)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def add_reason(submission_id, indicator, center, base_date, old_value, new_value, reason, entered_by):
+    con = connect()
+    con.execute("INSERT INTO diff_reasons(submission_id,indicator,center,base_date,old_value,new_value,reason,entered_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                (submission_id, indicator, center, base_date, old_value, new_value, reason, entered_by, now()))
+    con.commit(); con.close()
+
+def reasons_for(indicator, center, base_date):
+    con = connect()
+    rows = con.execute("SELECT * FROM diff_reasons WHERE indicator=? AND center=? AND base_date=? ORDER BY created_at DESC",
+                       (indicator, center, base_date)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+# ---------- 초안·검토(6층) ----------
+def add_draft(submission_id, request_id, d: dict, hwpx_name=None, status="draft"):
+    con = connect()
+    cur = con.execute("INSERT INTO drafts(submission_id,request_id,title,body,reasons_text,provenance_text,hwpx_name,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (submission_id, request_id, d.get("제목"), d.get("본문"), d.get("차이사유"), d.get("산출근거"), hwpx_name, status, now()))
+    did = cur.lastrowid; con.commit(); con.close(); return did
+
+def list_drafts(status=None):
+    con = connect()
+    q = "SELECT d.*, r.requester, r.title AS request_title, r.due_date FROM drafts d JOIN requests r ON r.id=d.request_id"
+    rows = con.execute(q + (" WHERE d.status=?" if status else "") + " ORDER BY d.id DESC", (status,) if status else ()).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def set_draft_status(draft_id, status):
+    con = connect(); con.execute("UPDATE drafts SET status=? WHERE id=?", (status, draft_id)); con.commit(); con.close()
+
+def add_review(draft_id, reviewer, decision, comment):
+    con = connect()
+    con.execute("INSERT INTO reviews(draft_id,reviewer,decision,comment,created_at) VALUES(?,?,?,?,?)", (draft_id, reviewer, decision, comment, now()))
+    if decision in ("approved", "rejected"):
+        con.execute("UPDATE drafts SET status=? WHERE id=?", (decision, draft_id))
+    con.commit(); con.close()
+
+def reviews_for(draft_id):
+    con = connect()
+    rows = con.execute("SELECT * FROM reviews WHERE draft_id=? ORDER BY created_at", (draft_id,)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def get_request(request_id):
+    con = connect(); r = con.execute("SELECT * FROM requests WHERE id=?", (request_id,)).fetchone(); con.close()
+    return dict(r) if r else None
+
+def latest_confirmed_values(request_id):
+    con = connect()
+    s = con.execute("SELECT id FROM submissions WHERE request_id=? AND status='confirmed' ORDER BY submitted_date DESC, id DESC LIMIT 1", (request_id,)).fetchone()
+    con.close()
+    return (s["id"], get_values(s["id"])) if s else (None, [])
+
+# ---------- 통계 ----------
+def request_overview():
+    """요구별 현황: 항목 수, 제출본 수, 확정 여부"""
+    con = connect()
+    rows = con.execute("""
+        SELECT r.id, r.requester, r.received_date, r.due_date, r.title,
+               (SELECT COUNT(*) FROM items i WHERE i.request_id=r.id) AS n_items,
+               (SELECT COUNT(*) FROM submissions s WHERE s.request_id=r.id AND s.status='confirmed') AS n_confirmed,
+               (SELECT MAX(submitted_date) FROM submissions s WHERE s.request_id=r.id AND s.status='confirmed') AS last_submitted
+        FROM requests r ORDER BY r.received_date DESC""").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def requester_stats():
+    """요청 주체별 요구 건수·항목 수, 지표별 반복 횟수"""
+    con = connect()
+    by_req = con.execute("""
+        SELECT r.requester, COUNT(DISTINCT r.id) AS n_requests, COUNT(i.id) AS n_items,
+               MIN(r.received_date) AS first_date, MAX(r.received_date) AS last_date
+        FROM requests r LEFT JOIN items i ON i.request_id=r.id GROUP BY r.requester ORDER BY n_requests DESC""").fetchall()
+    by_ind = con.execute("""
+        SELECT i.indicator, COUNT(*) AS n_times, COUNT(DISTINCT r.requester) AS n_requesters,
+               GROUP_CONCAT(DISTINCT i.base_date) AS base_dates
+        FROM items i JOIN requests r ON r.id=i.request_id WHERE i.indicator IS NOT NULL
+        GROUP BY i.indicator ORDER BY n_times DESC""").fetchall()
+    con.close(); return [dict(r) for r in by_req], [dict(r) for r in by_ind]
+
+def all_items_with_requests():
+    """유사 검색용: 항목 + 요구서 정보를 한 번에"""
+    con = connect()
+    rows = con.execute("""SELECT i.item_text, i.indicator, i.base_date, r.id AS request_id, r.requester, r.received_date, r.title
+                          FROM items i JOIN requests r ON r.id=i.request_id""").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def reset():
+    _initialized.discard(str(DB_PATH))
+    if DB_PATH.exists():
+        DB_PATH.unlink()

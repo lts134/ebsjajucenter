@@ -1,0 +1,908 @@
+{
+ "규칙": [
+  {
+   "id": "S1 의원실 7월",
+   "score": {
+    "must_hit": 3,
+    "must_total": 3,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 4
+   },
+   "res": {
+    "requester": "○○○ 의원실(교육위원회)",
+    "received_date": "2026-07-01",
+    "due_date": "2026-07-08",
+    "title": "자기주도학습센터 운영 현황 자료 요구",
+    "items": [
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터 현황(센터명, 지역, 운영기관, 등록 학생 수)",
+      "indicator": "센터 현황",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": null,
+      "matched_by": "센터 현황"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터 현황(센터명, 지역, 운영기관, 등록 학생 수)",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": null,
+      "matched_by": "등록 학생 수"
+     },
+     {
+      "item_text": "2025년 대비 2026년 운영 센터 수 증감",
+      "indicator": "운영 센터 수",
+      "base_date": null,
+      "period": null,
+      "unit": null,
+      "matched_by": "운영 센터 수"
+     }
+    ]
+   }
+  },
+  {
+   "id": "S2 감사실 5월",
+   "score": {
+    "must_hit": 2,
+    "must_total": 2,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 2
+   },
+   "res": {
+    "requester": "감사실",
+    "received_date": "2026-05-12",
+    "due_date": "2026-05-20",
+    "title": "자기주도학습센터 상반기 운영 점검 자료",
+    "items": [
+     {
+      "item_text": "2026. 3. 31. 기준 센터별 등원율",
+      "indicator": "등원율",
+      "base_date": "2026-03-31",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "센터별 프로그램 운영 실적(1~3월)",
+      "indicator": "프로그램 운영 실적",
+      "base_date": null,
+      "period": "1~3월",
+      "unit": "센터별",
+      "matched_by": "프로그램 운영 실적"
+     }
+    ]
+   }
+  },
+  {
+   "id": "S3 교육부 8월",
+   "score": {
+    "must_hit": 3,
+    "must_total": 3,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "교육부 ○○과",
+    "received_date": "2026-08-20",
+    "due_date": "2026-08-27",
+    "title": "2026년 자기주도학습센터 운영 실적 제출 요청",
+    "items": [
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율 및 등록 학생 수",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율 및 등록 학생 수",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등록 학생 수"
+     },
+     {
+      "item_text": "센터별 예산 집행률(2026. 6. 30. 기준)",
+      "indicator": "예산 집행률",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "예산 집행률"
+     }
+    ]
+   }
+  },
+  {
+   "id": "S4 새 요구서 9월",
+   "score": {
+    "must_hit": 4,
+    "must_total": 4,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 4
+   },
+   "res": {
+    "requester": "△△△ 의원실(교육위원회)",
+    "received_date": "2026-09-15",
+    "due_date": "2026-09-22",
+    "title": "2026년 국정감사 요구자료 — 자기주도학습센터",
+    "items": [
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등록 학생 수",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등록 학생 수"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": null,
+      "matched_by": "운영 예산"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "예산 집행률",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": null,
+      "matched_by": "집행률"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H1 국감 표 형식·가나다·2자리 연도·복수 지표",
+   "score": {
+    "must_hit": 6,
+    "must_total": 6,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": null,
+    "requester_ok": true,
+    "n_items": 6
+   },
+   "res": {
+    "requester": "교육위원회 ○○○ 의원",
+    "received_date": null,
+    "due_date": "2026-09-26",
+    "title": "자기주도학습센터 운영 실태",
+    "items": [
+     {
+      "item_text": "2024~2026년 연도별 운영 센터 수 및 등록 학생 수",
+      "indicator": "운영 센터 수",
+      "base_date": null,
+      "period": "2024~2026",
+      "unit": "연도별",
+      "matched_by": "운영 센터 수"
+     },
+     {
+      "item_text": "2024~2026년 연도별 운영 센터 수 및 등록 학생 수",
+      "indicator": "등록 학생 수",
+      "base_date": null,
+      "period": "2024~2026",
+      "unit": "연도별",
+      "matched_by": "등록 학생 수"
+     },
+     {
+      "item_text": "'26. 6. 30. 기준 센터별 등원율(산출 방식 포함)",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026년 상반기 센터별 프로그램 운영 실적(강좌명, 참여 인원)",
+      "indicator": "프로그램 운영 실적",
+      "base_date": null,
+      "period": "2026년 상반기",
+      "unit": "센터별",
+      "matched_by": "프로그램 운영 실적"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": null,
+      "matched_by": "운영 예산"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "예산 집행률",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": null,
+      "matched_by": "집행률"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H2 감사 공문체·번호 문단 혼재·기준일 2개",
+   "score": {
+    "must_hit": 3,
+    "must_total": 3,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 4
+   },
+   "res": {
+    "requester": "감사실",
+    "received_date": "2026-08-11",
+    "due_date": "2026-08-18",
+    "title": "2026년 자체감사 관련 자료 제출 요청",
+    "items": [
+     {
+      "item_text": "2026. 3. 31. 및 2026. 6. 30. 기준 센터별 등원율(월 단위)",
+      "indicator": "등원율",
+      "base_date": "2026-03-31",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026. 3. 31. 및 2026. 6. 30. 기준 센터별 등원율(월 단위)",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026년 1~6월 센터별 예산 집행 현황(집행률 포함)",
+      "indicator": "예산 집행률",
+      "base_date": null,
+      "period": "2026년 1~6월",
+      "unit": "센터별",
+      "matched_by": "예산 집행 현황"
+     },
+     {
+      "item_text": "센터 운영기관 목록 및 위탁 계약 현황",
+      "indicator": "센터 현황",
+      "base_date": null,
+      "period": null,
+      "unit": null,
+      "matched_by": "운영기관 목록"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H3 교육부 메일체·연도 없는 날짜·월별 기간",
+   "score": {
+    "must_hit": 2,
+    "must_total": 2,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": null,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "교육부 ○○과",
+    "received_date": null,
+    "due_date": "2026-09-19",
+    "title": null,
+    "items": [
+     {
+      "item_text": "자기주도학습센터 현황(센터명·지역·운영기관·등록 학생 수) — 9월 1일 기준",
+      "indicator": "센터 현황",
+      "base_date": "2026-09-01",
+      "period": null,
+      "unit": null,
+      "matched_by": "센터 현황"
+     },
+     {
+      "item_text": "자기주도학습센터 현황(센터명·지역·운영기관·등록 학생 수) — 9월 1일 기준",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-09-01",
+      "period": null,
+      "unit": null,
+      "matched_by": "등록 학생 수"
+     },
+     {
+      "item_text": "센터별 등원율 최근 3개월(6~8월) 월별",
+      "indicator": "등원율",
+      "base_date": null,
+      "period": "6~8월",
+      "unit": "센터별",
+      "matched_by": "등원율"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H4 의원실 후속·설명형 항목(차이 사유·산출 방식)",
+   "score": {
+    "must_hit": 1,
+    "must_total": 1,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "□□□ 의원실",
+    "received_date": "2026-09-22",
+    "due_date": "2026-09-24",
+    "title": "자기주도학습센터 등원율 관련 추가 요구",
+    "items": [
+     {
+      "item_text": "지난 7월 제출한 2026. 6. 30. 기준 센터별 등원율과 교육부에 8월 제출한 동일 기준일 자료의 수치가 다른 사유",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "등원율 산출 방식(정의, 집계 기간, 원자료) 및 산출 담당 부서",
+      "indicator": "등원율",
+      "base_date": null,
+      "period": null,
+      "unit": null,
+      "matched_by": "등원율"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율 재제출(최신 확정값)",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별",
+      "matched_by": "등원율"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H5 언론·사전에 없는 지표(null 유지)",
+   "score": {
+    "must_hit": 1,
+    "must_total": 1,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "△△일보 교육팀",
+    "received_date": "2026-09-08",
+    "due_date": "2026-09-10",
+    "title": "자기주도학습센터 취재 관련 자료 요청",
+    "items": [
+     {
+      "item_text": "전국 센터 수 및 지역별 분포(2026. 9. 1. 현재)",
+      "indicator": "운영 센터 수",
+      "base_date": "2026-09-01",
+      "period": null,
+      "unit": "지역별",
+      "matched_by": "센터 수"
+     },
+     {
+      "item_text": "학생 1인당 연간 운영비",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": null,
+      "unit": null,
+      "matched_by": "운영비"
+     },
+     {
+      "item_text": "센터 이용 학생 만족도 조사 결과(있을 경우)",
+      "indicator": null,
+      "base_date": null,
+      "period": null,
+      "unit": null,
+      "matched_by": null
+     }
+    ]
+   }
+  }
+ ],
+ "Claude": [
+  {
+   "id": "S1 의원실 7월",
+   "score": {
+    "must_hit": 3,
+    "must_total": 3,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 4
+   },
+   "res": {
+    "requester": "○○○ 의원실(교육위원회)",
+    "received_date": "2026-07-01",
+    "due_date": "2026-07-08",
+    "title": "자기주도학습센터 운영 현황 자료 요구",
+    "items": [
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터 현황(센터명, 지역, 운영기관, 등록 학생 수)",
+      "indicator": "센터 현황",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터 현황(센터명, 지역, 운영기관, 등록 학생 수)",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2025년 대비 2026년 운영 센터 수 증감",
+      "indicator": "운영 센터 수",
+      "base_date": null,
+      "period": "2025~2026",
+      "unit": "연도별"
+     }
+    ]
+   }
+  },
+  {
+   "id": "S2 감사실 5월",
+   "score": {
+    "must_hit": 2,
+    "must_total": 2,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 2
+   },
+   "res": {
+    "requester": "감사실",
+    "received_date": "2026-05-12",
+    "due_date": "2026-05-20",
+    "title": "자기주도학습센터 상반기 운영 점검 자료",
+    "items": [
+     {
+      "item_text": "2026. 3. 31. 기준 센터별 등원율",
+      "indicator": "등원율",
+      "base_date": "2026-03-31",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "센터별 프로그램 운영 실적(1~3월)",
+      "indicator": "프로그램 운영 실적",
+      "base_date": null,
+      "period": "2026년 1~3월",
+      "unit": "센터별"
+     }
+    ]
+   }
+  },
+  {
+   "id": "S3 교육부 8월",
+   "score": {
+    "must_hit": 3,
+    "must_total": 3,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "교육부 ○○과",
+    "received_date": "2026-08-20",
+    "due_date": "2026-08-27",
+    "title": "2026년 자기주도학습센터 운영 실적 제출 요청",
+    "items": [
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율 및 등록 학생 수",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율 및 등록 학생 수",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "센터별 예산 집행률(2026. 6. 30. 기준)",
+      "indicator": "예산 집행률",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     }
+    ]
+   }
+  },
+  {
+   "id": "S4 새 요구서 9월",
+   "score": {
+    "must_hit": 4,
+    "must_total": 4,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 4
+   },
+   "res": {
+    "requester": "△△△ 의원실(교육위원회)",
+    "received_date": "2026-09-15",
+    "due_date": "2026-09-22",
+    "title": "2026년 국정감사 요구자료 — 자기주도학습센터",
+    "items": [
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등록 학생 수",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": "연도별"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "예산 집행률",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": "연도별"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H1 국감 표 형식·가나다·2자리 연도·복수 지표",
+   "score": {
+    "must_hit": 6,
+    "must_total": 6,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": null,
+    "requester_ok": true,
+    "n_items": 6
+   },
+   "res": {
+    "requester": "교육위원회 ○○○ 의원실",
+    "received_date": null,
+    "due_date": "2026-09-26",
+    "title": "자기주도학습센터 운영 실태",
+    "items": [
+     {
+      "item_text": "2024~2026년 연도별 운영 센터 수 및 등록 학생 수",
+      "indicator": "운영 센터 수",
+      "base_date": null,
+      "period": "2024~2026",
+      "unit": "연도별"
+     },
+     {
+      "item_text": "2024~2026년 연도별 운영 센터 수 및 등록 학생 수",
+      "indicator": "등록 학생 수",
+      "base_date": null,
+      "period": "2024~2026",
+      "unit": "연도별"
+     },
+     {
+      "item_text": "'26. 6. 30. 기준 센터별 등원율(산출 방식 포함)",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026년 상반기 센터별 프로그램 운영 실적(강좌명, 참여 인원)",
+      "indicator": "프로그램 운영 실적",
+      "base_date": null,
+      "period": "2026년 상반기",
+      "unit": "센터별"
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": null
+     },
+     {
+      "item_text": "최근 3년 센터 운영 예산 및 집행률",
+      "indicator": "예산 집행률",
+      "base_date": null,
+      "period": "최근 3년",
+      "unit": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "H2 감사 공문체·번호 문단 혼재·기준일 2개",
+   "score": {
+    "must_hit": 3,
+    "must_total": 3,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 5
+   },
+   "res": {
+    "requester": "감사실",
+    "received_date": "2026-08-11",
+    "due_date": "2026-08-18",
+    "title": "2026년 자체감사 관련 자료 제출 요청",
+    "items": [
+     {
+      "item_text": "2026. 3. 31. 및 2026. 6. 30. 기준 센터별 등원율(월 단위)",
+      "indicator": "등원율",
+      "base_date": "2026-03-31",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026. 3. 31. 및 2026. 6. 30. 기준 센터별 등원율(월 단위)",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026년 1~6월 센터별 예산 집행 현황(집행률 포함)",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": "2026년 1~6월",
+      "unit": "센터별"
+     },
+     {
+      "item_text": "2026년 1~6월 센터별 예산 집행 현황(집행률 포함)",
+      "indicator": "예산 집행률",
+      "base_date": null,
+      "period": "2026년 1~6월",
+      "unit": "센터별"
+     },
+     {
+      "item_text": "센터 운영기관 목록 및 위탁 계약 현황",
+      "indicator": "센터 현황",
+      "base_date": null,
+      "period": null,
+      "unit": null
+     }
+    ]
+   }
+  },
+  {
+   "id": "H3 교육부 메일체·연도 없는 날짜·월별 기간",
+   "score": {
+    "must_hit": 2,
+    "must_total": 2,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": null,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "교육부 ○○과",
+    "received_date": null,
+    "due_date": "2026-09-19",
+    "title": "자기주도학습센터 관련 자료 요청",
+    "items": [
+     {
+      "item_text": "자기주도학습센터 현황(센터명·지역·운영기관·등록 학생 수) — 9월 1일 기준",
+      "indicator": "센터 현황",
+      "base_date": "2026-09-01",
+      "period": null,
+      "unit": "전체"
+     },
+     {
+      "item_text": "자기주도학습센터 현황(센터명·지역·운영기관·등록 학생 수) — 9월 1일 기준",
+      "indicator": "등록 학생 수",
+      "base_date": "2026-09-01",
+      "period": null,
+      "unit": "전체"
+     },
+     {
+      "item_text": "센터별 등원율 최근 3개월(6~8월) 월별",
+      "indicator": "등원율",
+      "base_date": null,
+      "period": "2026년 6~8월",
+      "unit": "월별"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H4 의원실 후속·설명형 항목(차이 사유·산출 방식)",
+   "score": {
+    "must_hit": 1,
+    "must_total": 1,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "□□□ 의원실",
+    "received_date": "2026-09-22",
+    "due_date": "2026-09-24",
+    "title": "자기주도학습센터 등원율 관련 추가 요구",
+    "items": [
+     {
+      "item_text": "지난 7월 제출한 2026. 6. 30. 기준 센터별 등원율과 교육부에 8월 제출한 동일 기준일 자료의 수치가 다른 사유",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     },
+     {
+      "item_text": "등원율 산출 방식(정의, 집계 기간, 원자료) 및 산출 담당 부서",
+      "indicator": "등원율",
+      "base_date": null,
+      "period": null,
+      "unit": null
+     },
+     {
+      "item_text": "2026. 6. 30. 기준 센터별 등원율 재제출(최신 확정값)",
+      "indicator": "등원율",
+      "base_date": "2026-06-30",
+      "period": null,
+      "unit": "센터별"
+     }
+    ]
+   }
+  },
+  {
+   "id": "H5 언론·사전에 없는 지표(null 유지)",
+   "score": {
+    "must_hit": 1,
+    "must_total": 1,
+    "missed": [],
+    "extra": [],
+    "bad": [],
+    "null_ok": true,
+    "due_ok": true,
+    "received_ok": true,
+    "requester_ok": true,
+    "n_items": 3
+   },
+   "res": {
+    "requester": "△△일보 교육팀",
+    "received_date": "2026-09-08",
+    "due_date": "2026-09-10",
+    "title": "자기주도학습센터 취재 관련 자료 요청",
+    "items": [
+     {
+      "item_text": "① 전국 센터 수 및 지역별 분포(2026. 9. 1. 현재)",
+      "indicator": "운영 센터 수",
+      "base_date": "2026-09-01",
+      "period": null,
+      "unit": "지역별"
+     },
+     {
+      "item_text": "② 학생 1인당 연간 운영비",
+      "indicator": "운영 예산",
+      "base_date": null,
+      "period": null,
+      "unit": null
+     },
+     {
+      "item_text": "③ 센터 이용 학생 만족도 조사 결과(있을 경우)",
+      "indicator": null,
+      "base_date": null,
+      "period": null,
+      "unit": null,
+      "matched_by": null
+     }
+    ]
+   }
+  }
+ ]
+}
