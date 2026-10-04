@@ -21,7 +21,7 @@ def main() -> int:
         r = subprocess.run(cmd, cwd=HERE, env=env)
         print(f"----- {name}: {'통과' if r.returncode == 0 else '실패'}")
         if r.returncode != 0: failed.append(name)
-    for f in HERE.glob("storage/check_history.db*"): f.unlink(missing_ok=True)
+    for f in list(HERE.glob("storage/check_history.db*")) + list(HERE.glob("storage/llm_check_*_rules-only.*")): f.unlink(missing_ok=True)   # 임시 DB·규칙 전용 보고서 정리
     print("\n결과:", "모두 통과" if not failed else f"실패 {len(failed)}건 — {', '.join(failed)}")
     return 1 if failed else 0
 

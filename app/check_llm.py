@@ -79,14 +79,16 @@ def main():
                 lines.append(f"| {it.get('item_text')} | {it.get('indicator')} | {it.get('base_date')} | {it.get('period')} | {it.get('unit')} |")
             lines.append("")
     if has:
-        lines += ["## 호출 기록", "", "| 시각 | 용도 | 모델 | 지연(초) | 입력 | 출력 |", "|---|---|---|---|---|---|"]
-        lines += [f"| {x['when']} | {x['purpose']} | {x['model']} | {x['latency_s']} | {x['input_tokens']} | {x['output_tokens']} |" for x in llm.LOG]
-    p = OUT / f"llm_check_{dt.date.today()}.md"
+        lines += ["## 호출 기록", "", "| 시각 | 용도 | 모델 | 지연(초) | 입력 | 출력 | 구조화 출력 | 추정 비용($) |", "|---|---|---|---|---|---|---|---|"]
+        lines += [f"| {x['when']} | {x['purpose']} | {x['model']} | {x['latency_s']} | {x['input_tokens']} | {x['output_tokens']} | {'O' if x.get('structured') else '-'} | {x.get('cost_usd')} |" for x in llm.LOG]
+        u = llm.usage_summary(); lines += ["", f"합계 추정 비용 ${u['cost_usd']} (공개 단가표 기준, 실제 청구는 콘솔 확인)"]
+    suffix = "" if has else "_rules-only"          # 키 없는 점검이 Claude 경로 보고서를 덮어쓰지 않게
+    p = OUT / f"llm_check_{dt.date.today()}{suffix}.md"
     p.write_text("\n".join(lines), encoding="utf-8")
     for name, rows in paths.items():
         print(f"\n== {name} ==\n" + md_table(rows))
     print("보고서 →", p)
-    (OUT / f"llm_check_{dt.date.today()}.json").write_text(json.dumps({k: [{"id": r["id"], "score": r["score"], "res": r["res"]} for r in v] for k, v in paths.items()}, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+    (OUT / f"llm_check_{dt.date.today()}{suffix}.json").write_text(json.dumps({k: [{"id": r["id"], "score": r["score"], "res": r["res"]} for r in v] for k, v in paths.items()}, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
 
 if __name__ == "__main__":
     main()

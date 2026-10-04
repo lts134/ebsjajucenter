@@ -77,7 +77,8 @@ if page == "① 과거 자료 등록":
             req_text, req_name = (read_doc(up), up.name) if up else ("", "")
         req_text = st.text_area("요구서 원문 (수정 가능)", req_text, height=220)
         if st.button("요구 항목 추출", type="primary", disabled=not req_text):
-            res, how = analyze(req_text)
+            with st.spinner("요구 항목 추출 중…" + (" (Claude)" if HAS_API else "")):
+                res, how = analyze(req_text)
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
         st.subheader("2) 그때 제출한 값(집계 엑셀)")
@@ -131,7 +132,8 @@ elif page == "② 새 요구서 분석":
         text, name = (read_doc(up), up.name) if up else ("", "")
     text = st.text_area("요구서 원문", text, height=200)
     if st.button("분석", type="primary", disabled=not text):
-        res, how = analyze(text)
+        with st.spinner("요구 항목 추출·지표 정규화 중…" + (" (Claude)" if HAS_API else "")):
+            res, how = analyze(text)
         st.session_state.update(new_req=res, new_how=how, new_text=text, new_name=name)
     if "new_req" in st.session_state:
         res = st.session_state["new_req"]
@@ -435,7 +437,7 @@ else:
         os.environ["ANTHROPIC_API_KEY"] = key.strip()
         if not HAS_API: st.rerun()                                      # 사이드바 상태·④ 'Claude 추가 점검' 버튼을 바로 갱신
         st.success("이 세션에 적용됨. 아래 연결 테스트로 확인하세요.")
-    ws = st.text_input("워크스페이스 ID(ANTHROPIC_WORKSPACE_ID, wrkspc_…) — 키가 워크스페이스에 묶여 있지 않을 때만 필요", os.environ.get("ANTHROPIC_WORKSPACE_ID", ""))
+    ws = st.text_input("워크스페이스 ID(ANTHROPIC_WORKSPACE_ID, wrkspc_…) — 키가 워크스페이스에 묶여 있지 않을 때만 필요", os.environ.get("ANTHROPIC_WORKSPACE_ID", ""), type="password")
     if ws.strip(): os.environ["ANTHROPIC_WORKSPACE_ID"] = ws.strip()
     elif "ANTHROPIC_WORKSPACE_ID" in os.environ: del os.environ["ANTHROPIC_WORKSPACE_ID"]
     model = st.text_input("모델명(CLAUDE_MODEL, 비우면 자동: " + " → ".join(llm.CANDIDATES) + ")", os.environ.get("CLAUDE_MODEL", ""))

@@ -14,14 +14,22 @@ OUT = Path(__file__).parent / "screens"; OUT.mkdir(parents=True, exist_ok=True)
 for f in OUT.glob("*.png"): f.unlink()
 
 def settle(page, ms=1500):
-    try: page.wait_for_selector('[data-testid="stStatusWidget"]', state="detached", timeout=30000)
+    try: page.wait_for_selector('[data-testid="stStatusWidget"]', state="detached", timeout=120000)
+    except Exception: pass
+    page.wait_for_timeout(600)
+    try: page.wait_for_selector('[data-testid="stSpinner"]', state="detached", timeout=180000)   # Claude 호출(최대 수십 초) 대기
     except Exception: pass
     page.wait_for_timeout(ms)
 def goto(page, label): page.get_by_test_id("stSidebar").get_by_text(label, exact=True).click(); settle(page)
 def click(page, name): page.get_by_role("button", name=name, exact=True).first.click(); settle(page, 2500)
+def _height(page): return page.evaluate("document.querySelector('[data-testid=\"stMainBlockContainer\"]').getBoundingClientRect().height")
 def shot(page, fname, cap=3400):
     page.set_viewport_size({"width": 1440, "height": 900}); page.wait_for_timeout(500)
-    h = page.evaluate("document.querySelector('[data-testid=\"stMainBlockContainer\"]').getBoundingClientRect().height")
+    h, stable = _height(page), 0
+    for _ in range(40):                       # 표·에디터 같은 컴포넌트가 늦게 올라오므로 높이가 1.5초간 안 변할 때까지 대기
+        page.wait_for_timeout(500); h2 = _height(page)
+        stable = stable + 1 if abs(h2 - h) < 2 else 0; h = h2
+        if stable >= 3: break
     page.set_viewport_size({"width": 1440, "height": min(max(900, int(h) + 24), cap)}); page.wait_for_timeout(800)
     page.screenshot(path=str(OUT / fname)); print("saved", fname, "h=", int(h))
 
