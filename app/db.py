@@ -267,3 +267,38 @@ def reset():
     _initialized.discard(str(DB_PATH))
     if DB_PATH.exists():
         DB_PATH.unlink()
+
+# ---------- 보조 기능용(사유 후보·이력 질의) ----------
+def all_reasons(indicator=None, limit=50):
+    """입력된 차이 사유 기록(최근순). indicator로 좁힐 수 있음."""
+    con = connect()
+    q = "SELECT d.*, s.submitted_date, r.requester FROM diff_reasons d LEFT JOIN submissions s ON s.id=d.submission_id LEFT JOIN requests r ON r.id=s.request_id"
+    args = ()
+    if indicator: q += " WHERE d.indicator=?"; args = (indicator,)
+    rows = con.execute(q + " ORDER BY d.created_at DESC LIMIT ?", (*args, limit)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def search_requests(keyword: str, limit=20):
+    """요청 주체·제목·원문·항목 원문·지표에 키워드가 든 요구서."""
+    k = f"%{(keyword or '').strip()}%"
+    con = connect()
+    rows = con.execute("""
+        SELECT DISTINCT r.id, r.requester, r.received_date, r.due_date, r.title FROM requests r
+        LEFT JOIN items i ON i.request_id=r.id
+        WHERE r.requester LIKE ? OR r.title LIKE ? OR r.raw_text LIKE ? OR i.item_text LIKE ? OR i.indicator LIKE ?
+        ORDER BY r.received_date DESC LIMIT ?""", (k, k, k, k, k, limit)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def request_detail(request_id: int):
+    """요구서 + 항목 + 제출본(값 건수) + 초안·검토."""
+    r = get_request(request_id)
+    if not r: return None
+    r = {k: v for k, v in r.items() if k != "raw_text"} | {"raw_text": (r.get("raw_text") or "")[:1500]}
+    r["items"] = get_items(request_id)
+    subs = []
+    for s in list_submissions(request_id):
+        vals = get_values(s["id"])
+        subs.append({k: s[k] for k in ("id", "submitted_date", "submitted_by", "file_name", "status", "note")} | {"n_values": len(vals), "indicators": sorted({v["indicator"] for v in vals}), "base_dates": sorted({v["base_date"] for v in vals})})
+    r["submissions"] = subs
+    r["drafts"] = [{k: d[k] for k in ("id", "status", "title", "hwpx_name", "created_at")} | {"reviews": reviews_for(d["id"])} for d in list_drafts() if d["request_id"] == request_id]
+    return r

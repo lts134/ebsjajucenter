@@ -37,13 +37,16 @@ with sync_playwright() as p:
     click(page, "이 요구서를 이력에 등록(진행 중)")
     # ③ 대조: 사유 3건 입력 → 캡처 → 확정 (대상 요구서 기본값 = 최신 #2)
     goto(page, "③ 수치 대조·점검표")
-    for c in ("센터C", "센터G", "센터K"):
+    click(page, "사유 문구 후보 제안 (대조 단서·과거 입력 사유 근거)")
+    page.get_by_role("button", name="적용", exact=True).first.click(); settle(page, 800)   # 센터C에 후보 적용
+    for c in ("센터G", "센터K"):
         box = page.get_by_label(f"{c} · 등원율 · 2026-06-30", exact=False).first
         box.fill("출결 사후 보정 반영(9/10 재산출, 원자료 v2)"); box.press("Enter"); settle(page, 800)
     shot(page, "03_수치대조_점검표.png")
     click(page, "사유 저장 + 새 제출본 확정 → ④로")
     # ④ 초안 → 캡처 → 검토 요청
-    goto(page, "④ 회신 초안·HWPX"); click(page, "초안 생성"); shot(page, "04_회신초안_HWPX.png")
+    goto(page, "④ 회신 초안·HWPX"); click(page, "초안 생성")
+    click(page, "이 회신을 받으면 어떤 질문이 올까? (요구 항목·수치·대조 결과·타 기관 제출 이력 근거)"); shot(page, "04_회신초안_HWPX.png")
     click(page, "초안 저장 + 팀장 검토 요청")
     # ⑤ 검토 대기 1건(자동 펼침) → 캡처 → 승인
     goto(page, "⑤ 검토·승인"); shot(page, "05_검토승인.png")
@@ -52,6 +55,8 @@ with sync_playwright() as p:
     # ⑥ 이력(첫 요구서 펼침) ⑦ 현황 설정
     goto(page, "⑥ 이력 조회"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page); shot(page, "06_이력조회.png")
     goto(page, "⑦ 현황·통계"); shot(page, "07_현황통계.png")
-    goto(page, "설정"); shot(page, "08_설정.png")
+    goto(page, "⑧ 이력에 묻기"); page.get_by_role("textbox", name="질문").fill("감사실에 등원율 어떻게 냈지?"); page.keyboard.press("Enter"); settle(page, 800)
+    click(page, "질문"); shot(page, "08_이력에묻기.png")
+    goto(page, "설정"); shot(page, "09_설정.png")
     b.close()
 print("DONE")

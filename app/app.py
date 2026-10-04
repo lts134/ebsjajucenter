@@ -17,7 +17,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa
 
 st.set_page_config(page_title="EBS 대외 요구자료 대응 에이전트", page_icon="📁", layout="wide")
 HERE = Path(__file__).parent
@@ -29,7 +29,7 @@ HAS_API = llm.available()
 with st.sidebar:
     st.title("대외 요구자료 대응 에이전트")
     page = st.radio("메뉴", ["① 과거 자료 등록", "② 새 요구서 분석", "③ 수치 대조·점검표", "④ 회신 초안·HWPX",
-                          "⑤ 검토·승인", "⑥ 이력 조회", "⑦ 현황·통계", "설정"])
+                          "⑤ 검토·승인", "⑥ 이력 조회", "⑦ 현황·통계", "⑧ 이력에 묻기", "설정"])
     st.divider()
     USER = st.text_input("담당자 이름(기록용)", st.session_state.get("user_name", "담당자"), key="user_name") or "담당자"
     REVIEWER = st.text_input("검토자(팀장) 이름", st.session_state.get("reviewer_name", "팀장"), key="reviewer_name") or "팀장"
@@ -122,7 +122,10 @@ elif page == "② 새 요구서 분석":
     st.header("② 새 요구서 → 항목 추출·지표 정규화 → 유사 요구 검색 → 항목별 데이터 제안")
     use_sample = st.checkbox("샘플 새 요구서 사용", value=True)
     if use_sample:
-        text, name = (SAMPLE / "새요구서_의원실_2026-09-15.txt").read_text(encoding="utf-8"), "새요구서_의원실_2026-09-15.txt"
+        sfiles = sorted(SAMPLE.glob("새요구서_*.txt"))
+        spick = st.selectbox("샘플 (정형 의원실 / 감사 공문체 / 교육부 메일체 — 뒤의 둘은 규칙 경로와 Claude 경로 차이가 드러나는 서식)", sfiles,
+                             index=next((i for i, f in enumerate(sfiles) if "의원실" in f.name), 0), format_func=lambda p: p.name)
+        text, name = spick.read_text(encoding="utf-8"), spick.name
     else:
         up = st.file_uploader("새 요구서 (txt / hwpx / pdf / docx)", type=["txt", "hwpx", "pdf", "docx"], key="new_up")
         text, name = (read_doc(up), up.name) if up else ("", "")
@@ -197,10 +200,24 @@ elif page == "③ 수치 대조·점검표":
         st.dataframe(m[["indicator", "center", "base_date", "old_value", "new_value", "diff", "판정", "단서"]]
                      .rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "과거 제출값", "new_value": "신규 집계값", "diff": "차이"}), width="stretch")
         st.subheader("차이 사유 입력 (담당자)")
+        diff_rows = m[m["판정"] == "차이"].to_dict("records")
+        cands_key = tuple((r["indicator"], r["center"], r["base_date"]) for r in diff_rows)
+        if diff_rows and st.button("사유 문구 후보 제안 (대조 단서·과거 입력 사유 근거)"):
+            with st.spinner("후보 생성 중…"):
+                cands, how = assist.reason_candidates(diff_rows)
+            st.session_state["reason_cands"] = (cands_key, cands, how)
+        cands = st.session_state.get("reason_cands")
+        cands = cands[1] if cands and cands[0] == cands_key else None
+        if cands: st.caption(f"후보 생성 방식: {st.session_state['reason_cands'][2]} · 후보는 제안일 뿐이며 담당자가 고르거나 고쳐 씁니다. 원인을 새로 추정한 문구는 없습니다.")
         reasons = {}
-        for _, r in m[m["판정"] == "차이"].iterrows():
+        for r in diff_rows:
             key = (r["indicator"], r["center"], r["base_date"])
             prev = db.reasons_for(*key)
+            if cands and cands.get(key):
+                opts = [c for c in cands[key] if c.get("문구")]
+                c1, c2 = st.columns([5, 1])
+                pick = c1.selectbox(f"후보 — {r['center']}", opts, format_func=lambda c: f"{c['문구']}  〔{c['근거']}〕", key=f"cand_{key}", label_visibility="collapsed")
+                if c2.button("적용", key=f"apply_{key}"): st.session_state[f"reason_{key}"] = pick["문구"]
             reasons[key] = st.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']}  ({r['old_value']} → {r['new_value']})",
                                          value=prev[0]["reason"] if prev else "", placeholder="예: 8/5 출결 사후 보정 반영", key=f"reason_{key}")
         ck = compare.checklist(m, reasons)
@@ -256,6 +273,16 @@ elif page == "④ 회신 초안·HWPX":
         else: st.success(f"모든 요구 항목 충족({n_ok}건)")
         if HAS_API and st.button("Claude로 추가 점검(누락·불일치·단정 표현)"):
             st.info(draft.coverage_check_llm(items, d, values, st.session_state.get("last_checklist") if st.session_state.get("last_request") == req["id"] else None, reasons_raw, prov))
+        st.subheader("예상 후속 질문·리스크 사전 검토")
+        ck_now = st.session_state.get("last_checklist") if st.session_state.get("last_request") == req["id"] else None
+        if st.button("이 회신을 받으면 어떤 질문이 올까? (요구 항목·수치·대조 결과·타 기관 제출 이력 근거)"):
+            with st.spinner("예측 중…"):
+                qs, how = assist.foresee(req, items, values, reasons_raw, ck_now, d)
+            st.session_state["foresee"] = (req["id"], qs, how)
+        fs = st.session_state.get("foresee")
+        if fs and fs[0] == req["id"]:
+            st.caption(f"생성 방식: {fs[2]} · 질문은 예측이며 수치 해석은 포함하지 않습니다.")
+            st.dataframe(pd.DataFrame(fs[1])[["가능성", "질문", "근거", "준비할 자료"]], width="stretch", hide_index=True)
         d_hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(d.get(k, ""), f"초안 {k}")]
         if d_hits: st.error(f"초안 문안에 개인정보 의심 패턴 {len(d_hits)}건 — 제출 전 삭제·가명 처리 필요"); st.dataframe(pd.DataFrame(d_hits), width="stretch")
         else: st.caption("초안 문안 개인정보 검사: 의심 패턴 없음")
@@ -280,7 +307,9 @@ elif page == "④ 회신 초안·HWPX":
                 zf.writestr(fname, out)
                 zf.writestr("정합성점검표.xlsx", ckb.getvalue())
                 vb = io.BytesIO(); values.to_excel(vb, index=False); zf.writestr("확정수치.xlsx", vb.getvalue())
-                zf.writestr("근거_사유_메타.json", json.dumps({"요구": req, "제출본": sid, "차이 사유": {" | ".join(k): v for k, v in reasons_raw.items()}, "산출 근거": prov, "초안": d, "생성일": str(dt.date.today())}, ensure_ascii=False, indent=2, default=str))
+                fs = st.session_state.get("foresee")
+                zf.writestr("근거_사유_메타.json", json.dumps({"요구": req, "제출본": sid, "차이 사유": {" | ".join(k): v for k, v in reasons_raw.items()}, "산출 근거": prov, "초안": d,
+                                                          "예상 후속 질문": fs[1] if fs and fs[0] == req["id"] else None, "생성일": str(dt.date.today())}, ensure_ascii=False, indent=2, default=str))
             c2.download_button("제출 묶음 ZIP (회신+점검표+수치+근거)", zb.getvalue(), file_name=f"제출묶음_{req['id']}_{dt.date.today()}.zip")
             if c3.button("초안 저장 + 팀장 검토 요청", type="primary"):
                 (OUT_DIR / fname).write_bytes(out)
@@ -357,6 +386,43 @@ elif page == "⑦ 현황·통계":
         with c1: st.subheader("요청 주체별"); st.dataframe(pd.DataFrame(by_req).rename(columns={"requester": "요청 주체", "n_requests": "요구 건수", "n_items": "항목 수", "first_date": "최초", "last_date": "최근"}), width="stretch")
         with c2: st.subheader("반복 요구 지표"); st.dataframe(pd.DataFrame(by_ind).rename(columns={"indicator": "지표", "n_times": "요구 횟수", "n_requesters": "요청 주체 수", "base_dates": "기준일들"}), width="stretch")
         st.caption("반복 요구 지표는 사전 산출·표준 답변 후보입니다.")
+
+# ================= ⑧ 이력에 묻기 =================
+elif page == "⑧ 이력에 묻기":
+    st.header("⑧ 이력에 묻기 — 자연어로 질문하면 이력 DB를 조회해 근거와 함께 답합니다")
+    st.caption("Claude가 읽기 전용 조회 도구(요구서 검색·상세·제출값·과거 제출·차이 사유·현황·지표 사전)를 골라 호출하고, 조회된 레코드만 근거로 답합니다. 수치를 가공(평균·증감)하지 않습니다."
+               + ("" if HAS_API else " 지금은 API 키가 없어 키워드 검색으로 동작합니다."))
+    examples = ["감사실에 등원율을 언제 어떤 값으로 냈지?", "2026-06-30 기준 등원율을 제출한 기관과 날짜를 전부 보여줘", "센터C 등원율이 달라진 사유로 뭐라고 적었나", "기한이 가장 가까운 요구서는?", "사전에 없는 지표를 요구한 적이 있나"]
+    q = st.text_input("질문", placeholder=examples[0], key="qa_q")
+    c1, c2 = st.columns([1, 4])
+    go = c1.button("질문", type="primary", disabled=not q.strip())
+    c2.caption("예시: " + " · ".join(examples[1:4]))
+    if go:
+        with st.spinner("이력 조회 중…"):
+            res = history_qa.ask(q) if HAS_API else {"text": None, "trace": [], "how": "키 없음 — 키워드 검색"}
+            kw = history_qa.keyword_search(q) if res.get("text") is None else None
+        st.session_state.setdefault("qa_log", []).insert(0, {"q": q, "res": res, "kw": kw})
+        st.session_state["qa_log"] = st.session_state["qa_log"][:5]
+    for i, e in enumerate(st.session_state.get("qa_log", [])):
+        with st.container(border=True):
+            st.markdown(f"**Q. {e['q']}**")
+            res, kw = e["res"], e["kw"]
+            if res.get("text"):
+                st.markdown(res["text"]); st.caption(res.get("how", ""))
+                with st.expander(f"근거 레코드 — 도구 호출 {len(res['trace'])}회"):
+                    for t in res["trace"]:
+                        st.markdown(f"`{t['tool']}` {json.dumps(t['input'], ensure_ascii=False)}" + (f" → {t['rows']}건" if t.get("rows") is not None else ""))
+                        r_ = t.get("result")
+                        if isinstance(r_, list) and r_ and isinstance(r_[0], dict): st.dataframe(pd.DataFrame(r_), width="stretch", height=min(300, 40 + 35 * len(r_)))
+                        elif isinstance(r_, dict) and "error" in r_: st.error(r_["error"])
+            else:
+                st.caption(res.get("how", ""))
+                if kw:
+                    st.markdown(f"검색어: {', '.join(kw['tokens']) or '-'} · 인식 지표: {', '.join(kw['indicators']) or '-'}")
+                    if kw["requests"]: st.dataframe(pd.DataFrame(kw["requests"]).rename(columns={"id": "요구번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목"}), width="stretch", hide_index=True)
+                    else: st.info("일치하는 요구서가 없습니다.")
+                    if kw["reasons"]: st.caption("관련 차이 사유 기록"); st.dataframe(pd.DataFrame(kw["reasons"])[["indicator", "center", "base_date", "old_value", "new_value", "reason", "created_at"]].rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "과거값", "new_value": "신규값", "reason": "사유", "created_at": "입력일"}), width="stretch", hide_index=True)
+            if i == 0 and res.get("text") is None and HAS_API: st.warning("Claude 응답이 없어 키워드 검색 결과를 표시했습니다.")
 
 # ================= 설정 =================
 else:

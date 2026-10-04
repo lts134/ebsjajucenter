@@ -1,6 +1,6 @@
 // EBS 대외 요구자료 대응 에이전트 — 발표자료 생성 (pptxgenjs, 구조화 덱)
 // 사용: npm install pptxgenjs → node docs/build_deck.js docs/발표자료_EBS_요구자료대응에이전트.pptx
-// 이미지: docs/screens/의 캡처를 사이드바 제외로 잘라 docs/img/에 둔 것(아래 crops 참고). 테마 적용(apply_theme.js)이 없으면 색상만 기본값으로 저장된다.
+// 이미지: docs/screens/의 캡처를 사이드바 제외로 잘라 docs/img/에 둔 것. 테마 적용(apply_theme.js)이 없으면 색상만 기본값으로 저장된다.
 const pptxgen = require("pptxgenjs");
 const path = require("path");
 let applyTheme = async () => console.log("(apply_theme.js 없음 — 테마 색상은 PowerPoint 기본값으로 저장됨)");
@@ -89,7 +89,7 @@ pres.addSection({ title: "개요" });
 let s = pres.addSlide({ masterName: "TITLE_DARK", sectionTitle: "개요" });
 s.addText("EBS 대외 요구자료 대응 에이전트", { placeholder: "title" });
 s.addText("언제, 누구에게, 어떤 근거로 답했는지 기억하고 — 다음 답변의 수치와 문서를 검증합니다", { placeholder: "body" });
-["①", "②", "③", "④", "⑤", "⑥", "⑦"].forEach((n, i) => circleNum(s, 0.8 + i * 0.75, 1.3, n, 0.55, i % 2 ? C.accent2 : C.accent1));
+["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧"].forEach((n, i) => circleNum(s, 0.8 + i * 0.75, 1.3, n, 0.55, [2, 3, 7].includes(i) ? C.accent2 : C.accent1));
 s.addNotes("가상 데이터 기반 프로토타입입니다. 시연 순서는 ①→⑦이며 약 12분입니다.");
 
 // ---------- 2. 문제 ----------
@@ -123,7 +123,7 @@ s.addText("역할 경계를 코드로 강제한 담당자 보조 도구", { plac
 s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "해결" });
 s.addText("세 주체의 역할 경계", { placeholder: "title" });
 const roles = [
-  ["AI (Claude API)", C.accent1, ["요구서에서 항목·지표·기준일·기간 추출 — 지표명은 사전 값만(스키마 열거형으로 강제)", "확정 수치·입력된 사유만으로 공문체 초안 작성", "초안의 누락·불일치·단정 표현 지적(수정은 하지 않음)"], "하지 않는 것: 수치 계산·추정, 사유 추정, 원자료 접근"],
+  ["AI (Claude API)", C.accent1, ["기억: 과거에 같은 차이를 어떻게 설명했는지 끌어와 사유 문구 후보 제시(③)", "예측: 이 회신을 받은 요구 주체의 후속 질문과 준비할 자료(④)", "연결: 자연어 질문을 조회 도구 호출로 바꿔 이력에서 답하고 근거 레코드 제시(⑧)", "변환(보조): 요구서 구조화·공문체 초안·초안 점검 — 지표명은 사전 값만"], "하지 않는 것: 수치 계산·해석, 원인 추정, 원자료 접근"],
   ["코드 (pandas·규칙)", C.accent3, ["새 집계값 vs 과거 제출값 대조, 차이 센터와 '단서'(근거 필드 변경)", "요구 항목 충족 검사, 개인정보 패턴 검사", "HWPX 템플릿 치환·표 행 복제, 제출 묶음 생성"], "API 키가 없어도 같은 흐름이 규칙 기반으로 동작"],
   ["사람 (담당자·팀장)", C.accent2, ["추출 결과 확인·수정", "차이 사유 입력(AI가 추정하지 않음)", "초안 수정, 팀장 승인 → 확정"], "승인 없이는 아무것도 확정되지 않음"],
 ];
@@ -132,14 +132,14 @@ roles.forEach((r, i) => {
   s.addShape(pres.ShapeType.roundRect, { x, y: 1.5, w: 3.95, h: 4.5, rectRadius: 0.12, fill: { color: C.background2 }, line: { color: C.background2 }, objectName: `role-${i}` });
   s.addShape(pres.ShapeType.ellipse, { x: x + 0.25, y: 1.75, w: 0.5, h: 0.5, fill: { color: r[1] }, line: { color: r[1] }, objectName: `role-dot-${i}` });
   s.addText(r[0], { x: x + 0.9, y: 1.75, w: 2.9, h: 0.5, fontSize: 16, bold: true, color: C.text1, margin: 0, isTextBox: true, valign: "middle", objectName: `role-title-${i}` });
-  s.addText(r[2].map((t, j) => ({ text: t, options: { bullet: true, breakLine: j < r[2].length - 1 } })), { x: x + 0.25, y: 2.45, w: 3.45, h: 2.9, fontSize: 12, color: C.text1, margin: 0, isTextBox: true, valign: "top", paraSpaceAfter: 6, objectName: `role-body-${i}` });
+  s.addText(r[2].map((t, j) => ({ text: t, options: { bullet: true, breakLine: j < r[2].length - 1 } })), { x: x + 0.25, y: 2.45, w: 3.45, h: 2.6, fontSize: 11.5, color: C.text1, margin: 0, isTextBox: true, valign: "top", paraSpaceAfter: 6, objectName: `role-body-${i}` });
   s.addText(r[3], { x: x + 0.25, y: 5.05, w: 3.45, h: 0.8, fontSize: 11, italic: true, color: C.text2, margin: 0, isTextBox: true, valign: "top", objectName: `role-foot-${i}` });
 });
 s.addNotes("가장 중요한 슬라이드입니다. '지어내지 못하게' 하는 장치가 프롬프트가 아니라 스키마·코드·승인 절차에 있다는 점을 강조합니다.");
 
 // ---------- 6. 7개 화면 흐름 ----------
 s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "해결" });
-s.addText("7개 화면, 한 번의 흐름", { placeholder: "title" });
+s.addText("8개 화면, 한 번의 흐름", { placeholder: "title" });
 const steps = [
   ["과거 자료 등록", "요구서+제출본 → 항목·지표·기준일 구조화, 산출 근거·출처 저장"],
   ["새 요구서 분석", "같은 기준일·지표의 과거 제출 이력, 유사 요구서, 데이터 출처 제안"],
@@ -148,17 +148,35 @@ const steps = [
   ["검토·승인", "팀장 승인·반려·의견 기록"],
   ["이력 조회", "요구→항목→제출값→사유→초안→승인 한 줄, 키워드 검색"],
   ["현황·통계", "D-day·기한 임박, 관리대장 엑셀, 반복 요구 지표"],
+  ["이력에 묻기", "자연어 질문 → 조회 도구 호출 → 근거 레코드와 함께 답(AI)"],
 ];
 steps.forEach((st, i) => {
   const col = i < 4 ? i : i - 4, row = i < 4 ? 0 : 1;
-  const x = 0.6 + col * 3.1, y = 1.55 + row * 2.75, w = 2.9, h = 2.45;
+  const x = 0.6 + col * 3.1, y = 1.5 + row * 2.55, w = 2.9, h = 2.3;
   s.addShape(pres.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.12, fill: { color: C.background2 }, line: { color: C.background2 }, objectName: `step-${i}` });
-  circleNum(s, x + 0.2, y + 0.2, String(i + 1), 0.5, i === 2 || i === 3 ? C.accent2 : C.accent1);
+  circleNum(s, x + 0.2, y + 0.2, String(i + 1), 0.5, [2, 3, 7].includes(i) ? C.accent2 : C.accent1);
   s.addText(st[0], { x: x + 0.85, y: y + 0.2, w: w - 1.0, h: 0.5, fontSize: 14, bold: true, color: C.text1, margin: 0, isTextBox: true, valign: "middle", objectName: `step-title-${i}` });
   s.addText(st[1], { x: x + 0.2, y: y + 0.85, w: w - 0.4, h: h - 1.0, fontSize: 11.5, color: C.text1, margin: 0, isTextBox: true, valign: "top", objectName: `step-body-${i}` });
   if (i < 3) s.addShape(pres.ShapeType.rightArrow, { x: x + w + 0.02, y: y + h / 2 - 0.12, w: 0.16, h: 0.24, fill: { color: C.accent5 }, line: { color: C.accent5 }, objectName: `arrow-${i}` });
 });
-s.addText("주황 번호(③·④)가 '검증'의 핵심 단계입니다. 설정 화면에서 API 연결·모델·비용을 확인합니다.", { x: 9.9, y: 4.3, w: 2.85, h: 2.45, fontSize: 11.5, italic: true, color: C.text2, margin: 0, isTextBox: true, valign: "top", objectName: "flow-note" });
+s.addText("주황 번호(③·④·⑧)가 AI가 기억·예측·연결을 맡는 화면입니다. 설정 화면에서 API 연결·모델·비용을 확인합니다.", { x: 0.6, y: 6.5, w: 12.1, h: 0.35, fontSize: 11, italic: true, color: C.text2, margin: 0, isTextBox: true, objectName: "flow-note" });
+
+// ---------- AI 핵심 3곳 ----------
+s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "해결" });
+s.addText("AI를 '변환'에서 빼내 '기억·예측·연결'에 썼다", { placeholder: "title" });
+const ai3 = [
+  ["③ 사유 문구 후보", "03_cands.png", "차이 센터마다 후보 1~3개. 근거는 대조 단서(추출시점·원자료 버전 변경) 또는 과거에 입력했던 사유 기록. 담당자가 '적용'하거나 고쳐 씀. 원인을 새로 추측한 문구는 없음"],
+  ["④ 예상 후속 질문", "04_foresee.png", "요구 항목·확정 수치·대조 결과·타 기관 제출 이력·초안을 보고 가능성 순으로 질문 3~6개와 준비할 자료. 수치 해석은 하지 않음. 제출 묶음에 함께 저장"],
+  ["⑧ 이력에 묻기", "08_answer.png", "\"감사실에 등원율 어떻게 냈지?\" → 읽기 전용 조회 도구 7종을 골라 호출 → 조회된 레코드만 근거로 답(요구번호·제출본·제출일·기관). 호출 내역 공개. 키 없으면 키워드 검색"],
+];
+ai3.forEach((a, i) => {
+  const x = 0.6 + i * 4.15;
+  s.addShape(pres.ShapeType.roundRect, { x, y: 1.5, w: 3.95, h: 5.15, rectRadius: 0.12, fill: { color: C.background2 }, line: { color: C.background2 }, objectName: `ai3-${i}` });
+  s.addText(a[0], { x: x + 0.25, y: 1.65, w: 3.5, h: 0.45, fontSize: 16, bold: true, color: C.text2, margin: 0, isTextBox: true, valign: "middle", objectName: `ai3-t-${i}` });
+  s.addImage({ path: path.join(IMG, a[1]), x: x + 0.25, y: 2.2, w: 3.45, h: 2.5, sizing: { type: "contain", w: 3.45, h: 2.5 }, objectName: `ai3-img-${i}` });
+  s.addText(a[2], { x: x + 0.25, y: 4.9, w: 3.45, h: 1.65, fontSize: 11.5, color: C.text1, margin: 0, isTextBox: true, valign: "top", objectName: `ai3-b-${i}` });
+});
+s.addNotes("기획 단계에서는 AI를 추출·문안 변환에만 썼습니다. 검토 후 언어모델이 잘하는 세 가지(기억·예측·연결)로 옮겼고, 세 기능 모두 근거를 함께 보여 주며 수치는 건드리지 않습니다.");
 
 // ---------- 시연 ----------
 pres.addSection({ title: "시연" });
@@ -191,7 +209,7 @@ demoSlide("② 새 요구서 분석 — '7월에 의원실에 이 값으로 답�
 demoSlide("③ 수치 대조 — 12개 센터 중 3곳이 다르고, 단서가 보인다", "03_수치대조_점검표.png", 1000 / 1070,
   ["새 집계값(9월 재산출) vs 과거 제출값(7월 제출본)을 코드로 대조",
    "센터C·G·K 차이, 단서: 추출시점·원자료 버전 변경(v1 → v2 사후 보정)",
-   "차이 사유는 담당자가 입력. AI는 추정하지 않음",
+   "'사유 문구 후보 제안' → 단서·과거 입력 사유를 근거로 후보 제시, 담당자가 적용 또는 직접 입력",
    "정합성 점검표에 과거·신규 출처(파일명·행 번호) 기록, 개인정보 패턴 검사 후 확정"],
   "대조에는 AI를 쓰지 않습니다. 단서는 제출값과 함께 저장한 근거 필드의 차이에서 나옵니다.",
   { title: "차이 3건(값은 가상)", head: ["센터", "과거", "신규", "차이", "단서"], colW: [0.6, 0.6, 0.6, 0.55, 1.8],
@@ -199,7 +217,7 @@ demoSlide("③ 수치 대조 — 12개 센터 중 3곳이 다르고, 단서가 �
 demoSlide("④ 회신 초안 — 확정 수치·입력 사유만 쓰고, 빠진 건 [확인 필요]", "04_회신초안_HWPX.png", 1240 / 1070,
   ["요구 항목 순서대로 번호 문단, 차이 사유·산출 근거 자동 구성",
    "충족 검사: 등원율 충족 1건, 확정 수치가 없는 3건은 '[확인 필요] 표시'로 분리 집계",
-   "Claude 추가 점검(키 있을 때): 누락·기준일 불일치·표에 없는 숫자·단정 표현 지적",
+   "'어떤 질문이 올까?' → 차이 사유, ○○○ 의원실 제출값과의 일치 여부, [확인 필요] 제출 시점 등 후속 질문과 준비 자료",
    "초안 개인정보 검사 → HWPX(표 12행 자동 확장) → 제출 묶음 ZIP → 팀장 검토 요청"],
   "초안의 숫자는 확정 수치 표에서만 인용됩니다. 데이터가 없는 항목은 지어내지 않고 [확인 필요]로 남깁니다.",
   { title: "요구 항목 충족 검사(코드)", head: ["요구 항목", "지표", "확정 수치", "판정"], colW: [1.75, 0.95, 0.65, 0.8],
@@ -211,6 +229,13 @@ shotWithFrame(s, "05_검토승인.png", 0.6, 1.55, 3.95, 3.95 * (960 / 1070), "�
 shotWithFrame(s, "06_이력조회.png", 4.7, 1.55, 3.95, 3.95 * (720 / 1070), "⑥ 요구→항목→제출본→초안→승인");
 shotWithFrame(s, "07_현황통계.png", 8.8, 1.55, 3.95, 3.95 * (880 / 1070), "⑦ D-day·기한 임박·반복 요구 지표");
 s.addText("반복 요구 지표(등원율 2회·요청 주체 2곳)는 사전 산출·표준 답변 후보가 됩니다. 관리대장은 엑셀로 내보냅니다.", { x: 0.6, y: 5.9, w: 12.1, h: 0.6, fontSize: 12.5, color: C.text1, margin: 0, isTextBox: true, objectName: "wrap-note" });
+
+demoSlide("⑧ 이력에 묻기 — 7개 화면을 돌아다니지 않아도 된다", "08_이력에묻기.png", 860 / 1070,
+  ["자연어 질문 → Claude가 조회 도구(요구서 검색·상세·제출값·과거 제출·차이 사유·현황·지표 사전)를 골라 호출",
+   "조회된 레코드만 근거로 답하고 요구번호·제출본·제출일·기관을 명시. 평균·증감 가공 금지",
+   "'근거 레코드' 펼침에 어떤 도구를 어떤 입력으로 호출했는지 전부 표시",
+   "API 키가 없으면 키워드 검색으로 동작(캡처는 키 없는 상태)"],
+  "도구 루프는 수동 구현이라 베타 의존이 없습니다. 도구는 전부 읽기 전용 DB 함수입니다.");
 
 // ---------- 아키텍처 ----------
 pres.addSection({ title: "구현" });
@@ -224,15 +249,15 @@ function box(x, y, w, h, title, body, fill = C.background2, tcolor = C.text1) {
 // 좌: PC 로컬 영역
 s.addShape(pres.ShapeType.roundRect, { x: 0.6, y: 1.5, w: 8.4, h: 5.2, rectRadius: 0.15, fill: { color: C.background1 }, line: { color: C.accent6, width: 2 }, objectName: "arch-pc" });
 s.addText("담당자 PC (Windows) — run.bat 한 번", { x: 0.8, y: 1.6, w: 8, h: 0.4, fontSize: 13, bold: true, color: C.text2, margin: 0, isTextBox: true, objectName: "arch-pc-title" });
-box(0.8, 2.1, 2.5, 1.5, "화면 (Streamlit)", "7개 화면 + 설정\n브라우저 로컬 실행");
+box(0.8, 2.1, 2.5, 1.5, "화면 (Streamlit)", "8개 화면 + 설정\n브라우저 로컬 실행");
 box(3.5, 2.1, 2.5, 1.5, "추출·정규화", "extract · normalize(지표 사전)\ndocread(txt·HWPX·PDF·DOCX)");
 box(6.2, 2.1, 2.6, 1.5, "검색·제안", "search(문자 n-gram, 외부 API 없음)\nsuggest(데이터 카탈로그)");
 box(0.8, 3.8, 2.5, 1.5, "대조·점검 (코드)", "compare(pandas) · pii\n차이·단서·점검표·출처");
-box(3.5, 3.8, 2.5, 1.5, "초안·출력", "draft(초안·충족 검사)\nhwpx_out(치환·행 복제)");
+box(3.5, 3.8, 2.5, 1.5, "초안·출력·보조", "draft · hwpx_out\nassist(사유 후보·후속 질문) · history_qa(조회 도구 7종)");
 box(6.2, 3.8, 2.6, 1.5, "이력 DB (SQLite 1파일)", "requests · items · submissions\nsubmission_values(출처) · diff_reasons · drafts · reviews");
-box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 38건 → 추출 품질 점검(규칙/Claude) → 6단계 화면 흐름  ·  make_submission_zip.py  ·  capture_screens.py");
+box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 45건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
 // 우: API
-box(9.3, 1.5, 3.45, 2.3, "Claude API (선택)", "llm.py 공통 호출\n· 모델 자동 대체(404 → 다음 후보)\n· 구조화 출력(JSON 스키마) + 미지원 시 텍스트 파싱\n· 429·5xx 자동 재시도, 타임아웃\n· 호출별 모델·지연·토큰·추정 비용 기록", C.accent1, C.background1);
+box(9.3, 1.5, 3.45, 2.3, "Claude API (선택)", "llm.py 공통 호출\n· 모델 자동 대체(404 → 다음 후보)\n· 구조화 출력(JSON 스키마) + 미지원 시 텍스트 파싱\n· 도구 호출 루프(⑧), 429·5xx 재시도, 타임아웃\n· 호출별 모델·지연·토큰·추정 비용 기록", C.accent1, C.background1);
 box(9.3, 4.0, 3.45, 1.5, "밖으로 나가는 것", "요구서 문안 · 센터 단위 확정 집계값 · 담당자 입력 사유 · 산출 근거 메타\n(개인 단위 원자료는 전달하지 않음)", C.background2);
 box(9.3, 5.7, 3.45, 1.0, "키가 없으면", "규칙 기반으로 전 기능 동작(추출은 정형 서식 한정)", C.background2);
 s.addShape(pres.ShapeType.line, { x: 9.0, y: 2.65, w: 0.3, h: 0, line: { color: C.accent5, width: 1.5, dashType: "dash" }, objectName: "arch-link" });
@@ -243,8 +268,8 @@ s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "구현" });
 s.addText("검증 결과 — 실측치", { placeholder: "title" });
 stat(s, 0.6, 1.5, 3.0, "25 / 25", "요구서 추출 필수 쌍 재현\nClaude 경로 · 9사례 · 초과·오탐 0\n(2026-09-28, claude-sonnet-4-6)");
 stat(s, 3.7, 1.5, 3.0, "3.8초", "요구서 1건 추출 평균 지연\n(9건, 입력 10,872 · 출력 2,711 토큰)");
-stat(s, 6.8, 1.5, 3.0, "38", "pytest 단위 테스트 통과\n(추출·대조·개인정보·HWPX·초안·LLM·DB)");
-stat(s, 9.9, 1.5, 3.0, "8 / 8", "화면 6단계 흐름 구동\nAppTest + 실제 브라우저, 오류 0");
+stat(s, 6.8, 1.5, 3.0, "45", "pytest 단위 테스트 통과\n(추출·대조·HWPX·초안·LLM·도구 루프·사유 후보·후속 질문)");
+stat(s, 9.9, 1.5, 3.0, "9 / 9", "화면 ①~⑧+설정 흐름 구동\nAppTest + 실제 브라우저, 오류 0");
 const rows = [
   [{ text: "항목", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "결과", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "비고", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }],
   ["추출 품질(규칙 경로)", "9사례 25/25, 초과·오탐 0", "규칙을 사례에 맞춰 조정했으므로 참고치"],
@@ -252,8 +277,9 @@ const rows = [
   ["초안 원칙 준수", "평균·증감 계산 없음, 12개 센터 값 표와 일치, 없는 항목 [확인 필요]", "2026-09-28 육안 확인, 초안·추가 점검 각 약 8초"],
   ["HWPX 출력", "12행 표 확장, XML 정형성, 자리표시자 잔존 0", "한글에서 타이핑해 run이 쪼개진 자리표시자도 치환(10-04 보강)"],
   ["입력 견고성", "cp949 CSV, '2026. 6. 30.', '67.8%', '1,234', 빈 행, 다중 시트", "오류는 행 번호·허용 컬럼명과 함께 표시"],
+  ["AI 보조 3종", "규칙 경로 동작 확인, 도구 루프는 가짜 클라이언트로 다중 호출·오류·한도·모델 대체 검증", "실제 모델 호출 결과는 키 넣고 확인 [확인 필요]"],
 ];
-s.addTable(rows, { x: 0.6, y: 3.4, w: 12.1, colW: [2.6, 5.0, 4.5], fontSize: 10.5, color: H.dk1, border: { type: "solid", color: H.accent6, pt: 0.75 }, fill: { color: H.lt1 }, valign: "middle", margin: 0.06, objectName: "verify-table" });
+s.addTable(rows, { x: 0.6, y: 3.3, w: 12.1, colW: [2.6, 5.0, 4.5], fontSize: 10, color: H.dk1, border: { type: "solid", color: H.accent6, pt: 0.75 }, fill: { color: H.lt1 }, valign: "middle", margin: 0.06, objectName: "verify-table" });
 s.addNotes("규칙 경로 100%는 사례에 맞춘 결과라 자랑거리가 아닙니다. Claude 경로가 실제 점검 대상이고, 1차에서 놓친 연도 없는 날짜를 프롬프트 규칙으로 보완했습니다.");
 
 // ---------- 보안·비용 ----------
@@ -261,7 +287,7 @@ s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "구현" });
 s.addText("보안과 비용", { placeholder: "title" });
 card(s, 0.6, 1.5, 5.95, 5.0, "보안 설계", "", { titleSize: 17 });
 bullets(s, ["API 키는 환경변수 또는 설정 화면 세션 한정 입력 — 파일에 저장하지 않음",
-  "이력 DB는 PC 로컬 SQLite. 외부로는 요구서 문안·센터 단위 확정값·입력 사유·근거 메타만 전송",
+  "이력 DB는 PC 로컬 SQLite. 외부로는 요구서 문안·센터 단위 확정값·입력 사유·근거 메타, ⑧은 질문과 조회된 레코드만 전송. 조회 도구는 읽기 전용",
   "개인 단위 원자료(출결 명단)는 올리지 않음. ③ 집계값·④ 초안에서 개인정보 패턴 검사(주민번호·전화·이메일·학생 식별어)",
   "국정원 생성형 AI 보안 가이드라인의 '비공개·개인정보 입력 금지, 생성물 재검증' 원칙과 정렬",
   "API가 막힌 망에서도 규칙 경로로 전 기능 동작"], 0.85, 2.2, 5.45, 4.1, 12.5);

@@ -175,3 +175,41 @@ def usage_summary() -> dict:
             "cost_usd": round(sum(c for c in costs if c is not None), 4) if n else 0.0,
             "cost_unknown_calls": sum(1 for c in costs if c is None),
             "structured_calls": sum(1 for x in LOG if x.get("structured"))}
+
+def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = 2000, purpose: str = "도구 질의") -> dict:
+    """도구 호출 루프(수동). Claude가 tools 중 하나를 고르면 handlers[name](**input)을 실행해 결과를 돌려주고, 더 이상 호출이 없으면 최종 답을 반환.
+    반환: {"text": 최종 답, "trace": [{"tool", "input", "result", "rows"}...], "turns": n}. 모델 없음(404)이면 다음 후보로."""
+    global _RESOLVED
+    import anthropic
+    client = _client()
+    model_iter = iter(_model_order()); model = next(model_iter)
+    messages = [{"role": "user", "content": prompt}]
+    trace, turns, last_err = [], 0, None
+    while turns < max_turns:
+        t0 = time.time()
+        try:
+            msg = client.messages.create(model=model, max_tokens=max_tokens, system=system, tools=tools, messages=messages, **_ws_kwargs(client.messages.create))
+        except anthropic.NotFoundError as e:
+            last_err = e
+            try: model = next(model_iter); continue
+            except StopIteration: raise RuntimeError(f"사용 가능한 모델을 찾지 못함. 마지막 오류: {last_err}") from e
+        _RESOLVED = model; turns += 1
+        _record(msg, model, t0, purpose, False)
+        uses = [b for b in msg.content if getattr(b, "type", "") == "tool_use"]
+        if msg.stop_reason != "tool_use" or not uses:
+            return {"text": "".join(getattr(b, "text", "") for b in msg.content).strip(), "trace": trace, "turns": turns}
+        messages.append({"role": "assistant", "content": msg.content})
+        results = []
+        for u in uses:
+            fn = handlers.get(u.name)
+            try:
+                if fn is None: out, err = {"error": f"알 수 없는 도구 {u.name}"}, True
+                else: out, err = fn(**(u.input or {})), False
+            except Exception as e:
+                out, err = {"error": f"{type(e).__name__}: {e}"}, True
+            s = json.dumps(out, ensure_ascii=False, default=str)
+            if len(s) > 8000: s = s[:8000] + f" …(이하 생략, 총 {len(s)}자)"
+            trace.append({"tool": u.name, "input": u.input, "rows": len(out) if isinstance(out, list) else None, "result": out})
+            results.append({"type": "tool_result", "tool_use_id": u.id, "content": s, "is_error": err})
+        messages.append({"role": "user", "content": results})
+    return {"text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다. 질문을 더 좁혀 주세요.)", "trace": trace, "turns": turns}
