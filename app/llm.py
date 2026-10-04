@@ -44,6 +44,8 @@ def _ws_kwargs(fn) -> dict:
 def explain_error(e: Exception) -> str:
     """API 오류를 담당자가 조치할 수 있는 말로. SDK 예외 클래스를 우선 보고, 없으면 메시지로 판단."""
     m = str(e)
+    if "anthropic-workspace-id" in m or "not scoped to a workspace" in m:      # 400으로도 403으로도 올 수 있음
+        return "이 키는 워크스페이스에 묶여 있지 않아 워크스페이스 ID가 필요합니다. 설정 화면의 '워크스페이스 ID'에 콘솔(Settings → Workspaces)의 wrkspc_… 값을 넣거나, 워크스페이스 안에서 만든 키를 쓰세요."
     try:
         import anthropic
         if isinstance(e, anthropic.AuthenticationError): return "키가 잘못됐거나 만료됐습니다(401). 콘솔에서 키를 다시 확인하세요."
