@@ -19,7 +19,7 @@ import pandas as pd
 import streamlit as st
 import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm
 
-st.set_page_config(page_title="EBS 대외 요구자료 대응 에이전트", layout="wide")
+st.set_page_config(page_title="EBS 대외 요구자료 대응 에이전트", page_icon="📁", layout="wide")
 HERE = Path(__file__).parent
 SAMPLE = HERE / "sample_data"
 TPL_DIR = HERE / "templates"
@@ -31,9 +31,14 @@ with st.sidebar:
     page = st.radio("메뉴", ["① 과거 자료 등록", "② 새 요구서 분석", "③ 수치 대조·점검표", "④ 회신 초안·HWPX",
                           "⑤ 검토·승인", "⑥ 이력 조회", "⑦ 현황·통계", "설정"])
     st.divider()
+    USER = st.text_input("담당자 이름(기록용)", st.session_state.get("user_name", "담당자"), key="user_name") or "담당자"
+    REVIEWER = st.text_input("검토자(팀장) 이름", st.session_state.get("reviewer_name", "팀장"), key="reviewer_name") or "팀장"
+    st.divider()
     st.caption(f"Claude API: {'연결됨 · ' + llm.model_label() if HAS_API else '없음 → 규칙 기반'}")
     if HAS_API and llm.LOG:
-        u = llm.usage_summary(); st.caption(f"이번 세션 호출 {u['calls']}회 · 토큰 {u['input_tokens']}/{u['output_tokens']} · 평균 {u['avg_latency_s']}초")
+        u = llm.usage_summary()
+        st.caption(f"이번 세션 호출 {u['calls']}회 · 토큰 {u['input_tokens']}/{u['output_tokens']} · 평균 {u['avg_latency_s']}초")
+        st.caption(f"추정 비용 ${u['cost_usd']:.4f}" + (f" (단가 미상 {u['cost_unknown_calls']}회 제외)" if u['cost_unknown_calls'] else "") + " · 구조화 출력 " + f"{u['structured_calls']}회")
     st.caption(f"이력 DB: {db.DB_PATH.name}")
 
 def read_doc(uploaded) -> str:
@@ -82,8 +87,13 @@ if page == "① 과거 자료 등록":
             vpick = st.selectbox("샘플 제출본", vfiles, format_func=lambda p: p.name)
             vdf, vname = compare.load_values(vpick), vpick.name
         else:
-            vup = st.file_uploader("제출값 엑셀/CSV (컬럼: 지표명, 센터명, 기준일, 값, 지표 정의, 집계기간, 추출시점, 원자료 버전)", type=["xlsx", "csv"], key="reg_val")
-            vdf, vname = (compare.load_values(vup), vup.name) if vup else (None, "")
+            vup = st.file_uploader("제출값 엑셀/CSV (컬럼: 지표명, 센터명, 기준일, 값, 지표 정의, 집계기간, 추출시점, 원자료 버전 · cp949 CSV 허용)", type=["xlsx", "xlsm", "csv"], key="reg_val")
+            vdf, vname = None, ""
+            if vup:
+                sheets = compare.list_sheets(vup)
+                sheet = st.selectbox("시트", sheets, key="reg_sheet") if len(sheets) > 1 else None
+                try: vdf, vname = compare.load_values(vup, sheet), vup.name
+                except ValueError as e: st.error(f"파일을 읽지 못했습니다: {e}")
         if vdf is not None:
             st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=220, width="stretch")
     if "reg_extract" in st.session_state:
@@ -103,7 +113,7 @@ if page == "① 과거 자료 등록":
         if st.button("이력에 저장 (요구서 + 제출본 확정)", type="primary"):
             rid = db.add_request(requester, received, due, title, st.session_state["reg_text"], st.session_state["reg_name"], items_df.to_dict("records"))
             vals = vdf.to_dict("records") if vdf is not None else []
-            sid = db.add_submission(rid, submitted_date, "담당자", vname, "confirmed", "과거 제출본 등록", vals)
+            sid = db.add_submission(rid, submitted_date, USER, vname, "confirmed", "과거 제출본 등록", vals)
             st.success(f"저장 완료: 요구서 #{rid}, 제출본 #{sid}, 제출값 {len(vals)}건")
             del st.session_state["reg_extract"]
 
@@ -163,7 +173,12 @@ elif page == "③ 수치 대조·점검표":
         use_s = st.checkbox("샘플(9월 재산출) 사용", value=True)
         if use_s: new_df = compare.load_values(SAMPLE / "등원율_2026-06-30기준_9월재산출.xlsx")
         else:
-            up = st.file_uploader("새 집계 엑셀/CSV", type=["xlsx", "csv"], key="cmp_new"); new_df = compare.load_values(up) if up else None
+            up = st.file_uploader("새 집계 엑셀/CSV (한글 컬럼명·cp949 CSV 허용)", type=["xlsx", "xlsm", "csv"], key="cmp_new"); new_df = None
+            if up:
+                sheets = compare.list_sheets(up)
+                sheet = st.selectbox("시트", sheets, key="cmp_sheet") if len(sheets) > 1 else None
+                try: new_df = compare.load_values(up, sheet)
+                except ValueError as e: st.error(f"파일을 읽지 못했습니다: {e}")
     with c2:
         st.subheader("과거 제출값 (이력 DB)")
         subs = db.list_submissions()
@@ -198,11 +213,11 @@ elif page == "③ 수치 대조·점검표":
         buf = io.BytesIO(); ck.to_excel(buf, index=False)
         st.download_button("점검표 엑셀", buf.getvalue(), file_name=f"정합성점검표_{dt.date.today()}.xlsx")
         if st.button("사유 저장 + 새 제출본 확정 → ④로", type="primary", disabled=target is None):
-            sid = db.add_submission(target["id"], str(dt.date.today()), "담당자", "새 집계값", "confirmed", "③ 대조 후 확정", new_df.to_dict("records"))
+            sid = db.add_submission(target["id"], str(dt.date.today()), USER, "새 집계값", "confirmed", "③ 대조 후 확정", new_df.to_dict("records"))
             for key, reason in reasons.items():
                 if reason.strip():
                     row = m[(m["indicator"] == key[0]) & (m["center"] == key[1]) & (m["base_date"] == key[2])].iloc[0]
-                    db.add_reason(sid, *key, row["old_value"], row["new_value"], reason, "담당자")
+                    db.add_reason(sid, *key, row["old_value"], row["new_value"], reason, USER)
             st.session_state.update(last_submission=sid, last_request=target["id"], last_checklist=ck.to_dict("records"), last_reasons={" | ".join(k): v for k, v in reasons.items() if v.strip()})
             st.success(f"제출본 #{sid} 확정, 사유 {sum(1 for v in reasons.values() if v.strip())}건 저장. ④ 회신 초안으로 이동하세요.")
 
@@ -241,6 +256,9 @@ elif page == "④ 회신 초안·HWPX":
         else: st.success(f"모든 요구 항목 충족({n_ok}건)")
         if HAS_API and st.button("Claude로 추가 점검(누락·불일치·단정 표현)"):
             st.info(draft.coverage_check_llm(items, d, values, st.session_state.get("last_checklist") if st.session_state.get("last_request") == req["id"] else None, reasons_raw, prov))
+        d_hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(d.get(k, ""), f"초안 {k}")]
+        if d_hits: st.error(f"초안 문안에 개인정보 의심 패턴 {len(d_hits)}건 — 제출 전 삭제·가명 처리 필요"); st.dataframe(pd.DataFrame(d_hits), width="stretch")
+        else: st.caption("초안 문안 개인정보 검사: 의심 패턴 없음")
         st.subheader("HWPX 출력")
         tpls = sorted(TPL_DIR.glob("*.hwpx"))
         tpl = st.selectbox("템플릿", tpls, format_func=lambda p: p.name) if tpls else None
@@ -250,7 +268,7 @@ elif page == "④ 회신 초안·HWPX":
             st.caption("템플릿 자리표시자: " + ", ".join(hwpx_out.placeholders(tpl_bytes)))
             fill = {"수신": req["requester"] or "", "발신": "EBS 지역교육협력부", "제목": d["제목"],
                     "요구항목": "\n".join(f"{i}. {it['item_text']}" for i, it in enumerate(items, 1)),
-                    "본문": d["본문"], "차이사유": d["차이사유"], "산출근거": d["산출근거"], "담당자": "담당자 [확인 필요]"}
+                    "본문": d["본문"], "차이사유": d["차이사유"], "산출근거": d["산출근거"], "담당자": USER}
             rows = [{"no": i + 1, "indicator": v["indicator"], "center": v["center"], "base_date": v["base_date"], "value": v["value"]} for i, (_, v) in enumerate(values.iterrows())]
             out = hwpx_out.render(tpl_bytes, fill, rows)
             fname = f"회신_{req['id']}_{dt.date.today()}.hwpx"
@@ -283,15 +301,21 @@ elif page == "⑤ 검토·승인":
             if d["status"] == "review_requested":
                 cmt = st.text_input("검토 의견", key=f"cmt_{d['id']}")
                 c1, c2, c3 = st.columns(3)
-                if c1.button("승인", key=f"ok_{d['id']}", type="primary"): db.add_review(d["id"], "팀장", "approved", cmt); st.rerun()
-                if c2.button("반려", key=f"no_{d['id']}"): db.add_review(d["id"], "팀장", "rejected", cmt); st.rerun()
-                if c3.button("의견만", key=f"c_{d['id']}"): db.add_review(d["id"], "팀장", "comment", cmt); st.rerun()
+                if c1.button("승인", key=f"ok_{d['id']}", type="primary"): db.add_review(d["id"], REVIEWER, "approved", cmt); st.rerun()
+                if c2.button("반려", key=f"no_{d['id']}"): db.add_review(d["id"], REVIEWER, "rejected", cmt); st.rerun()
+                if c3.button("의견만", key=f"c_{d['id']}"): db.add_review(d["id"], REVIEWER, "comment", cmt); st.rerun()
 
 # ================= ⑥ 이력 조회 =================
 elif page == "⑥ 이력 조회":
     st.header("⑥ 요구·제출·초안 이력")
     reqs = db.list_requests()
-    if not reqs: st.info("등록된 요구서가 없습니다.")
+    kw = st.text_input("검색 (요청 주체·제목·항목 원문·요구서 본문에서 찾기)", placeholder="예: 등원율, 의원실, 2026-06-30")
+    if kw.strip():
+        k = kw.strip().lower()
+        reqs = [r for r in reqs if k in " ".join(str(r.get(c) or "") for c in ("requester", "title", "raw_text", "received_date", "due_date")).lower()
+                or any(k in str(it.get("item_text") or "").lower() or k in str(it.get("indicator") or "").lower() for it in db.get_items(r["id"]))]
+        st.caption(f"검색 결과 {len(reqs)}건")
+    if not reqs: st.info("등록된 요구서가 없습니다." if not kw.strip() else "검색 결과가 없습니다.")
     for r in reqs:
         with st.expander(f"#{r['id']} {r['received_date']} · {r['requester']} · {r['title']} (기한 {r['due_date']})"):
             its = db.get_items(r["id"])
@@ -313,9 +337,17 @@ elif page == "⑦ 현황·통계":
         df["D-day"] = (pd.to_datetime(df["due_date"], errors="coerce") - today).dt.days
         df["상태"] = df.apply(lambda r: "확정 제출" if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
         show = df.rename(columns={"id": "번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_items": "항목 수", "n_confirmed": "확정 제출본", "last_submitted": "최근 제출일"})
-        c1, c2, c3 = st.columns(3)
-        c1.metric("요구서", len(df)); c2.metric("진행 중", int((df["상태"] == "진행 중").sum())); c3.metric("기한 경과(미제출)", int((df["상태"] == "기한 경과").sum()))
-        st.dataframe(show[["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일"]], width="stretch")
+        soon = (df["상태"] == "진행 중") & df["D-day"].between(0, 3)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("요구서", len(df)); c2.metric("진행 중", int((df["상태"] == "진행 중").sum()))
+        c3.metric("기한 임박(3일 이내)", int(soon.sum())); c4.metric("기한 경과(미제출)", int((df["상태"] == "기한 경과").sum()))
+        view = show[["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일"]]
+        def _row_style(r):
+            if r["상태"] == "기한 경과": return ["background-color: #fde2e2"] * len(r)
+            if r["상태"] == "진행 중" and pd.notna(r["D-day"]) and r["D-day"] <= 3: return ["background-color: #fff3cd"] * len(r)
+            return [""] * len(r)
+        st.dataframe(view.style.apply(_row_style, axis=1), width="stretch", hide_index=True)
+        st.caption("노랑: 진행 중이며 기한 3일 이내 · 빨강: 기한 경과(미제출)")
         rows = [{"요구번호": r["id"], "요청 주체": r["requester"], "접수일": r["received_date"], "제출기한": r["due_date"], "제목": r["title"], "항목": it["item_text"], "지표": it["indicator"], "기준일": it["base_date"], "단위": it["unit"], "확정 제출본 수": r["n_confirmed"], "최근 제출일": r["last_submitted"]} for r in ov for it in db.get_items(r["id"])]
         lb = io.BytesIO(); pd.DataFrame(rows).to_excel(lb, index=False)
         st.download_button("관리대장 엑셀 내보내기", lb.getvalue(), file_name=f"요구자료_관리대장_{dt.date.today()}.xlsx")

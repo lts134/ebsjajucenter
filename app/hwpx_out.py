@@ -13,24 +13,36 @@ LEAF_TBL = r"<hp:tbl\b(?:(?!<hp:tbl\b).)*?</hp:tbl>"
 
 def _esc(s): return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+def _para_text(fragment: str) -> str:
+    """조각 안의 모든 <hp:t> 글자를 이어 붙인다(태그 제거, 엔티티 복원)."""
+    t = "".join(re.findall(r"<hp:t[^>]*>(.*?)</hp:t>", fragment, flags=re.S))
+    t = re.sub(r"<[^>]+>", "", t)
+    return t.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"').replace("&amp;", "&")
+
+_T_TAG = r"<hp:t\b[^>]*>.*?</hp:t>|<hp:t\b[^>]*/>"
+
 def _para_with_text(p: str, text: str) -> str:
-    """문단 p의 첫 run 텍스트를 text로. linesegarray(레이아웃 캐시)는 제거해 한글이 재계산하게 함."""
+    """문단 p의 전체 글자를 text 하나로 바꾼다: 첫 run에 넣고, 나머지 run의 <hp:t>는 비운다(컨트롤·서식은 유지).
+    한글에서 '{{수신}}'을 타이핑하면 '{{' '수신' '}}'처럼 run이 쪼개져 저장되는 경우가 있어 첫 run만 바꾸면 글자가 남는다.
+    linesegarray(줄 배치 캐시)는 제거해 한글이 다시 계산하게 한다."""
     p2 = re.sub(r"<hp:linesegarray>.*?</hp:linesegarray>", "", p, flags=re.S)
-    m = re.search(r"(<hp:run\b[^>]*?)(/>|>(.*?)</hp:run>)", p2, flags=re.S)
-    if not m: return p2
-    inner = m.group(3) or ""
-    inner = re.sub(r"<hp:t\b[^>]*>.*?</hp:t>|<hp:t\b[^>]*/>", "", inner, flags=re.S)  # 기존 t 제거
-    return p2[:m.start()] + f"{m.group(1)}><hp:t>{_esc(text)}</hp:t>{inner}</hp:run>" + p2[m.end():]
+    runs = list(re.finditer(r"(<hp:run\b[^>]*?)(/>|>(.*?)</hp:run>)", p2, flags=re.S))
+    if not runs: return p2
+    out, pos = [], 0
+    for i, m in enumerate(runs):
+        inner = re.sub(_T_TAG, "", m.group(3) or "", flags=re.S)          # 기존 글자 제거, 컨트롤은 유지
+        new_run = f"{m.group(1)}><hp:t>{_esc(text)}</hp:t>{inner}</hp:run>" if i == 0 else f"{m.group(1)}>{inner}</hp:run>"
+        out.append(p2[pos:m.start()]); out.append(new_run); pos = m.end()
+    out.append(p2[pos:])
+    return "".join(out)
 
 def _fill_placeholders(xml: str, values: dict) -> str:
     """문단 단위로 {{키}} 처리. 다중 행 값이면 문단 복제."""
     def repl_para(m):
         p = m.group(0)
-        keys = re.findall(r"\{\{(?!row\.)([^}]+)\}\}", p)
+        full = _para_text(p)                      # run이 쪼개져 있어도 문단 전체 글자로 자리표시자를 찾는다
+        keys = re.findall(r"\{\{(?!row\.)([^}]+)\}\}", full)
         if not keys: return p
-        # 문단 전체 텍스트를 구해 치환
-        full = "".join(re.findall(r"<hp:t[^>]*>(.*?)</hp:t>", p, flags=re.S))
-        full = re.sub(r"<[^>]+>", "", full)
         for k in keys:
             full = full.replace("{{%s}}" % k, str(values.get(k, "")))
         lines = full.split("\n")
@@ -50,9 +62,9 @@ def _expand_rows(xml: str, rows: list[dict]) -> str:
         new_rows = []
         def cell_fix(cm, data):
             c = cm.group(0)
-            keys = re.findall(r"\{\{row\.([^}]+)\}\}", c)
+            full = _para_text(c)
+            keys = re.findall(r"\{\{row\.([^}]+)\}\}", full)
             if not keys: return c
-            full = "".join(re.findall(r"<hp:t[^>]*>(.*?)</hp:t>", c, flags=re.S)); full = re.sub(r"<[^>]+>", "", full)
             for k in keys: full = full.replace("{{row.%s}}" % k, str(data.get(k, "")))
             return re.sub(LEAF_P, lambda pm: _para_with_text(pm.group(0), full), c, count=1, flags=re.S)
         for i, data in enumerate(rows):
@@ -92,4 +104,7 @@ def render(template_bytes: bytes, values: dict, rows: list[dict] | None = None) 
 def placeholders(template_bytes: bytes) -> list[str]:
     z = zipfile.ZipFile(io.BytesIO(template_bytes))
     xml = "".join(z.read(n).decode("utf-8") for n in z.namelist() if n.startswith("Contents/section"))
-    return sorted(set(re.findall(r"\{\{([^}]+)\}\}", xml)))
+    found = set()
+    for pm in re.finditer(LEAF_P, xml, flags=re.S):                 # 문단 단위 글자에서 찾아야 쪼개진 run도 잡힌다
+        found.update(re.findall(r"\{\{([^}]+)\}\}", _para_text(pm.group(0))))
+    return sorted(found)

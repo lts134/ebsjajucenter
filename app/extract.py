@@ -98,8 +98,23 @@ PROMPT = """다음 요구서에서 정보를 추출해 JSON으로만 출력하�
 요구서:
 %s"""
 
+def _nullable(t: str) -> dict: return {"type": [t, "null"]}
+
+def schema() -> dict:
+    """구조화 출력용 JSON 스키마. indicator는 사전 지표명 또는 null만 허용 → 지어낸 지표가 형식 단계에서 차단된다."""
+    item = {"type": "object", "additionalProperties": False,
+            "properties": {"item_text": {"type": "string"},
+                           "indicator": {"anyOf": [{"type": "string", "enum": INDICATORS}, {"type": "null"}]},
+                           "base_date": _nullable("string"), "period": _nullable("string"),
+                           "unit": {"anyOf": [{"type": "string", "enum": ["센터별", "전체", "연도별", "월별", "지역별"]}, {"type": "null"}]}},
+            "required": ITEM_FIELDS}
+    return {"type": "object", "additionalProperties": False,
+            "properties": {"requester": _nullable("string"), "received_date": _nullable("string"), "due_date": _nullable("string"),
+                           "title": _nullable("string"), "items": {"type": "array", "items": item}},
+            "required": ["requester", "received_date", "due_date", "title", "items"]}
+
 def llm_based(text: str) -> dict:
-    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), dt.date.today().isoformat(), text), SYSTEM, 3000, purpose="요구서 추출")
+    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), dt.date.today().isoformat(), text), SYSTEM, 3000, purpose="요구서 추출", schema=schema())
     items = []
     for it in res.get("items") or []:
         if not isinstance(it, dict) or not it.get("item_text"): continue

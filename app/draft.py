@@ -56,7 +56,9 @@ def llm_draft(req, items, values, reasons, provenance, checklist=None) -> dict:
               "표에 있는 센터·값은 그대로 인용해도 됩니다. 차이사유는 입력된 사유만 쓰고, '차이 없음'은 대조 결과에 '일치'로 판정된 센터에 대해서만 쓸 수 있습니다.\n"
               "JSON만 출력: {\"제목\": ..., \"본문\": (번호 매긴 문단, 줄바꿈 구분), \"차이사유\": ..., \"산출근거\": ...}\n\n"
               + json.dumps(payload, ensure_ascii=False, default=str))
-    d = llm.ask_json(prompt, SYSTEM, 2500, purpose="회신 초안")
+    schema = {"type": "object", "additionalProperties": False, "required": ["제목", "본문", "차이사유", "산출근거"],
+              "properties": {k: {"type": "string"} for k in ("제목", "본문", "차이사유", "산출근거")}}
+    d = llm.ask_json(prompt, SYSTEM, 2500, purpose="회신 초안", schema=schema)
     return {k: str(d.get(k, "") or "") for k in ("제목", "본문", "차이사유", "산출근거")}
 
 def make_draft(req, items, values, reasons, provenance, checklist=None) -> tuple[dict, str]:

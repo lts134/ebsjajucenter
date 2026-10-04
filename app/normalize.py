@@ -60,9 +60,14 @@ def normalize_llm(items: list[dict]) -> list[dict]:
     try:
         prompt = ("다음 요구 항목을 지표명으로 분류하세요. 지표 목록: %s.\n"
                   "규칙: 목록에 없는 지표는 null. 목록의 지표를 설명·정의·사유 형태로 묻는 항목도 그 지표로 분류. 새 지표명을 만들지 말 것.\n"
-                  "JSON 배열만 출력: [{\"item_text\": ..., \"indicator\": ...}]\n%s"
+                  "JSON만 출력: {\"items\": [{\"item_text\": ..., \"indicator\": ...}]}\n%s"
                   % (", ".join(CANON), "\n".join(f"- {it['item_text']}" for it in todo)))
-        got = {d.get("item_text"): d.get("indicator") for d in llm.ask_json(prompt, SYSTEM, 1000, expect="array", purpose="지표 분류")}
+        schema = {"type": "object", "additionalProperties": False, "required": ["items"],
+                  "properties": {"items": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["item_text", "indicator"],
+                                                                        "properties": {"item_text": {"type": "string"},
+                                                                                       "indicator": {"anyOf": [{"type": "string", "enum": list(CANON)}, {"type": "null"}]}}}}}}
+        res = llm.ask_json(prompt, SYSTEM, 1000, purpose="지표 분류", schema=schema)
+        got = {d.get("item_text"): d.get("indicator") for d in (res.get("items") if isinstance(res, dict) else res) or []}
         for it in todo:
             g = got.get(it["item_text"])
             if g in CANON: it["indicator"] = g; it["matched_by"] = "Claude"
