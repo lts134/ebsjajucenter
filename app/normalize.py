@@ -66,7 +66,7 @@ def normalize_llm(items: list[dict]) -> list[dict]:
                   "properties": {"items": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["item_text", "indicator"],
                                                                         "properties": {"item_text": {"type": "string"},
                                                                                        "indicator": {"anyOf": [{"type": "string", "enum": list(CANON)}, {"type": "null"}]}}}}}}
-        res = llm.ask_json(prompt, SYSTEM, 1000, purpose="지표 분류", schema=schema)
+        res = llm.ask_json(prompt, SYSTEM, 4000, purpose="지표 분류", schema=schema)
         got = {d.get("item_text"): d.get("indicator") for d in (res.get("items") if isinstance(res, dict) else res) or []}
         for it in todo:
             g = got.get(it["item_text"])

@@ -130,6 +130,20 @@ def value_table_input(key: str, what: str = "제출값"):
     try: return tabular.from_records(man), "직접 입력"
     except ValueError as e: st.error(str(e)); return None, ""
 
+def analyze_with_status(text: str):
+    """추출을 돌리면서 호출 단계(모델·출력 한도·응답 시간·잘림 재시도)를 화면에 보여 준다. 긴 요구서는 수십 초~수 분 걸릴 수 있어 멈춘 것처럼 보이지 않게."""
+    if not HAS_API:
+        with st.spinner("요구 항목 추출 중… (규칙 기반)"): return analyze(text)
+    box = st.status(f"요구 항목 추출 중… ({llm.model_label()}, 본문 {len(text):,}자)", expanded=True)
+    lines = []
+    def progress(msg):
+        lines.append(f"{dt.datetime.now().strftime('%H:%M:%S')} {msg}"); box.update(label=msg[:120]); box.write(lines[-1])
+    llm.set_progress(progress)
+    try: res, how = analyze(text)
+    finally: llm.set_progress(None)
+    box.update(label=f"추출 완료 — {how}", state="complete", expanded=False)
+    return res, how
+
 def analyze(text: str):
     res, how = extract.extract(text)
     res["items"] = normalize.normalize_items(res.get("items") or [])
@@ -160,8 +174,7 @@ if page == "① 과거 자료 등록":
             req_text, req_name = (read_doc(up), up.name) if up else ("", "")
         req_text = st.text_area("요구서 원문 (수정 가능)", req_text, height=220)
         if st.button("요구 항목 추출", type="primary", disabled=not req_text):
-            with st.spinner("요구 항목 추출 중…" + (" (Claude)" if HAS_API else "")):
-                res, how = analyze(req_text)
+            res, how = analyze_with_status(req_text)
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
         st.subheader("2) 그때 제출한 값")
@@ -214,8 +227,7 @@ elif page == "② 새 요구서 분석":
         text, name = (read_doc(up), up.name) if up else ("", "")
     text = st.text_area("요구서 원문", text, height=200)
     if st.button("분석", type="primary", disabled=not text):
-        with st.spinner("요구 항목 추출·지표 정규화 중…" + (" (Claude)" if HAS_API else "")):
-            res, how = analyze(text)
+        res, how = analyze_with_status(text)
         st.session_state.update(new_req=res, new_how=how, new_text=text, new_name=name)
     if "new_req" in st.session_state:
         res = st.session_state["new_req"]

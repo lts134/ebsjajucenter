@@ -111,9 +111,14 @@ class AnthropicProvider(Provider):
         except (TypeError, ValueError): params = {}
         return {"workspace_id": ws} if "workspace_id" in params else {"extra_headers": {"anthropic-workspace-id": ws}}
 
+    @staticmethod
+    def timeout_for(max_tokens: int) -> float:
+        """출력 한도에 비례한 요청 타임아웃: 기본 90초 + 1,000토큰당 20초(느린 모델이 긴 JSON을 쓸 때 끊기지 않게), 최대 600초."""
+        return float(min(600, TIMEOUT_S + max_tokens / 1000 * 20))
+
     def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None):
         client = self._client()
-        kw = dict(model=model, max_tokens=max_tokens, messages=messages, **self._ws_kwargs(client.messages.create))
+        kw = dict(model=model, max_tokens=max_tokens, messages=messages, timeout=self.timeout_for(max_tokens), **self._ws_kwargs(client.messages.create))
         if system: kw["system"] = system
         if tools: kw["tools"] = tools
         if schema is not None: kw["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
@@ -149,7 +154,7 @@ class AnthropicProvider(Provider):
                 return "API 크레딧 잔액이 부족합니다. 콘솔(Plans & Billing)에서 충전한 뒤 다시 시도하세요. 키·워크스페이스 설정은 정상입니다."
             return f"요청 형식 오류(400): {m[:200]}"
         if isinstance(e, anthropic.APIStatusError) and e.status_code >= 500: return f"Anthropic 서버 오류({e.status_code}). 자동 재시도 후에도 실패했습니다. 잠시 후 다시 시도하세요."
-        if isinstance(e, anthropic.APITimeoutError): return f"응답 시간 초과({TIMEOUT_S:.0f}초). 네트워크 상태를 확인하거나 다시 시도하세요."
+        if isinstance(e, anthropic.APITimeoutError): return "응답 시간 초과. 네트워크 상태를 확인하거나, 더 빠른 모델(예: claude-sonnet-4-6)을 고르거나, 요구서를 나누어 올리세요."
         if isinstance(e, anthropic.APIConnectionError): return "API 서버에 연결하지 못했습니다. 사내망 프록시·방화벽에서 api.anthropic.com 허용 여부를 확인하세요."
         return None
 

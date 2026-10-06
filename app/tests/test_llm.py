@@ -72,3 +72,31 @@ def test_explain_error_messages():
     assert "워크스페이스" in llm.explain_error(err(anthropic.PermissionDeniedError, 403, "key is not scoped to a workspace; pass anthropic-workspace-id"))
     assert "모델명" in llm.explain_error(err(anthropic.NotFoundError, 404, "x"))
     assert "한도" in llm.explain_error(err(anthropic.RateLimitError, 429, "x"))
+
+class _MT(_M):
+    """max_tokens에 잘린 응답"""
+    def __init__(s, t): super().__init__(t); s.stop_reason = "max_tokens"
+
+def test_truncated_json_retries_with_doubled_limit(monkeypatch):
+    f = use(monkeypatch, Fake([_MT('{"items": [1, 2'), '{"items": [1, 2, 3]}']))
+    f.script = [r if not isinstance(r, str) else _M(r) for r in f.script]
+    f.create_message = lambda **kw: (f.calls.append(kw), f.script.pop(0))[1]
+    assert llm.ask_json("p", max_tokens=1000) == {"items": [1, 2, 3]}
+    assert [c["max_tokens"] for c in f.calls] == [1000, 2000] and "잘림 재시도" in llm.LOG[1]["purpose"]
+
+def test_truncated_at_cap_raises_clear_error(monkeypatch):
+    f = use(monkeypatch, Fake([]))
+    f.create_message = lambda **kw: (f.calls.append(kw), _MT("{"))[1]
+    with pytest.raises(RuntimeError, match="한도에서도 잘렸습니다"): llm.ask_json("p", max_tokens=llm.MAX_TOKENS_CAP)
+    assert len(f.calls) == 1
+
+def test_progress_callback_receives_call_stages(monkeypatch):
+    use(monkeypatch, Fake(['{"a":1}']))
+    seen = []; llm.set_progress(seen.append)
+    try: llm.ask_json("p", purpose="요구서 추출")
+    finally: llm.set_progress(None)
+    assert any("호출 중" in m and "요구서 추출" in m for m in seen) and any("응답" in m for m in seen)
+
+def test_timeout_scales_with_max_tokens():
+    import providers
+    assert providers.AnthropicProvider.timeout_for(2000) == 130 and providers.AnthropicProvider.timeout_for(6000) == 210 and providers.AnthropicProvider.timeout_for(100000) == 600

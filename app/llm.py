@@ -92,14 +92,33 @@ def _record(msg, model: str, t0: float, purpose: str, structured: bool) -> str:
     LAST.clear(); LAST.update(info); log().append(info)
     return text
 
+MAX_TOKENS_CAP = 16000          # 잘림 재시도 때 늘릴 수 있는 상한(비스트리밍 호출 10분 제한 안)
+
+class Truncated(RuntimeError):
+    """응답이 max_tokens에 잘렸다(stop_reason=max_tokens). JSON이면 해석 불가이므로 더 큰 한도로 다시 시도해야 한다."""
+    def __init__(self, max_tokens: int, text: str):
+        super().__init__(f"응답이 {max_tokens} 토큰 한도에서 잘렸습니다."); self.max_tokens, self.text = max_tokens, text
+
+def set_progress(fn):
+    """화면이 호출 진행 상황을 받을 콜백(문자열 하나). 세션(스레드) 한정. None이면 해제."""
+    _ctx.progress = fn
+
+def _notify(text: str):
+    fn = getattr(_ctx, "progress", None)
+    if fn:
+        try: fn(text)
+        except Exception: pass
+
 def ask(prompt: str, system: str | None = None, max_tokens: int = 2000, purpose: str = "", schema: dict | None = None) -> str:
-    """텍스트 응답. 모델 없음이면 다음 후보로. schema가 있으면 구조화 출력, 모델이 거부하면 그 모델은 이후 텍스트 방식."""
+    """텍스트 응답. 모델 없음이면 다음 후보로. schema가 있으면 구조화 출력, 모델이 거부하면 그 모델은 이후 텍스트 방식.
+    응답이 max_tokens에 잘리면 Truncated(잘린 본문 포함)를 올린다."""
     prov, state = _provider(), _state()
     last_err = None
     for model in _model_order():
         t0 = time.time()
         use_struct = schema is not None and model not in state["no_structured"]
         messages = [{"role": "user", "content": prompt}]
+        _notify(f"{purpose or '호출'} — {model} 호출 중 (출력 한도 {max_tokens:,} 토큰, 입력 약 {len(prompt) // 2:,} 토큰)…")
         try:
             msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, schema=schema if use_struct else None)
         except Exception as e:
@@ -112,7 +131,10 @@ def ask(prompt: str, system: str | None = None, max_tokens: int = 2000, purpose:
             else:
                 raise
         state["resolved"] = model
-        return _record(msg, model, t0, purpose, use_struct)
+        text = _record(msg, model, t0, purpose, use_struct)
+        _notify(f"{purpose or '호출'} — {model} 응답 {LAST['latency_s']}초, 출력 {LAST.get('output_tokens') or '?'} 토큰")
+        if getattr(msg, "stop_reason", None) == "max_tokens": raise Truncated(max_tokens, text)
+        return text
     raise RuntimeError(f"사용 가능한 모델을 찾지 못함(시도: {', '.join(_model_order())}). 설정 화면에서 연결 테스트로 모델을 고르세요. 마지막 오류: {last_err}")
 
 def parse_json(raw: str, expect: str = "object"):
@@ -127,11 +149,21 @@ def parse_json(raw: str, expect: str = "object"):
 def ask_json(prompt: str, system: str | None = None, max_tokens: int = 2000, expect: str = "object", purpose: str = "", schema: dict | None = None):
     """JSON 응답. schema(JSON Schema, 객체 루트)가 있으면 구조화 출력을 쓴다. expect="array"면 schema 없이 텍스트 파싱."""
     sys_ = (system + "\n\n" if system else "") + "출력은 JSON만. 설명·코드펜스·주석을 붙이지 말 것."
-    raw = ask(prompt, sys_, max_tokens, purpose, schema if expect == "object" else None)
+    sch = schema if expect == "object" else None
+    limit = max_tokens
+    while True:                                                   # 잘리면 한도를 두 배로(상한까지) 다시 시도
+        try:
+            raw = ask(prompt, sys_, limit, purpose, sch); break
+        except Truncated as t:
+            if limit >= MAX_TOKENS_CAP:
+                raise RuntimeError(f"응답이 {limit:,} 토큰 한도에서도 잘렸습니다. 요구서를 나누어 올리거나 항목 수를 줄이세요.") from t
+            limit = min(limit * 2, MAX_TOKENS_CAP)
+            _notify(f"{purpose} — 응답이 잘려 출력 한도를 {limit:,} 토큰으로 늘려 다시 시도…")
+            purpose = purpose.replace("(잘림 재시도)", "") + "(잘림 재시도)"
     try:
         return parse_json(raw, expect)
     except (ValueError, json.JSONDecodeError):
-        raw2 = ask(prompt + "\n\n(앞선 응답이 JSON으로 해석되지 않았습니다. JSON만 다시 출력하세요.)", sys_, max_tokens, purpose + "(재시도)")
+        raw2 = ask(prompt + "\n\n(앞선 응답이 JSON으로 해석되지 않았습니다. JSON만 다시 출력하세요.)", sys_, limit, purpose + "(재시도)")
         return parse_json(raw2, expect)
 
 def list_models() -> list[dict]:
