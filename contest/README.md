@@ -3,16 +3,16 @@
 학생 접수 화면과 관리자 화면입니다. 화면은 Firebase Hosting에 올리고, 접수 정보와 PDF는 Firebase(서울 리전)에 저장합니다. 학생은 아임웹 `jajucenter.ebs.co.kr/event` 페이지 안에서 접수 화면을 봅니다.
 
 ```
-학생 ── jajucenter.ebs.co.kr/event (아임웹) ── 안에 끼워 넣은 화면 ── 프로젝트ID.web.app/apply ──▶ Firebase(서울)
-관리자 ── 프로젝트ID.web.app/admin (홈페이지 메뉴에 노출하지 않음) ──────────────────────────────▶ Firebase(서울)
+학생 ── jajucenter.ebs.co.kr/event (아임웹) ── 안에 끼워 넣은 화면 ── jajucenter-contest.web.app/apply ──▶ Firebase(서울)
+관리자 ── jajucenter-contest.web.app/admin (홈페이지 메뉴에 노출하지 않음) ──────────────────────────────▶ Firebase(서울)
 ```
 
 ## 파일 구성
 
 | 파일 | 용도 |
 |---|---|
-| `public/apply.html` | 학생 접수 화면 → `https://프로젝트ID.web.app/apply` |
-| `public/admin.html` | 관리자 화면 → `https://프로젝트ID.web.app/admin` |
+| `public/apply.html` | 학생 접수 화면 → `https://jajucenter-contest.web.app/apply` |
+| `public/admin.html` | 관리자 화면 → `https://jajucenter-contest.web.app/admin` |
 | `firebase.json` | Hosting 주소 정리, 보안 헤더, 규칙 파일 위치 |
 | `firestore.rules` | 접수 정보 보안 규칙 |
 | `storage.rules` | PDF 파일 보안 규칙 |
@@ -23,11 +23,11 @@
 
 ### 1. Firebase 프로젝트 (콘솔에서)
 
-1. 공식 Google 계정으로 [Firebase 콘솔](https://console.firebase.google.com)에서 새 프로젝트를 만듭니다. **프로젝트 ID**(예: `jajucenter-contest`)를 적어 둡니다.
+1. 공식 Google 계정으로 [Firebase 콘솔](https://console.firebase.google.com)에서 프로젝트 `jajucenter-contest`를 만듭니다. (완료)
 2. 요금제를 Blaze(종량제)로 바꿉니다. Google Cloud 콘솔 > 결제 > 예산 및 알림에서 월 10,000원 예산 알림을 설정합니다. 알림은 메일만 보내고 사용을 멈추지는 않습니다.
 3. Firestore Database > 데이터베이스 만들기: 위치 `asia-northeast3 (서울)`, 이름은 기본값 `(default)`.
 4. Storage > 시작하기: 위치 `asia-northeast3 (서울)`.
-5. Authentication > 시작하기 > 로그인 방법에서 **Google**을 사용 설정합니다. `프로젝트ID.web.app`은 승인된 도메인에 기본으로 들어 있습니다.
+5. Authentication > 시작하기 > 로그인 방법에서 **Google**을 사용 설정합니다. `jajucenter-contest.web.app`은 승인된 도메인에 기본으로 들어 있습니다.
 6. 프로젝트 설정 > 내 앱 > 웹 앱 추가. 표시되는 `firebaseConfig` 값을 `public/apply.html`과 `public/admin.html` 상단 `FIREBASE_CONFIG`에 똑같이 붙여넣습니다.
 
 ### 2. 화면과 보안 규칙 올리기 (내 PC에서, 처음 1회)
@@ -39,35 +39,33 @@
    npm install -g firebase-tools
    firebase login
    cd 내려받은경로/contest
-   firebase use --add
    firebase deploy
    ```
    - `firebase login`: 브라우저가 열리면 공식 계정으로 로그인합니다.
-   - `firebase use --add`: 목록에서 1번에서 만든 프로젝트를 고르고, 별칭은 `default`로 입력합니다.
+   - 올릴 프로젝트(`jajucenter-contest`)는 `.firebaserc`에 지정되어 있습니다.
    - `firebase deploy`: 화면 2개와 보안 규칙 2개가 함께 올라갑니다. Storage 규칙이 Firestore를 읽는 권한을 부여할지 물으면 `Y`를 입력합니다.
-4. 끝나면 `https://프로젝트ID.web.app/apply`가 열리는지 확인합니다.
+4. 끝나면 `https://jajucenter-contest.web.app/apply`가 열리는지 확인합니다.
 
 이후 화면이나 문구를 고쳤을 때는 같은 폴더에서 `firebase deploy --only hosting`만 실행하면 됩니다.
 
 ### 3. PDF 내려받기 설정 (1회)
 
-1. `cors.json`의 `프로젝트ID` 두 곳을 실제 프로젝트 ID로 바꿉니다.
-2. Google Cloud 콘솔 오른쪽 위 Cloud Shell을 열고 `cors.json`을 업로드한 뒤 실행합니다. 버킷 이름은 `FIREBASE_CONFIG`의 `storageBucket` 값입니다.
+1. Google Cloud 콘솔 오른쪽 위 Cloud Shell을 열고 `cors.json`을 업로드한 뒤 실행합니다. 버킷 이름은 `FIREBASE_CONFIG`의 `storageBucket` 값입니다.
    ```
    gcloud storage buckets update gs://버킷이름 --cors-file=cors.json
    ```
 
 ### 4. 관리자 등록과 응모 기간
 
-1. `https://프로젝트ID.web.app/admin`을 열어 공식 계정으로 로그인합니다. "관리자 권한이 없습니다" 화면에 나오는 UID를 복사합니다.
+1. `https://jajucenter-contest.web.app/admin`을 열어 공식 계정으로 로그인합니다. "관리자 권한이 없습니다" 화면에 나오는 UID를 복사합니다.
 2. Firebase 콘솔 > Firestore > 데이터에서 컬렉션 `config`, 문서 ID `admins`를 만들고 필드 `uids`(배열)에 UID를 넣습니다. 관리자를 추가할 때도 이 배열에 UID를 더합니다.
 3. 관리자 화면을 새로고침하고 [응모 기간 설정]에서 시작·마감 시각(한국시각)을 저장합니다. 기간이 없으면 접수를 받지 않습니다. 나중에 언제든 바꿀 수 있습니다.
 
 ### 5. 아임웹 `/event` 페이지
 
 1. 아임웹 사이트 관리에서 새 페이지를 만들고 주소를 `event`로 정합니다.
-2. 페이지에 **코드** 요소를 추가하고 `imweb-embed.html` 내용을 전부 붙여넣습니다. 붙여넣기 전에 `프로젝트ID` 두 곳을 실제 프로젝트 ID로 바꿉니다.
-3. 아임웹 환경설정 > 보안 및 개인정보 보호 > iframe 사용 시 허용되는 도메인에 `프로젝트ID.web.app`을 등록합니다. [메뉴 이름은 아임웹 화면에서 확인 필요]
+2. 페이지에 **코드** 요소를 추가하고 `imweb-embed.html` 내용을 전부 붙여넣습니다.
+3. 아임웹 환경설정 > 보안 및 개인정보 보호 > iframe 사용 시 허용되는 도메인에 `jajucenter-contest.web.app`을 등록합니다. [메뉴 이름은 아임웹 화면에서 확인 필요]
 4. 게시한 뒤 휴대폰과 PC에서 `jajucenter.ebs.co.kr/event`를 열어 접수 화면이 보이는지 확인합니다.
 5. 위탁사에 팝업 연결 주소 `https://jajucenter.ebs.co.kr/event`를 전달합니다.
 

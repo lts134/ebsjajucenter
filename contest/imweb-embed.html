@@ -1,10 +1,9 @@
 <!--
-  아임웹 /event 페이지의 "코드" 요소에 이 파일 내용을 전부 붙여넣는다.
-  붙여넣기 전에 아래 두 곳의 "프로젝트ID"를 실제 Firebase 프로젝트 ID로 바꾼다.
-  (Firebase 콘솔 > 프로젝트 설정 > 프로젝트 ID)
+  아임웹 /event 페이지의 "코드" 요소에 이 파일 내용을 전부 그대로 붙여넣는다.
+  Firebase 프로젝트: jajucenter-contest
 -->
 <iframe id="jc-contest-frame"
-        src="https://프로젝트ID.web.app/apply"
+        src="https://jajucenter-contest.web.app/apply"
         title="2026 자기주도학습센터 활용수기 공모 접수"
         style="display:block;width:100%;max-width:760px;margin:0 auto;height:2600px;border:0;"
         scrolling="no"></iframe>
@@ -12,7 +11,7 @@
   // 접수 화면이 알려주는 높이에 맞춰 iframe 높이를 조절하고, 오류·완료 시 해당 위치로 스크롤한다.
   // 이 스크립트가 실행되지 않는 경우에도 위 height(2600px)로 접수는 가능하다.
   (function () {
-    var ORIGIN = 'https://프로젝트ID.web.app';
+    var ORIGIN = 'https://jajucenter-contest.web.app';
     var frame = document.getElementById('jc-contest-frame');
     window.addEventListener('message', function (e) {
       if (e.origin !== ORIGIN || !e.data) return;

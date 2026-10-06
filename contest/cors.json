@@ -1,8 +1,8 @@
 [
   {
     "origin": [
-      "https://프로젝트ID.web.app",
-      "https://프로젝트ID.firebaseapp.com"
+      "https://jajucenter-contest.web.app",
+      "https://jajucenter-contest.firebaseapp.com"
     ],
     "method": ["GET"],
     "maxAgeSeconds": 3600
