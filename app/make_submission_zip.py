@@ -10,7 +10,7 @@ EXCLUDE_FILES = {"history.db", "history.db-journal", "history.db-wal", "history.
 
 def wanted(p: Path) -> bool:
     if any(part in EXCLUDE_DIRS for part in p.relative_to(APP).parts): return False
-    if p.name in EXCLUDE_FILES or p.name.endswith(".broken") or p.suffix in (".pyc",): return False
+    if p.name in EXCLUDE_FILES or p.name.startswith(".flow_apptest") or p.name.endswith(".broken") or p.suffix in (".pyc",): return False
     return p.is_file()
 
 def main():
