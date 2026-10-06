@@ -1,8 +1,8 @@
 [
   {
     "origin": [
-      "https://xn--ok0bv9ht5mcnbrxlpkcd3xm0h.kr",
-      "https://www.xn--ok0bv9ht5mcnbrxlpkcd3xm0h.kr"
+      "https://프로젝트ID.web.app",
+      "https://프로젝트ID.firebaseapp.com"
     ],
     "method": ["GET"],
     "maxAgeSeconds": 3600

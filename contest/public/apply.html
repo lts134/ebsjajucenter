@@ -187,6 +187,23 @@
   <footer id="contactText"></footer>
 </div>
 
+<script>
+  // 아임웹 /event 페이지에 iframe으로 넣었을 때 쓰는 기능.
+  // 화면 높이와 스크롤 위치를 부모 페이지에 알려, 스크롤이 이중으로 생기지 않게 한다. 단독으로 열면 동작하지 않는다.
+  (function () {
+    if (window.parent === window) { window.jcScrollTo = function () {}; return; }
+    var last = 0;
+    function send() {
+      var h = Math.ceil(document.body.getBoundingClientRect().height);
+      if (h && h !== last) { last = h; window.parent.postMessage({ type: 'jc-contest-height', height: h }, '*'); }
+    }
+    if (window.ResizeObserver) new ResizeObserver(send).observe(document.body);
+    window.addEventListener('load', send);
+    setInterval(send, 1000);
+    window.jcScrollTo = function (y) { window.parent.postMessage({ type: 'jc-contest-scroll', y: Math.max(0, Math.round(y)) }, '*'); };
+  })();
+</script>
+
 <script type="module">
   // ===== 설정: 운영 전에 이 블록만 채운다 =====
   // Firebase 콘솔 > 프로젝트 설정 > 내 앱(웹)에서 복사한 값. 관리자 페이지(admin.html)와 같은 값을 넣는다.
@@ -243,7 +260,10 @@
   function showError(msg) {
     $('errorBox').textContent = msg;
     $('errorBox').style.display = msg ? 'block' : 'none';
-    if (msg) $('errorBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (msg) {
+      if (window.parent === window) $('errorBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+      else window.jcScrollTo($('errorBox').getBoundingClientRect().top + window.scrollY - 120);
+    }
   }
 
   if (!FIREBASE_CONFIG.projectId) {
@@ -376,6 +396,7 @@
       $('applyForm').hidden = true;
       $('doneView').hidden = false;
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      window.jcScrollTo(0);
     } catch (err) {
       console.error(err);
       showError(friendlyError(err));
