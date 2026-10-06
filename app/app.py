@@ -56,7 +56,7 @@ def read_doc(uploaded) -> str:
         st.error(f"본문 추출 실패: {e}"); return ""
 
 
-def _grid_to_values(grid, key: str, source_version_default: str | None = None):
+def _grid_to_values(grid, key: str, source_version_default: str | None = None, base_date_default: str | None = None):
     """격자(엑셀 시트 또는 문서의 표) → 제출값 표. 긴 형식은 바로, 가로 펼침 표는 열 매핑 UI를 거친다. (df | None) 반환."""
     info = tabular.analyze(grid)
     if info.shape == "empty":
@@ -77,12 +77,14 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None):
     cols = list(range(grid.width())); label = info.col_label
     c_default = [sug["center_col"]] if sug and sug.get("center_col") is not None else (info.center_cols or ([info.center_col] if info.center_col is not None else []))
     v_default = [c for c, _ in sug["value_cols"]] if sug and sug.get("value_cols") else info.value_cols
-    d_default = (sug.get("base_date") if sug else None) or info.base_date_hint or ""
+    d_default = (sug.get("base_date") if sug else None) or info.base_date_hint or base_date_default or ""
     if len(c_default) > 1: st.caption(f"행 이름이 겹쳐서({' + '.join(label(c) for c in c_default)}) 두 열을 이어 붙여 센터명으로 씁니다. 예: 여러 시·도에 같은 구 이름, 연도별 같은 항목.")
     c1, c2, c3 = st.columns([1.3, 2, 1])
     center_col = c1.multiselect("센터(행 이름) 열 — 둘 이상이면 이어 붙임", cols, default=[c for c in c_default if c in cols], format_func=label, key=f"{key}_cc")
     value_cols = c2.multiselect("값 열", [c for c in cols if c not in center_col], default=[c for c in v_default if c not in center_col], format_func=label, key=f"{key}_vc")
-    base_date = c3.text_input("기준일", d_default, placeholder="2026-06-30", key=f"{key}_bd", help="표 제목·주석의 '… 기준' 날짜를 자동으로 채웁니다. 없으면 공문 본문을 확인해 입력하세요.")
+    base_date = c3.text_input("기준일 (필수)", d_default, placeholder="2026-06-30", key=f"{key}_bd",
+                              help="이 표의 값이 '언제 기준' 수치인지. 표 제목·주석에 '… 기준' 날짜가 있으면 자동으로 채워지고, 없으면 공문 본문을 보고 입력합니다. 과거 제출값과 같은 기준일이어야 대조됩니다.")
+    if not base_date.strip(): c3.error("기준일을 넣어야 아래 표로 변환됩니다.")
     names = dict(sug["value_cols"]) if sug and sug.get("value_cols") else {}
     ind_df = pd.DataFrame([{"열": label(c), "지표명": names.get(c) or tabular.default_indicator(label(c))} for c in value_cols])
     if len(ind_df):
@@ -96,7 +98,7 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None):
     except ValueError as e:
         st.warning(str(e)); return None
 
-def value_table_input(key: str, what: str = "제출값"):
+def value_table_input(key: str, what: str = "제출값", base_date_default: str | None = None):
     """①·③ 공용 값 입력: 집계 엑셀/CSV · 회신 문서(hwpx·docx·pdf)의 표 · 직접 입력. (df | None, 출처 이름) 반환."""
     mode = st.radio("입력 방식", ["집계 엑셀/CSV", "회신 문서의 표 (hwp·hwpx·docx·pdf)", "직접 입력"], horizontal=True, key=f"{key}_mode",
                     help="엑셀은 제목 행·병합 머리글·가로 펼침(행=센터, 열=지표) 서식도 읽습니다. 한글 HWP(5.0)는 자동으로 HWPX로 변환해 읽습니다(암호·배포용 문서 제외).")
@@ -109,7 +111,7 @@ def value_table_input(key: str, what: str = "제출값"):
             grid = tabular.read_grid(up, sheet)
         except Exception as e:
             st.error(f"파일을 읽지 못했습니다: {e}"); return None, ""
-        return _grid_to_values(grid, f"{key}_{sheet}"), up.name
+        return _grid_to_values(grid, f"{key}_{sheet}", base_date_default=base_date_default), up.name
     if mode.startswith("회신 문서"):
         up = st.file_uploader(f"{what}이 들어 있는 회신 문서 (hwp / hwpx / docx / pdf)", type=["hwp", "hwpx", "docx", "pdf"], key=f"{key}_doc")
         if not up: return None, ""
@@ -124,7 +126,7 @@ def value_table_input(key: str, what: str = "제출값"):
         best = max(range(len(grids)), key=lambda i: tabular.numeric_cells(grids[i]))         # 숫자가 가장 많은 표를 기본 선택
         g = st.selectbox("문서 안의 표 (숫자가 많은 표가 기본 선택)", grids, index=best, key=f"{key}_tbl",
                          format_func=lambda g: f"{g.source_sheet} — {len(g.rows)}행 × {g.width()}열" + (f" (문서 {g.row_offset}번째 줄부터)" if g.row_offset > 1 else ""))
-        return _grid_to_values(g, f"{key}_{g.source_sheet}", f"회신 문서({up.name}) 표에서 추출"), up.name
+        return _grid_to_values(g, f"{key}_{g.source_sheet}", f"회신 문서({up.name}) 표에서 추출", base_date_default), up.name
     st.caption("표 파일이 없을 때. 행을 추가해 지표명·센터명·기준일·값을 채우세요. 근거 4칸은 선택입니다.")
     man = st.data_editor(pd.DataFrame(columns=tabular.MANUAL_COLS), num_rows="dynamic", width="stretch", key=f"{key}_man")
     if man.dropna(how="all").empty: return None, ""
@@ -267,13 +269,9 @@ elif page == "② 새 요구서 분석":
 elif page == "③ 수치 대조·점검표":
     st.header("③ 새 집계값 vs 과거 제출값 → 차이·사유 → 정합성 점검표 → 개인정보 검사")
     st.caption("대조는 코드(pandas)만 사용. AI는 사유를 추정하지 않음.")
+    st.info("진행 순서: ① 오른쪽에서 **과거 제출본**과 **회신 대상 요구서** 선택 → ② 왼쪽에서 **새 집계값** 준비(표가 뜨면 완료) → ③ 아래 **대조 결과**가 자동으로 나타남 → 차이 사유 입력 → **사유 저장 + 새 제출본 확정 → ④로**. 별도의 '대조' 버튼은 없습니다.")
     c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("새 집계값")
-        use_s = st.checkbox("샘플(9월 재산출) 사용", value=True)
-        if use_s: new_df = compare.load_values(SAMPLE / "등원율_2026-06-30기준_9월재산출.xlsx")
-        else: new_df, _ = value_table_input("cmp_new", "새 집계값")
-    with c2:
+    with c2:                                                   # 과거 제출본을 먼저 정해야 새 집계값의 기준일 기본값을 줄 수 있다
         st.subheader("과거 제출값 (이력 DB)")
         subs = db.list_submissions()
         if not subs:
@@ -283,11 +281,31 @@ elif page == "③ 수치 대조·점검표":
             old_df = pd.DataFrame(db.get_values(s["id"]))
         reqs = db.list_requests()
         target = st.selectbox("이번 회신 대상 요구서", reqs, format_func=lambda r: f"#{r['id']} {r['received_date']} {r['requester']} — {r['title']}") if reqs else None
-    tol = st.number_input("허용 오차(이하이면 일치)", value=0.0, step=0.1)
+        old_dates = sorted(old_df["base_date"].dropna().unique().tolist()) if old_df is not None and len(old_df) else []
+        if old_df is not None and len(old_df):
+            st.caption(f"이 제출본: 값 {len(old_df)}건 · 지표 {', '.join(sorted(old_df['indicator'].unique())[:5])} · 기준일 {', '.join(old_dates[:3])}. 새 집계값은 **같은 지표명·센터명·기준일**인 행만 대조됩니다.")
+    with c1:
+        st.subheader("새 집계값")
+        use_s = st.checkbox("샘플(9월 재산출) 사용", value=True)
+        if use_s: new_df = compare.load_values(SAMPLE / "등원율_2026-06-30기준_9월재산출.xlsx")
+        else: new_df, _ = value_table_input("cmp_new", "새 집계값", base_date_default=old_dates[0] if len(old_dates) == 1 else None)
+        if new_df is not None: st.caption(f"새 집계값 {len(new_df)}건 준비됨 → 아래 대조 결과를 확인하세요.")
+    st.subheader("대조 결과")
+    tol = st.number_input("허용 오차 — 과거 제출값과 새 집계값의 차이(절댓값)가 이 값 이하이면 '일치'로 봅니다. 0이면 완전히 같아야 일치. 단위는 값과 같음(예: 등원율 % 포인트, 학생 수 명)",
+                          value=0.0, step=0.1, min_value=0.0, help="예: 과거 67.8, 새 67.9 → 차이 0.1. 허용 오차 0이면 '차이', 0.1이면 '일치'. 반올림 자릿수 차이만 무시하고 싶을 때 0.05~0.1 정도를 씁니다.")
+    if new_df is None:
+        st.info("새 집계값이 아직 준비되지 않았습니다. 왼쪽에서 파일을 올리고(가로 펼침 표면 센터 열·값 열·기준일 확인) 표가 나타나면 여기에 대조 결과가 뜹니다.")
+    elif old_df is None or not len(old_df):
+        st.info("과거 제출값이 없습니다. ①에서 과거 제출본을 먼저 등록하세요.")
     if new_df is not None and old_df is not None and len(old_df):
         m = compare.compare(new_df, old_df, tol)
-        n_diff = int((m["판정"] == "차이").sum())
-        st.metric("차이 항목", n_diff)
+        n_diff = int((m["판정"] == "차이").sum()); n_both = int(m["판정"].isin(["차이", "일치", "값 누락"]).sum())
+        if n_both == 0:
+            st.warning("지표명·센터명·기준일이 모두 같은 행이 하나도 없어 비교할 짝이 없습니다. "
+                       f"과거 제출본의 지표: {', '.join(sorted(old_df['indicator'].unique())[:8])} / 기준일: {', '.join(old_dates[:3])} — "
+                       f"새 집계값의 지표: {', '.join(sorted(new_df['indicator'].unique())[:8])} / 기준일: {', '.join(sorted(new_df['base_date'].unique())[:3])}. "
+                       "열 매핑의 '지표명' 칸과 '기준일'을 과거 제출본에 맞추세요.")
+        st.metric("차이 항목", n_diff, help=f"짝이 맞는 행 {n_both}건 중 허용 오차를 넘는 행 수")
         st.dataframe(m[["indicator", "center", "base_date", "old_value", "new_value", "diff", "판정", "단서"]]
                      .rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "과거 제출값", "new_value": "신규 집계값", "diff": "차이"}), width="stretch")
         st.subheader("차이 사유 입력 (담당자)")

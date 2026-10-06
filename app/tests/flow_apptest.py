@@ -24,7 +24,7 @@ at = app("① 과거 자료 등록")
 sb = next(s for s in at.selectbox if s.label.startswith("샘플 제출본"))
 sb.select(next(o for o in sb.options if "실적표_" in str(o))).run(); assert not at.exception, at.exception
 assert any("가로 펼침" in i.value for i in at.info), [i.value for i in at.info]
-assert next(t for t in at.text_input if t.label == "기준일").value == "2026-06-30"
+assert next(t for t in at.text_input if t.label.startswith("기준일")).value == "2026-06-30"
 assert next(m for m in at.multiselect if m.label == "값 열").value == [1, 2, 3, 4]
 assert any("48건" in c.value for c in at.caption), [c.value for c in at.caption]
 print("①-b 가로형 샘플 → 열 매핑 OK")
