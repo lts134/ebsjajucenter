@@ -19,6 +19,22 @@ at.button[0].click().run(); assert not at.exception, at.exception
 at.button[1].click().run(); assert not at.exception, at.exception
 print("①", [s.value for s in at.success])
 
+# ①-b 가로 펼침 실적표 샘플: 열 매핑 UI가 뜨고 변환 표가 나오는지(저장은 하지 않음)
+at = app("① 과거 자료 등록")
+sb = next(s for s in at.selectbox if s.label.startswith("샘플 제출본"))
+sb.select(next(o for o in sb.options if "실적표_" in str(o))).run(); assert not at.exception, at.exception
+assert any("가로 펼침" in i.value for i in at.info), [i.value for i in at.info]
+assert next(t for t in at.text_input if t.label == "기준일").value == "2026-06-30"
+assert next(m for m in at.multiselect if m.label == "값 열").value == [1, 2, 3, 4]
+assert any("48건" in c.value for c in at.caption), [c.value for c in at.caption]
+print("①-b 가로형 샘플 → 열 매핑 OK")
+
+# ① -c 직접 입력 방식 선택(표 비어 있음 → 오류 없이 대기)
+at = app("① 과거 자료 등록")
+next(c for c in at.checkbox if c.label == "샘플 제출본 사용").uncheck().run()
+next(r for r in at.radio if r.label == "입력 방식").set_value("직접 입력").run(); assert not at.exception, at.exception
+print("①-c 직접 입력 UI OK")
+
 # ② 새 요구서 분석 → 등록
 at = app("② 새 요구서 분석")
 at.button[0].click().run(); assert not at.exception, at.exception

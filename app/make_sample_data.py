@@ -60,4 +60,18 @@ for name, text in reqs:
 2. 2026. 6. 30. 기준 센터별 등록 학생 수
 3. 최근 3년 센터 운영 예산 및 집행률
 """, encoding="utf-8")
+# 5) 실무 서식 그대로인 가로 펼침 실적표(제목 행·병합 머리글·합계 행). ①에서 '열 매핑'으로 읽는 시연용
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment
+wb = Workbook(); ws = wb.active; ws.title = "개소 실적(센터별)"
+ws["A1"] = "자기주도학습센터 운영 실적 (2026. 6. 30. 기준)"; ws["A1"].font = Font(bold=True, size=13); ws.merge_cells("A1:F1")
+ws.append([]); ws.append(["구분", "개소", None, "등록 학생 수", "등원율(%)", "비고"]); ws.append([None, "운영", "준비", None, None, None])
+ws.merge_cells("A3:A4"); ws.merge_cells("B3:C3"); ws.merge_cells("D3:D4"); ws.merge_cells("E3:E4"); ws.merge_cells("F3:F4")
+students = pd.read_excel(OUT/"센터현황_2026.xlsx")["등록 학생 수"].tolist()
+for i, c in enumerate(CENTERS):
+    ws.append([c, 1, 0 if i % 4 else 1, students[i], base[c], "사후 보정" if c in ("센터C", "센터G") else None])
+ws.append(["합계", 12, 3, sum(students), None, None]); ws.append([]); ws.append(["※ 등원율은 월 등원일수 ÷ 운영일수 × 100. 출결 v1 기준"])
+for row in ws.iter_rows(min_row=3, max_row=4):
+    for cell in row: cell.alignment = Alignment(horizontal="center"); cell.font = Font(bold=True)
+wb.save(OUT/"실적표_가로형_2026-06-30기준.xlsx")
 print("sample data →", OUT)

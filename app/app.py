@@ -17,7 +17,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular
 
 st.set_page_config(page_title="EBS 대외 요구자료 대응 에이전트", page_icon="📁", layout="wide")
 HERE = Path(__file__).parent
@@ -55,6 +55,75 @@ def read_doc(uploaded) -> str:
     except Exception as e:
         st.error(f"본문 추출 실패: {e}"); return ""
 
+
+def _grid_to_values(grid, key: str, source_version_default: str | None = None):
+    """격자(엑셀 시트 또는 문서의 표) → 제출값 표. 긴 형식은 바로, 가로 펼침 표는 열 매핑 UI를 거친다. (df | None) 반환."""
+    info = tabular.analyze(grid)
+    if info.shape == "empty":
+        st.error("표에서 자료 행을 찾지 못했습니다. 시트(또는 표)를 바꿔 보세요."); return None
+    if info.shape == "long":
+        try: return tabular.long_table(grid, info)
+        except ValueError as e: st.error(f"표를 읽지 못했습니다: {e}"); return None
+    # ---- 가로 펼침 표: 열 매핑 ----
+    st.info("행=센터, 열=지표인 **가로 펼침 표**로 읽었습니다. 센터 열·값 열·기준일을 확인하고 지표명을 정하세요. 값은 그대로 옮기며 계산하지 않습니다."
+            + (f"  \n표 제목: {info.title}" if info.title else "") + (f"  \n주석: {' / '.join(info.notes[:2])}" if info.notes else ""))
+    st.dataframe(tabular.preview(grid, info), height=200, width="stretch")
+    sug = st.session_state.get(f"{key}_map")
+    if HAS_API and st.button("Claude로 열 매핑 제안", key=f"{key}_sug", help="표 제목·머리글·앞 5행만 보냅니다(연락처 패턴 마스킹). 제안은 초안이며 아래에서 확정합니다."):
+        with st.spinner("표 구조 판단 중… (Claude)"):
+            try: sug = tabular.suggest_mapping(grid, info); st.session_state[f"{key}_map"] = sug
+            except Exception as e: st.warning(f"Claude 제안 실패, 규칙 추정값을 사용합니다: {llm.explain_error(e) or e}")
+    if sug and sug.get("note"): st.caption(f"Claude 메모: {sug['note']}")
+    cols = list(range(grid.width())); label = info.col_label
+    c_default = sug["center_col"] if sug and sug.get("center_col") is not None else info.center_col
+    v_default = [c for c, _ in sug["value_cols"]] if sug and sug.get("value_cols") else info.value_cols
+    d_default = (sug.get("base_date") if sug else None) or info.base_date_hint or ""
+    c1, c2, c3 = st.columns([1, 2, 1])
+    center_col = c1.selectbox("센터(행 이름) 열", cols, index=cols.index(c_default) if c_default in cols else 0, format_func=label, key=f"{key}_cc")
+    value_cols = c2.multiselect("값 열", [c for c in cols if c != center_col], default=[c for c in v_default if c != center_col], format_func=label, key=f"{key}_vc")
+    base_date = c3.text_input("기준일", d_default, placeholder="2026-06-30", key=f"{key}_bd", help="표 제목·주석의 '… 기준' 날짜를 자동으로 채웁니다. 없으면 공문 본문을 확인해 입력하세요.")
+    names = dict(sug["value_cols"]) if sug and sug.get("value_cols") else {}
+    ind_df = pd.DataFrame([{"열": label(c), "지표명": names.get(c) or tabular.default_indicator(label(c))} for c in value_cols])
+    if len(ind_df):
+        ind_df = st.data_editor(ind_df, hide_index=True, width="stretch", key=f"{key}_ind", disabled=["열"],
+                                column_config={"지표명": st.column_config.TextColumn("지표명(저장될 이름 · 사전에 있으면 정규 지표명이 기본값)")})
+    drop_totals = st.checkbox("합계·소계·평균 행 제외", value=True, key=f"{key}_dt",
+                              help=f"제외 대상 행: {[grid.row_offset + r for r in info.total_rows] or '없음'}")
+    try:
+        indicators = {c: str(n).strip() for c, n in zip(value_cols, ind_df["지표명"].tolist(), strict=True)} if len(ind_df) else {}
+        return tabular.wide_to_long(grid, info, center_col, value_cols, base_date.strip(), indicators, drop_totals, source_version_default)
+    except ValueError as e:
+        st.warning(str(e)); return None
+
+def value_table_input(key: str, what: str = "제출값"):
+    """①·③ 공용 값 입력: 집계 엑셀/CSV · 회신 문서(hwpx·docx·pdf)의 표 · 직접 입력. (df | None, 출처 이름) 반환."""
+    mode = st.radio("입력 방식", ["집계 엑셀/CSV", "회신 문서의 표 (hwpx·docx·pdf)", "직접 입력"], horizontal=True, key=f"{key}_mode",
+                    help="엑셀은 제목 행·병합 머리글·가로 펼침(행=센터, 열=지표) 서식도 읽습니다. 한글 HWP(구형식)는 한글에서 HWPX로 저장해 올리세요.")
+    if mode == "집계 엑셀/CSV":
+        up = st.file_uploader(f"{what} 엑셀/CSV — 긴 형식(지표명·센터명·기준일·값) 또는 실적표 그대로", type=["xlsx", "xlsm", "csv"], key=f"{key}_xl")
+        if not up: return None, ""
+        try:
+            sheets = compare.list_sheets(up)
+            sheet = st.selectbox("시트", sheets, key=f"{key}_sheet") if len(sheets) > 1 else None
+            grid = tabular.read_grid(up, sheet)
+        except Exception as e:
+            st.error(f"파일을 읽지 못했습니다: {e}"); return None, ""
+        return _grid_to_values(grid, f"{key}_{sheet}"), up.name
+    if mode.startswith("회신 문서"):
+        up = st.file_uploader(f"{what}이 들어 있는 회신 문서 (hwpx / docx / pdf)", type=["hwpx", "docx", "pdf"], key=f"{key}_doc")
+        if not up: return None, ""
+        text = read_doc(up)
+        grids = tabular.grids_from_text(text, up.name) if text else []
+        if not grids:
+            st.error("문서에서 표를 찾지 못했습니다. PDF는 글자가 추출되는 파일이어야 하며(스캔본 불가), 표가 없으면 '직접 입력'을 쓰세요."); return None, up.name
+        g = st.selectbox("문서 안의 표", grids, format_func=lambda g: f"{g.source_sheet} — {len(g.rows)}행 × {g.width()}열 (문서 {g.row_offset}번째 줄부터)", key=f"{key}_tbl")
+        return _grid_to_values(g, f"{key}_{g.source_sheet}", f"회신 문서({up.name}) 표에서 추출"), up.name
+    st.caption("표 파일이 없을 때. 행을 추가해 지표명·센터명·기준일·값을 채우세요. 근거 4칸은 선택입니다.")
+    man = st.data_editor(pd.DataFrame(columns=tabular.MANUAL_COLS), num_rows="dynamic", width="stretch", key=f"{key}_man")
+    if man.dropna(how="all").empty: return None, ""
+    try: return tabular.from_records(man), "직접 입력"
+    except ValueError as e: st.error(str(e)); return None, ""
+
 def analyze(text: str):
     res, how = extract.extract(text)
     res["items"] = normalize.normalize_items(res.get("items") or [])
@@ -89,22 +158,21 @@ if page == "① 과거 자료 등록":
                 res, how = analyze(req_text)
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
-        st.subheader("2) 그때 제출한 값(집계 엑셀)")
+        st.subheader("2) 그때 제출한 값")
+        st.caption("집계 엑셀이 없어도 됩니다. 그때 보낸 회신 문서(hwpx·docx·pdf)의 표를 그대로 읽거나, 직접 입력할 수 있습니다.")
         use_sample_v = st.checkbox("샘플 제출본 사용", value=True)
         if use_sample_v:
-            vfiles = sorted(SAMPLE.glob("등원율_*.xlsx"))
-            vpick = st.selectbox("샘플 제출본", vfiles, format_func=lambda p: p.name)
-            vdf, vname = compare.load_values(vpick), vpick.name
+            vfiles = sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx"))
+            vpick = st.selectbox("샘플 제출본 (실적표_가로형: 제목 행·병합 머리글·합계 행이 있는 실무 서식 → 열 매핑으로 읽기)", vfiles, format_func=lambda p: p.name)
+            if vpick.name.startswith("실적표_"):
+                vdf, vname = _grid_to_values(tabular.read_grid(vpick), f"reg_sample_{vpick.name}"), vpick.name
+            else:
+                vdf, vname = compare.load_values(vpick), vpick.name
         else:
-            vup = st.file_uploader("제출값 엑셀/CSV (컬럼: 지표명, 센터명, 기준일, 값, 지표 정의, 집계기간, 추출시점, 원자료 버전 · cp949 CSV 허용)", type=["xlsx", "xlsm", "csv"], key="reg_val")
-            vdf, vname = None, ""
-            if vup:
-                sheets = compare.list_sheets(vup)
-                sheet = st.selectbox("시트", sheets, key="reg_sheet") if len(sheets) > 1 else None
-                try: vdf, vname = compare.load_values(vup, sheet), vup.name
-                except ValueError as e: st.error(f"파일을 읽지 못했습니다: {e}")
+            vdf, vname = value_table_input("reg_val", "제출값")
         if vdf is not None:
             st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=220, width="stretch")
+            st.caption(f"{len(vdf)}건 · 출처 {vdf['source_file'][0]}" + (f" / {vdf['source_sheet'][0]}" if vdf['source_sheet'][0] else ""))
     if "reg_extract" in st.session_state:
         res = st.session_state["reg_extract"]
         st.subheader(f"추출 결과 — {st.session_state['reg_how']}")
@@ -185,13 +253,7 @@ elif page == "③ 수치 대조·점검표":
         st.subheader("새 집계값")
         use_s = st.checkbox("샘플(9월 재산출) 사용", value=True)
         if use_s: new_df = compare.load_values(SAMPLE / "등원율_2026-06-30기준_9월재산출.xlsx")
-        else:
-            up = st.file_uploader("새 집계 엑셀/CSV (한글 컬럼명·cp949 CSV 허용)", type=["xlsx", "xlsm", "csv"], key="cmp_new"); new_df = None
-            if up:
-                sheets = compare.list_sheets(up)
-                sheet = st.selectbox("시트", sheets, key="cmp_sheet") if len(sheets) > 1 else None
-                try: new_df = compare.load_values(up, sheet)
-                except ValueError as e: st.error(f"파일을 읽지 못했습니다: {e}")
+        else: new_df, _ = value_table_input("cmp_new", "새 집계값")
     with c2:
         st.subheader("과거 제출값 (이력 DB)")
         subs = db.list_submissions()

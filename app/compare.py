@@ -18,10 +18,10 @@ def list_sheets(file) -> list[str]:
     if not name.lower().endswith((".xlsx", ".xls", ".xlsm")): return []
     return pd.ExcelFile(io.BytesIO(_bytes(file))).sheet_names
 
-def _read_csv(data: bytes) -> pd.DataFrame:
+def _read_csv(data: bytes, header="infer") -> pd.DataFrame:
     last = None
     for enc in ENCODINGS:
-        try: return pd.read_csv(io.BytesIO(data), encoding=enc, skip_blank_lines=False)   # 빈 줄도 행으로 읽어 엑셀 행 번호를 맞춘다
+        try: return pd.read_csv(io.BytesIO(data), encoding=enc, skip_blank_lines=False, header=header)   # 빈 줄도 행으로 읽어 엑셀 행 번호를 맞춘다
         except UnicodeDecodeError as e: last = e
     raise ValueError(f"CSV 인코딩을 판별하지 못했습니다(시도: {', '.join(ENCODINGS)}). 엑셀에서 'CSV UTF-8'로 다시 저장하세요. ({last})")
 
@@ -50,33 +50,36 @@ def clean_number(v):
     try: return float(s)
     except ValueError: return float("nan")
 
+ALIASES = {"지표": "indicator", "지표명": "indicator", "센터": "center", "센터명": "center", "기준일": "base_date",
+           "값": "value", "수치": "value", "지표 정의": "definition", "정의": "definition", "집계기간": "calc_period",
+           "추출시점": "extract_date", "추출일": "extract_date", "원자료 버전": "source_version", "버전": "source_version"}
+
 def load_values(file, sheet: str | int | None = None) -> pd.DataFrame:
-    """엑셀/CSV → 표준 컬럼. 한글 컬럼명·cp949 CSV·'67.8%' 같은 값 허용. 출처(파일·시트·행)를 함께 기록.
-    sheet: 엑셀 시트 이름/번호(None이면 첫 시트)."""
-    name = str(getattr(file, "name", file))
-    is_xl = name.lower().endswith((".xlsx", ".xls", ".xlsm"))
-    data = _bytes(file)
-    if is_xl:
-        xl = pd.ExcelFile(io.BytesIO(data))
-        sheet_name = sheet if sheet is not None else xl.sheet_names[0]
-        df = xl.parse(sheet_name)
-    else:
-        df, sheet_name = _read_csv(data), ""
-    df = df.dropna(how="all")
-    df["source_file"] = os.path.basename(name)
-    df["source_sheet"] = str(sheet_name)
-    df["source_row"] = [int(i) + 2 for i in df.index]   # 엑셀 행 번호(헤더 다음부터, 빈 행 건너뜀 반영)
-    rename = {"지표": "indicator", "지표명": "indicator", "센터": "center", "센터명": "center", "기준일": "base_date",
-              "값": "value", "수치": "value", "지표 정의": "definition", "정의": "definition", "집계기간": "calc_period",
-              "추출시점": "extract_date", "추출일": "extract_date", "원자료 버전": "source_version", "버전": "source_version"}
-    df = df.rename(columns={c: rename.get(re.sub(r"\s+", " ", str(c)).strip(), str(c).strip()) for c in df.columns})
+    """엑셀/CSV → 표준 컬럼. 한글 컬럼명·cp949 CSV·'67.8%' 같은 값·제목 행·빈 행 허용. 출처(파일·시트·행)를 함께 기록.
+    sheet: 엑셀 시트 이름/번호(None이면 첫 시트). 가로 펼침 표(행=센터, 열=지표)는 ValueError — 화면의 열 매핑(tabular.wide_to_long)으로 처리."""
+    import tabular
+    grid = tabular.read_grid(file, sheet)
+    return tabular.long_table(grid, tabular.analyze(grid))
+
+def finalize(df: pd.DataFrame, source_file: str = "", source_sheet: str = "") -> pd.DataFrame:
+    """표준화·검증 공통부: 한글 컬럼명 → 표준명, 기준일 정규화, 값 숫자화, 근거 필드 정리, 키 중복 검사.
+    df에는 source_row(원본 행 번호)가 있어야 오류 메시지에 행 번호가 붙는다."""
+    df = df.dropna(how="all").copy()
+    if "source_row" not in df.columns: df["source_row"] = [int(i) + 2 for i in df.index]
+    df["source_file"] = os.path.basename(str(source_file)) if source_file else ""
+    df["source_sheet"] = str(source_sheet or "")
+    df = df.rename(columns={c: ALIASES.get(re.sub(r"\s+", " ", str(c)).strip(), str(c).strip()) for c in df.columns})
     missing = [c for c in REQUIRED if c not in df.columns]
     if missing:
-        raise ValueError(f"필수 컬럼 없음: {missing} (현재 컬럼: {list(df.columns)}). 허용 컬럼명: {sorted(set(rename))}")
+        raise ValueError(f"필수 컬럼 없음: {missing} (현재 컬럼: {list(df.columns)}). 허용 컬럼명: {sorted(set(ALIASES))}")
+    df = df[~(df["indicator"].isna() & df["center"].isna() & df["value"].isna())]       # 핵심 셀이 다 빈 행 제외
     for c in ("indicator", "center"):
-        df[c] = df[c].astype(str).str.strip()
+        df[c] = df[c].map(lambda v: re.sub(r"\s+", " ", str(v)).strip() if v is not None and not (isinstance(v, float) and pd.isna(v)) else "")
+    empty = df.loc[(df["indicator"] == "") | (df["center"] == ""), "source_row"].tolist()
+    if empty:
+        raise ValueError(f"지표명 또는 센터명이 빈 행: {empty[:10]}{' …' if len(empty) > 10 else ''}")
     parsed = pd.to_datetime(df["base_date"].map(normalize_date_str), errors="coerce")
-    bad = df.loc[parsed.isna() & df["base_date"].notna(), "source_row"].tolist()
+    bad = df.loc[parsed.isna(), "source_row"].tolist()
     if bad:
         raise ValueError(f"기준일을 날짜로 읽지 못한 행: {bad[:10]}{' …' if len(bad) > 10 else ''} (예: 2026-06-30 또는 2026. 6. 30.)")
     df["base_date"] = parsed.dt.strftime("%Y-%m-%d")
@@ -86,9 +89,12 @@ def load_values(file, sheet: str | int | None = None) -> pd.DataFrame:
         else: df[c] = df[c].map(clean_text)
     dup = df[df.duplicated(KEY, keep=False)]
     if len(dup):
-        rows = sorted(dup["source_row"].tolist())
+        rows = sorted(int(r) for r in dup["source_row"].tolist())
         raise ValueError(f"같은 지표·센터·기준일이 중복된 행: {rows[:10]}{' …' if len(rows) > 10 else ''}. 한 기준일에 센터당 한 행만 두세요.")
-    return df.reset_index(drop=True)
+    df["source_row"] = df["source_row"].astype(int)
+    keep = REQUIRED + ["definition", "calc_period", "extract_date", "source_version", "source_file", "source_sheet", "source_row"]
+    extra = [c for c in df.columns if c not in keep]                 # 메모 같은 추가 열은 뒤에 남긴다(개인정보 검사 대상)
+    return df[keep + extra].reset_index(drop=True)
 
 def compare(new_df: pd.DataFrame, old_df: pd.DataFrame, tol: float = 0.0) -> pd.DataFrame:
     """키(지표·센터·기준일)로 합쳐 차이 계산. 판정: 일치 / 차이 / 과거 없음 / 신규 없음"""
