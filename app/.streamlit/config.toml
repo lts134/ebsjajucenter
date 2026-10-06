@@ -3,4 +3,23 @@ gatherUsageStats = false
 
 [server]
 headless = false
-address = "localhost"   # 같은 망의 다른 PC가 접속하지 못하게(한 PC 한 사람 전제)
+address = "localhost"   # 같은 망의 다른 PC가 접속하지 못하게(혼자 쓰기). 여러 사람은 run_server.bat
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#1B4F8A"
+backgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E293B"
+borderColor = "#E2E8F0"
+baseRadius = "10px"
+font = "\"Pretendard\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans KR\", sans-serif"
+headingFont = "\"Pretendard\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans KR\", sans-serif"
+showSidebarBorder = true
+
+[theme.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F9"
