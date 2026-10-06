@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>2026 활용수기 공모 접수</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<style>
+  :root {
+    --blue: #0b4fb3; --blue-dark: #083b86; --blue-bg: #eef4fc; --blue-border: #c9daf3;
+    --text: #1b2533; --text-mid: #46546a; --text-light: #6b788c;
+    --bg: #f5f7fb; --card: #ffffff; --border: #dfe5ee;
+    --red: #c0392b; --red-bg: #fdf0ee; --green: #1e7b4a; --green-bg: #eaf6ef;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: var(--text); font-size: 15px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 0 16px 48px; }
+  header { background: var(--blue); color: #fff; padding: 32px 16px 28px; }
+  header .inner { max-width: 720px; margin: 0 auto; }
+  header .eyebrow { font-size: 13px; opacity: .85; font-weight: 500; }
+  header h1 { font-size: 26px; font-weight: 800; letter-spacing: -.02em; margin-top: 4px; word-break: keep-all; }
+  header .period { margin-top: 12px; font-size: 14px; background: rgba(255,255,255,.14); border-radius: 999px; display: inline-block; padding: 4px 14px; }
+  .status { margin: 20px 0 0; padding: 14px 16px; border-radius: var(--radius); font-weight: 700; font-size: 14.5px; }
+  .status.open { background: var(--green-bg); color: var(--green); }
+  .status.closed { background: var(--red-bg); color: var(--red); }
+  .status.wait { background: var(--blue-bg); color: var(--blue-dark); }
+  section.card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px 20px; margin-top: 16px; }
+  section.card h2 { font-size: 17px; font-weight: 800; color: var(--blue-dark); margin-bottom: 14px; display: flex; gap: 8px; align-items: center; }
+  section.card h2 .num { background: var(--blue); color: #fff; width: 24px; height: 24px; border-radius: 7px; font-size: 13px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  ul.guide { padding-left: 18px; color: var(--text-mid); }
+  ul.guide li + li { margin-top: 6px; }
+  ul.guide strong { color: var(--text); }
+  .field { margin-top: 14px; }
+  .field:first-of-type { margin-top: 0; }
+  .field label { display: block; font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+  .field label .req { color: var(--red); margin-left: 2px; }
+  .field .hint { font-size: 12.5px; color: var(--text-light); margin-top: 4px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  input[type=text], input[type=tel], input[type=month], select {
+    width: 100%; font: inherit; font-size: 16px; padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; color: var(--text);
+  }
+  input:focus, select:focus { outline: 2px solid var(--blue-border); border-color: var(--blue); }
+  details.consent { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
+  details.consent summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+  details.consent table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13.5px; }
+  details.consent th, details.consent td { border: 1px solid var(--border); padding: 7px 9px; text-align: left; vertical-align: top; }
+  details.consent th { background: var(--blue-bg); width: 30%; font-weight: 700; }
+  details.consent p { font-size: 13.5px; color: var(--text-mid); margin-top: 8px; }
+  .check { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; font-size: 14.5px; }
+  .check input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; accent-color: var(--blue); }
+  .file-box { border: 2px dashed var(--blue-border); border-radius: var(--radius); padding: 22px 16px; text-align: center; background: var(--blue-bg); }
+  .file-box input { display: none; }
+  .file-box .pick { display: inline-block; background: #fff; border: 1px solid var(--blue); color: var(--blue); font-weight: 700; padding: 9px 18px; border-radius: 8px; cursor: pointer; }
+  .file-box .name { margin-top: 10px; font-size: 14px; color: var(--text-mid); word-break: break-all; }
+  .error { margin-top: 14px; padding: 12px 14px; background: var(--red-bg); color: var(--red); border-radius: 8px; font-size: 14px; display: none; white-space: pre-line; }
+  .submit { margin-top: 20px; width: 100%; font: inherit; font-size: 17px; font-weight: 800; background: var(--blue); color: #fff; border: 0; border-radius: var(--radius); padding: 15px; cursor: pointer; }
+  .submit:disabled { background: #9aa8bd; cursor: not-allowed; }
+  .progress { margin-top: 14px; display: none; }
+  .progress .bar { height: 10px; background: var(--blue-bg); border-radius: 999px; overflow: hidden; }
+  .progress .fill { height: 100%; width: 0; background: var(--blue); transition: width .2s; }
+  .progress .label { font-size: 13px; color: var(--text-mid); margin-top: 6px; text-align: center; }
+  .done { text-align: center; padding: 34px 20px; }
+  .done h2 { justify-content: center; font-size: 20px; }
+  .done .receipt { margin: 18px auto 0; display: inline-block; background: var(--blue-bg); border: 1px solid var(--blue-border); border-radius: var(--radius); padding: 14px 26px; }
+  .done .receipt .k { font-size: 13px; color: var(--text-mid); }
+  .done .receipt .v { font-size: 26px; font-weight: 800; letter-spacing: .06em; color: var(--blue-dark); font-family: ui-monospace, monospace; }
+  .done p { margin-top: 14px; color: var(--text-mid); font-size: 14.5px; }
+  footer { margin-top: 24px; font-size: 13px; color: var(--text-light); text-align: center; }
+  @media (max-width: 480px) {
+    header h1 { font-size: 22px; }
+    .row2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="inner">
+    <div class="eyebrow">EBS 자기주도학습센터</div>
+    <h1>2026 자기주도학습센터 활용수기 공모 접수</h1>
+    <div class="period" id="periodText">응모 기간 불러오는 중</div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="status wait" id="statusBox">접수 상태를 확인하고 있습니다.</div>
+
+  <form id="applyForm" novalidate>
+    <section class="card">
+      <h2><span class="num">1</span>제출 전 확인사항</h2>
+      <ul class="guide">
+        <li>원고와 서명한 동의서를 <strong>PDF 파일 1개</strong>로 합쳐서 올려 주세요. (10MB 이하)</li>
+        <li>파일 순서: <strong>① 활용수기 원고 → ② 보호자 동의서 → ③ 개인정보 수집·이용 동의서</strong></li>
+        <li>공정한 심사를 위해 <strong>원고에는 이름, 학교명, 센터명을 쓰지 마세요.</strong></li>
+        <li>같은 학생이 여러 번 제출하면 <strong>마지막 제출본만</strong> 심사합니다.</li>
+        <li>제출이 끝나면 접수번호가 표시됩니다. 화면을 캡처해 보관해 주세요.</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2><span class="num">2</span>신청 정보</h2>
+      <div class="row2">
+        <div class="field">
+          <label for="name">학생 성명<span class="req">*</span></label>
+          <input type="text" id="name" maxlength="30" autocomplete="name">
+        </div>
+        <div class="field">
+          <label for="grade">학년<span class="req">*</span></label>
+          <select id="grade"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="school">학교명<span class="req">*</span></label>
+        <input type="text" id="school" maxlength="50" placeholder="예: ○○중학교">
+      </div>
+      <div class="field">
+        <label for="center">다니는 자기주도학습센터<span class="req">*</span></label>
+        <div id="centerSlot"></div>
+      </div>
+      <div class="field">
+        <label for="firstVisit">센터에 처음 다닌 시기<span class="req">*</span></label>
+        <input type="month" id="firstVisit" min="2020-01">
+        <div class="hint">연도와 월을 선택해 주세요.</div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="guardianName">보호자 성명<span class="req">*</span></label>
+          <input type="text" id="guardianName" maxlength="30">
+        </div>
+        <div class="field">
+          <label for="guardianPhone">보호자 연락처<span class="req">*</span></label>
+          <input type="tel" id="guardianPhone" maxlength="13" placeholder="010-0000-0000" inputmode="numeric">
+        </div>
+      </div>
+      <div class="hint" style="margin-top:8px;">수상 안내는 보호자 연락처로 드립니다.</div>
+    </section>
+
+    <section class="card">
+      <h2><span class="num">3</span>동의 및 확인</h2>
+
+      <!-- [확인 필요] 아래 표의 보유기간·문의처는 기관 개인정보 담당 확인 후 확정한다. -->
+      <details class="consent">
+        <summary>개인정보 수집·이용 안내 (펼쳐 보기)</summary>
+        <table>
+          <tr><th>수집 목적</th><td>활용수기 공모 접수, 응모 자격 확인, 심사, 수상자 안내 및 시상</td></tr>
+          <tr><th>수집 항목</th><td>학생 성명, 학교명, 학년, 이용 센터, 최초 등원 시기, 보호자 성명, 보호자 연락처, 제출 파일</td></tr>
+          <tr><th>보유 기간</th><td>[확인 필요] 시상 완료 후 ○개월까지 보유하고, 기간이 끝나면 지체 없이 파기</td></tr>
+          <tr><th>처리 위탁</th><td>Google LLC(Firebase): 접수 정보 및 제출 파일의 저장·관리 (저장 위치: 대한민국 서울)</td></tr>
+        </table>
+        <p>동의를 거부할 수 있습니다. 다만 동의하지 않으면 공모에 접수할 수 없습니다.</p>
+      </details>
+
+      <label class="check"><input type="checkbox" id="cPrivacy"><span>위 개인정보 수집·이용에 동의합니다. (필수)</span></label>
+      <label class="check"><input type="checkbox" id="cGuardian"><span>보호자가 내용을 확인하고 응모와 개인정보 수집·이용에 동의했습니다. 서명한 보호자 동의서를 PDF에 포함했습니다. (필수)</span></label>
+      <label class="check"><input type="checkbox" id="cOriginal"><span>원고는 본인이 직접 쓴 글이며, 다른 사람이나 AI가 대신 쓴 글이 아닙니다. (필수)</span></label>
+    </section>
+
+    <section class="card">
+      <h2><span class="num">4</span>파일 올리기</h2>
+      <div class="file-box">
+        <label class="pick" for="file">PDF 파일 선택</label>
+        <input type="file" id="file" accept="application/pdf,.pdf">
+        <div class="name" id="fileName">선택한 파일이 없습니다. (PDF, 10MB 이하)</div>
+      </div>
+    </section>
+
+    <div class="error" id="errorBox"></div>
+    <div class="progress" id="progress">
+      <div class="bar"><div class="fill" id="progressFill"></div></div>
+      <div class="label" id="progressLabel">파일 올리는 중 0%</div>
+    </div>
+    <button type="submit" class="submit" id="submitBtn" disabled>제출하기</button>
+  </form>
+
+  <section class="card done" id="doneView" hidden>
+    <h2>접수가 완료되었습니다</h2>
+    <div class="receipt">
+      <div class="k">접수번호</div>
+      <div class="v" id="receiptNo"></div>
+    </div>
+    <p>이 화면을 캡처해 보관해 주세요.<br>제출 내용을 고치려면 다시 제출하시면 되며, 마지막 제출본만 심사합니다.</p>
+  </section>
+
+  <footer id="contactText"></footer>
+</div>
+
+<script type="module">
+  // ===== 설정: 운영 전에 이 블록만 채운다 =====
+  // Firebase 콘솔 > 프로젝트 설정 > 내 앱(웹)에서 복사한 값. 관리자 페이지(admin.html)와 같은 값을 넣는다.
+  const FIREBASE_CONFIG = {
+    apiKey: '',
+    authDomain: '',
+    projectId: '',
+    storageBucket: '',
+    messagingSenderId: '',
+    appId: ''
+  };
+  // (선택) App Check(reCAPTCHA Enterprise) 사이트 키. 비워 두면 사용하지 않는다.
+  const APP_CHECK_SITE_KEY = '';
+  // [확인 필요] 응모 대상 학년
+  const GRADE_OPTIONS = ['중학교 1학년', '중학교 2학년', '중학교 3학년'];
+  // 센터 목록. 비워 두면 직접 입력 칸이 나온다.
+  const CENTER_OPTIONS = [];
+  // [확인 필요] 문의처
+  const CONTACT_TEXT = '문의: [확인 필요]';
+  // ===== 설정 끝 =====
+
+  const SDK = 'https://www.gstatic.com/firebasejs/10.12.5/';
+  const MAX_BYTES = 10 * 1024 * 1024;
+  const $ = id => document.getElementById(id);
+
+  const fmtKST = new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric',
+    weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false
+  });
+
+  // 화면 구성
+  $('grade').innerHTML = '<option value="">선택</option>' + GRADE_OPTIONS.map(g => `<option>${g}</option>`).join('');
+  $('centerSlot').innerHTML = CENTER_OPTIONS.length
+    ? '<select id="center"><option value="">선택</option>' + CENTER_OPTIONS.map(c => `<option>${c}</option>`).join('') + '</select>'
+    : '<input type="text" id="center" maxlength="60" placeholder="예: ○○시 EBS 자기주도학습센터">';
+  $('contactText').textContent = CONTACT_TEXT;
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  $('firstVisit').max = thisMonth;
+
+  $('guardianPhone').addEventListener('input', e => {
+    const d = e.target.value.replace(/\D/g, '').slice(0, 11);
+    e.target.value = d.length < 4 ? d : d.length < 8 ? `${d.slice(0, 3)}-${d.slice(3)}`
+      : d.length === 10 ? `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}` : `${d.slice(0, 3)}-${d.slice(3, 7)}-${d.slice(7)}`;
+  });
+  $('file').addEventListener('change', () => {
+    const f = $('file').files[0];
+    $('fileName').textContent = f ? `${f.name} (${(f.size / 1024 / 1024).toFixed(1)}MB)` : '선택한 파일이 없습니다. (PDF, 10MB 이하)';
+  });
+
+  function setStatus(kind, text) {
+    $('statusBox').className = 'status ' + kind;
+    $('statusBox').textContent = text;
+  }
+  function showError(msg) {
+    $('errorBox').textContent = msg;
+    $('errorBox').style.display = msg ? 'block' : 'none';
+    if (msg) $('errorBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  if (!FIREBASE_CONFIG.projectId) {
+    setStatus('closed', '접수 페이지 설정이 완료되지 않았습니다. 담당자에게 문의해 주세요.');
+    $('periodText').textContent = '응모 기간 미정';
+    throw new Error('FIREBASE_CONFIG가 비어 있습니다.');
+  }
+
+  const [{ initializeApp }, fs, st] = await Promise.all([
+    import(SDK + 'firebase-app.js'),
+    import(SDK + 'firebase-firestore.js'),
+    import(SDK + 'firebase-storage.js')
+  ]);
+  const app = initializeApp(FIREBASE_CONFIG);
+  if (APP_CHECK_SITE_KEY) {
+    const ac = await import(SDK + 'firebase-app-check.js');
+    ac.initializeAppCheck(app, { provider: new ac.ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY), isTokenAutoRefreshEnabled: true });
+  }
+  const db = fs.getFirestore(app);
+  const storage = st.getStorage(app);
+
+  // 응모 기간: 화면 표시용. 실제 차단은 보안 규칙이 서버 시각으로 한다.
+  let period = null;
+  function isOpenNow() {
+    const now = Date.now();
+    return period && now >= period.open && now < period.close;
+  }
+  async function loadPeriod() {
+    try {
+      const snap = await fs.getDoc(fs.doc(db, 'config', 'contest'));
+      if (!snap.exists()) {
+        period = null;
+        $('periodText').textContent = '응모 기간 미정';
+        setStatus('wait', '응모 기간이 아직 정해지지 않았습니다.');
+        $('submitBtn').disabled = true;
+        return;
+      }
+      const c = snap.data();
+      period = { open: c.openAt.toMillis(), close: c.closeAt.toMillis() };
+      $('periodText').textContent = `응모 기간 ${fmtKST.format(period.open)} ~ ${fmtKST.format(period.close)}`;
+      const now = Date.now();
+      if (now < period.open) { setStatus('wait', `접수 시작 전입니다. ${fmtKST.format(period.open)}부터 제출할 수 있습니다.`); }
+      else if (now >= period.close) { setStatus('closed', '접수가 마감되었습니다.'); }
+      else { setStatus('open', `접수 중입니다. 마감: ${fmtKST.format(period.close)}`); }
+      $('submitBtn').disabled = !isOpenNow();
+    } catch (err) {
+      console.error(err);
+      setStatus('closed', '접수 정보를 불러오지 못했습니다. 잠시 후 새로고침해 주세요.');
+    }
+  }
+  await loadPeriod();
+
+  async function isPdf(file) {
+    const head = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+    return String.fromCharCode(...head) === '%PDF-';
+  }
+
+  function readForm() {
+    const v = id => $(id).value.trim();
+    return {
+      name: v('name'), school: v('school'), grade: v('grade'), center: v('center'),
+      firstVisit: v('firstVisit'), guardianName: v('guardianName'), guardianPhone: v('guardianPhone')
+    };
+  }
+
+  async function validate(data, file) {
+    const errs = [];
+    if (!data.name) errs.push('학생 성명을 입력해 주세요.');
+    if (!data.grade) errs.push('학년을 선택해 주세요.');
+    if (!data.school) errs.push('학교명을 입력해 주세요.');
+    if (!data.center) errs.push('다니는 센터를 입력해 주세요.');
+    if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(data.firstVisit)) errs.push('센터에 처음 다닌 시기를 선택해 주세요.');
+    if (!data.guardianName) errs.push('보호자 성명을 입력해 주세요.');
+    if (!/^01\d-\d{3,4}-\d{4}$/.test(data.guardianPhone)) errs.push('보호자 연락처를 010-0000-0000 형식으로 입력해 주세요.');
+    if (!$('cPrivacy').checked || !$('cGuardian').checked || !$('cOriginal').checked) errs.push('필수 동의 항목 3개에 모두 체크해 주세요.');
+    if (!file) errs.push('PDF 파일을 선택해 주세요.');
+    else if (file.size > MAX_BYTES) errs.push('파일이 10MB를 넘습니다. 용량을 줄여서 다시 선택해 주세요.');
+    else if (file.size === 0 || !(await isPdf(file))) errs.push('PDF 파일만 올릴 수 있습니다. 한글·워드 파일은 PDF로 저장한 뒤 올려 주세요.');
+    return errs;
+  }
+
+  function friendlyError(err) {
+    const code = err && err.code || '';
+    if (code === 'storage/unauthorized' || code === 'permission-denied') {
+      return '제출이 거부되었습니다. 접수 기간이 아니거나, 입력 내용 또는 파일 조건(PDF, 10MB 이하)이 맞지 않습니다.';
+    }
+    if (code === 'storage/canceled') return '파일 올리기가 취소되었습니다.';
+    if (code === 'storage/retry-limit-exceeded' || code === 'unavailable') return '인터넷 연결이 불안정합니다. 연결을 확인한 뒤 다시 제출해 주세요.';
+    return '제출 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+  }
+
+  $('applyForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    showError('');
+    if (!isOpenNow()) { showError('지금은 접수 기간이 아닙니다.'); return; }
+    const data = readForm();
+    const file = $('file').files[0];
+    const errs = await validate(data, file);
+    if (errs.length) { showError(errs.join('\n')); return; }
+
+    $('submitBtn').disabled = true;
+    $('submitBtn').textContent = '제출 중입니다. 창을 닫지 마세요.';
+    $('progress').style.display = 'block';
+
+    try {
+      const docRef = fs.doc(fs.collection(db, 'submissions')); // 무작위 20자리 ID
+      const id = docRef.id;
+      const filePath = `submissions/${id}.pdf`;
+
+      await new Promise((resolve, reject) => {
+        const task = st.uploadBytesResumable(st.ref(storage, filePath), file, { contentType: 'application/pdf' });
+        task.on('state_changed', snap => {
+          const pct = Math.round(snap.bytesTransferred / snap.totalBytes * 100);
+          $('progressFill').style.width = pct + '%';
+          $('progressLabel').textContent = `파일 올리는 중 ${pct}%`;
+        }, reject, resolve);
+      });
+
+      $('progressLabel').textContent = '신청 정보 저장 중';
+      await fs.setDoc(docRef, {
+        ...data,
+        consents: { privacy: true, guardian: true, original: true },
+        filePath,
+        fileSize: file.size,
+        status: '접수',
+        createdAt: fs.serverTimestamp()
+      });
+
+      $('receiptNo').textContent = id.slice(0, 8).toUpperCase();
+      $('applyForm').hidden = true;
+      $('doneView').hidden = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    } catch (err) {
+      console.error(err);
+      showError(friendlyError(err));
+      $('submitBtn').disabled = false;
+      $('submitBtn').textContent = '제출하기';
+      $('progress').style.display = 'none';
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+[
+  {
+    "origin": [
+      "https://xn--ok0bv9ht5mcnbrxlpkcd3xm0h.kr",
+      "https://www.xn--ok0bv9ht5mcnbrxlpkcd3xm0h.kr"
+    ],
+    "method": ["GET"],
+    "maxAgeSeconds": 3600
+  }
+]

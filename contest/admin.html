@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>활용수기 공모 관리</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;800&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js" defer></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js" defer></script>
+<style>
+  :root {
+    --blue: #0b4fb3; --blue-dark: #083b86; --blue-bg: #eef4fc; --blue-border: #c9daf3;
+    --text: #1b2533; --text-mid: #46546a; --text-light: #6b788c;
+    --bg: #f5f7fb; --card: #ffffff; --border: #dfe5ee;
+    --red: #c0392b; --red-bg: #fdf0ee; --green: #1e7b4a; --green-bg: #eaf6ef; --amber: #9a6a00; --amber-bg: #fdf5e2;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 0 16px 48px; }
+  header { background: var(--blue-dark); color: #fff; padding: 18px 16px; }
+  header .inner { max-width: 1280px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 19px; font-weight: 800; }
+  header .who { font-size: 13px; opacity: .9; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button, .btn { font: inherit; font-size: 13.5px; font-weight: 700; border-radius: 8px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--blue); background: #fff; color: var(--blue); }
+  button.primary { background: var(--blue); color: #fff; }
+  button.danger { border-color: var(--red); color: var(--red); }
+  button.danger.solid { background: var(--red); color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  header button { border-color: rgba(255,255,255,.6); background: transparent; color: #fff; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; margin-top: 16px; }
+  .card h2 { font-size: 16px; font-weight: 800; color: var(--blue-dark); margin-bottom: 12px; }
+  .muted { color: var(--text-light); font-size: 13px; }
+  .center-box { max-width: 460px; margin: 60px auto; text-align: center; }
+  .center-box p { margin-top: 10px; color: var(--text-mid); }
+  .uid { font-family: ui-monospace, monospace; background: var(--blue-bg); padding: 8px 10px; border-radius: 6px; display: block; margin-top: 10px; word-break: break-all; user-select: all; }
+  .period-row { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+  .period-row label { font-size: 13px; font-weight: 700; display: block; margin-bottom: 4px; }
+  input, select { font: inherit; font-size: 14px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--text); }
+  .pill { display: inline-block; font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 999px; }
+  .pill.open { background: var(--green-bg); color: var(--green); }
+  .pill.closed { background: var(--red-bg); color: var(--red); }
+  .pill.wait { background: var(--blue-bg); color: var(--blue-dark); }
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .kpi { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .kpi .k { font-size: 12.5px; color: var(--text-light); font-weight: 700; }
+  .kpi .v { font-size: 24px; font-weight: 800; color: var(--blue-dark); font-family: ui-monospace, monospace; }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .toolbar .grow { flex: 1; min-width: 180px; }
+  .toolbar .sep { width: 1px; height: 28px; background: var(--border); margin: 0 4px; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1100px; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; }
+  th { background: var(--blue-bg); font-weight: 700; white-space: nowrap; position: sticky; top: 0; }
+  tr:last-child td { border-bottom: 0; }
+  td { word-break: keep-all; }
+  td button { white-space: nowrap; }
+  td.mono, span.mono { font-family: ui-monospace, monospace; white-space: nowrap; }
+  td input.memo { width: 100%; min-width: 140px; }
+  .tag { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+  .tag.dup { background: var(--amber-bg); color: var(--amber); }
+  .tag.final { background: var(--green-bg); color: var(--green); }
+  .log { margin-top: 10px; font-size: 13px; color: var(--text-mid); white-space: pre-line; }
+  .danger-zone { border-color: #f0c8c2; }
+  .danger-zone h2 { color: var(--red); }
+  .empty { padding: 30px; text-align: center; color: var(--text-light); }
+  @media (max-width: 760px) { .kpis { grid-template-columns: repeat(3, 1fr); } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="inner">
+    <h1>활용수기 공모 관리</h1>
+    <div class="who" id="who" hidden><span id="whoEmail"></span><button id="logoutBtn" type="button">로그아웃</button></div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- 로그인 화면 -->
+  <div class="center-box card" id="loginView" hidden>
+    <h2>관리자 로그인</h2>
+    <p>등록된 관리자 Google 계정으로 로그인해 주세요.<br>브라우저 탭을 닫으면 자동으로 로그아웃됩니다.</p>
+    <button class="primary" id="loginBtn" type="button" style="margin-top:16px;">Google 계정으로 로그인</button>
+  </div>
+
+  <!-- 권한 없음 -->
+  <div class="center-box card" id="deniedView" hidden>
+    <h2>관리자 권한이 없습니다</h2>
+    <p>이 계정은 관리자로 등록되어 있지 않습니다.<br>처음 설정하는 경우, 아래 UID를 Firestore의 <b>config/admins</b> 문서 <b>uids</b> 배열에 추가한 뒤 새로고침하세요.</p>
+    <code class="uid" id="myUid"></code>
+  </div>
+
+  <!-- 관리 화면 -->
+  <div id="mainView" hidden>
+
+    <section class="card">
+      <h2>응모 기간 설정 <span class="pill wait" id="periodPill">미설정</span></h2>
+      <div class="period-row">
+        <div><label for="openAt">접수 시작 (한국시각)</label><input type="datetime-local" id="openAt"></div>
+        <div><label for="closeAt">접수 마감 (한국시각)</label><input type="datetime-local" id="closeAt"></div>
+        <button class="primary" id="savePeriodBtn" type="button">저장</button>
+      </div>
+      <p class="muted" style="margin-top:8px;">저장하면 접수 페이지 안내와 서버 차단 시각이 함께 바뀝니다. 반영까지 1분 안팎이 걸릴 수 있습니다. 마감을 연장하면 팝업·공고문도 함께 수정해 주세요.</p>
+      <p class="muted" id="periodMeta"></p>
+    </section>
+
+    <section class="card">
+      <h2>접수 현황</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="k">전체 제출</div><div class="v" id="kTotal">0</div></div>
+        <div class="kpi"><div class="k">접수</div><div class="v" id="kNew">0</div></div>
+        <div class="kpi"><div class="k">보완요청</div><div class="v" id="kFix">0</div></div>
+        <div class="kpi"><div class="k">심사대상</div><div class="v" id="kReview">0</div></div>
+        <div class="kpi"><div class="k">제외</div><div class="v" id="kOut">0</div></div>
+        <div class="kpi"><div class="k">중복 제출 (이전본)</div><div class="v" id="kDup">0</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>접수 목록</h2>
+      <div class="toolbar">
+        <input class="grow" type="search" id="q" placeholder="성명·학교·센터·접수번호 검색">
+        <select id="fStatus"><option value="">상태 전체</option></select>
+        <select id="fCenter"><option value="">센터 전체</option></select>
+        <button type="button" id="reloadBtn">새로고침</button>
+        <span class="sep"></span>
+        <button type="button" id="excelBtn">엑셀 내보내기</button>
+        <button type="button" id="zipAllBtn">PDF 일괄 다운로드</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>접수번호</th><th>접수일시</th><th>성명</th><th>학교 / 학년</th><th>센터</th><th>최초 등원</th>
+              <th>보호자</th><th>파일</th><th>중복</th><th>상태</th><th>심사번호</th><th>메모</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p class="muted" style="margin-top:8px;">같은 학생(성명·학교·보호자 연락처 일치)이 여러 번 제출한 경우, 마지막 제출본에 "최종본", 이전 제출본에 "이전본"이 표시됩니다.</p>
+    </section>
+
+    <section class="card">
+      <h2>심사 자료 만들기</h2>
+      <ol class="muted" style="padding-left:18px;">
+        <li>심사할 건의 상태를 "심사대상"으로 바꿉니다. (이전본은 "제외" 처리)</li>
+        <li>[심사번호 부여]를 누르면 심사대상 중 번호가 없는 건에 접수 순서대로 번호가 붙습니다.</li>
+        <li>[심사용 ZIP]을 누르면 파일명이 심사번호인 PDF 묶음을 내려받습니다. 이름이 들어간 파일명은 쓰지 않습니다.</li>
+      </ol>
+      <div class="toolbar" style="margin-top:12px;">
+        <button type="button" id="assignBtn">심사번호 부여</button>
+        <label class="muted">PDF 뒤에서 뺄 쪽 수 (동의서) <input type="number" id="stripPages" min="0" max="10" value="0" style="width:64px;"></label>
+        <button type="button" class="primary" id="zipReviewBtn">심사용 ZIP</button>
+      </div>
+      <p class="muted">동의서 양식이 확정되면 그 쪽 수를 입력하세요. 0이면 원본 그대로 묶습니다. 학생이 순서를 바꿔 넣었을 수 있으므로, 심사위원에게 보내기 전에 몇 건은 직접 열어 확인해 주세요.</p>
+      <div class="log" id="reviewLog"></div>
+    </section>
+
+    <section class="card danger-zone">
+      <h2>일괄 파기</h2>
+      <p class="muted">보유기간이 끝나면 모든 접수 정보와 제출 파일을 삭제합니다. 되돌릴 수 없습니다. 필요한 경우 먼저 엑셀과 수상작 파일을 별도 보관 절차에 따라 보관하세요.</p>
+      <div class="toolbar" style="margin-top:10px;">
+        <input type="text" id="purgeConfirm" placeholder="확인을 위해 '파기'를 입력">
+        <button type="button" class="danger solid" id="purgeBtn">전체 파기</button>
+      </div>
+      <div class="log" id="purgeLog"></div>
+    </section>
+  </div>
+</div>
+
+<script type="module">
+  // ===== 설정: 접수 페이지(apply.html)와 같은 값을 넣는다 =====
+  const FIREBASE_CONFIG = {
+    apiKey: '',
+    authDomain: '',
+    projectId: '',
+    storageBucket: '',
+    messagingSenderId: '',
+    appId: ''
+  };
+  // ===== 설정 끝 =====
+
+  const SDK = 'https://www.gstatic.com/firebasejs/10.12.5/';
+  const STATUSES = ['접수', '보완요청', '심사대상', '제외'];
+  const $ = id => document.getElementById(id);
+  const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const receiptOf = id => id.slice(0, 8).toUpperCase();
+  const fmtSize = b => b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + 'MB' : Math.max(1, Math.round(b / 1024)) + 'KB';
+  const fmtKST = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
+  const toKSTInput = ms => new Date(ms + 9 * 3600e3).toISOString().slice(0, 16);
+  const fromKSTInput = s => new Date(s + ':00+09:00');
+
+  if (!FIREBASE_CONFIG.projectId) {
+    document.querySelector('.wrap').innerHTML = '<div class="card center-box"><h2>설정이 필요합니다</h2><p>admin.html 상단의 FIREBASE_CONFIG를 채워 주세요.</p></div>';
+    throw new Error('FIREBASE_CONFIG가 비어 있습니다.');
+  }
+
+  const [{ initializeApp }, fs, st, au] = await Promise.all([
+    import(SDK + 'firebase-app.js'),
+    import(SDK + 'firebase-firestore.js'),
+    import(SDK + 'firebase-storage.js'),
+    import(SDK + 'firebase-auth.js')
+  ]);
+  const app = initializeApp(FIREBASE_CONFIG);
+  const db = fs.getFirestore(app);
+  const storage = st.getStorage(app);
+  const auth = au.getAuth(app);
+  await au.setPersistence(auth, au.browserSessionPersistence); // 탭을 닫으면 로그아웃
+
+  function show(view) {
+    ['loginView', 'deniedView', 'mainView'].forEach(v => { $(v).hidden = v !== view; });
+  }
+
+  $('loginBtn').onclick = () => au.signInWithPopup(auth, new au.GoogleAuthProvider()).catch(err => alert('로그인하지 못했습니다: ' + err.message));
+  $('logoutBtn').onclick = () => au.signOut(auth);
+
+  au.onAuthStateChanged(auth, async user => {
+    $('who').hidden = !user;
+    if (!user) { show('loginView'); return; }
+    $('whoEmail').textContent = user.email || '';
+    try {
+      await fs.getDoc(fs.doc(db, 'config', 'admins')); // 관리자가 아니면 permission-denied
+    } catch (err) {
+      $('myUid').textContent = user.uid;
+      show('deniedView');
+      return;
+    }
+    show('mainView');
+    await Promise.all([loadPeriod(), loadRows()]);
+  });
+
+  // ===== 응모 기간 =====
+  async function loadPeriod() {
+    const snap = await fs.getDoc(fs.doc(db, 'config', 'contest'));
+    const pill = $('periodPill');
+    if (!snap.exists()) {
+      pill.className = 'pill wait'; pill.textContent = '미설정';
+      $('periodMeta').textContent = '응모 기간이 설정되지 않아 접수가 막혀 있습니다.';
+      return;
+    }
+    const c = snap.data();
+    const open = c.openAt.toMillis(), close = c.closeAt.toMillis(), now = Date.now();
+    $('openAt').value = toKSTInput(open);
+    $('closeAt').value = toKSTInput(close);
+    if (now < open) { pill.className = 'pill wait'; pill.textContent = '접수 전'; }
+    else if (now >= close) { pill.className = 'pill closed'; pill.textContent = '마감'; }
+    else { pill.className = 'pill open'; pill.textContent = '접수 중'; }
+    $('periodMeta').textContent = c.updatedAt ? `마지막 수정: ${fmtKST.format(c.updatedAt.toDate())} · ${c.updatedBy || ''}` : '';
+  }
+
+  $('savePeriodBtn').onclick = async () => {
+    const o = $('openAt').value, c = $('closeAt').value;
+    if (!o || !c) { alert('시작과 마감 시각을 모두 입력해 주세요.'); return; }
+    const openAt = fromKSTInput(o), closeAt = fromKSTInput(c);
+    if (openAt >= closeAt) { alert('마감 시각은 시작 시각보다 뒤여야 합니다.'); return; }
+    if (!confirm(`응모 기간을 다음과 같이 저장합니다.\n\n시작: ${fmtKST.format(openAt)}\n마감: ${fmtKST.format(closeAt)}`)) return;
+    try {
+      await fs.setDoc(fs.doc(db, 'config', 'contest'), {
+        openAt: fs.Timestamp.fromDate(openAt),
+        closeAt: fs.Timestamp.fromDate(closeAt),
+        updatedAt: fs.serverTimestamp(),
+        updatedBy: auth.currentUser.email || auth.currentUser.uid
+      });
+      await loadPeriod();
+      alert('저장했습니다.');
+    } catch (err) {
+      alert('저장하지 못했습니다: ' + err.message);
+    }
+  };
+
+  // ===== 접수 목록 =====
+  let rows = [];
+
+  async function loadRows() {
+    const snap = await fs.getDocs(fs.query(fs.collection(db, 'submissions'), fs.orderBy('createdAt', 'desc')));
+    rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    markDuplicates();
+    fillFilters();
+    render();
+  }
+
+  // 성명·학교·보호자 연락처가 같으면 같은 학생으로 보고, 가장 늦은 제출만 최종본으로 표시한다.
+  function markDuplicates() {
+    const groups = {};
+    rows.forEach(r => {
+      const key = [r.name, r.school, r.guardianPhone].map(v => String(v || '').replace(/\s/g, '')).join('|');
+      (groups[key] = groups[key] || []).push(r);
+    });
+    rows.forEach(r => { r._dup = ''; });
+    Object.values(groups).forEach(g => {
+      if (g.length < 2) return;
+      g.sort((a, b) => b.createdAt.toMillis() - a.createdAt.toMillis());
+      g.forEach((r, i) => { r._dup = i === 0 ? '최종본' : '이전본'; });
+    });
+  }
+
+  function fillFilters() {
+    const keepS = $('fStatus').value, keepC = $('fCenter').value;
+    $('fStatus').innerHTML = '<option value="">상태 전체</option>' + STATUSES.map(s => `<option>${s}</option>`).join('');
+    const centers = [...new Set(rows.map(r => r.center))].sort((a, b) => a.localeCompare(b, 'ko'));
+    $('fCenter').innerHTML = '<option value="">센터 전체</option>' + centers.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    $('fStatus').value = keepS; $('fCenter').value = centers.includes(keepC) ? keepC : '';
+  }
+
+  function filtered() {
+    const q = $('q').value.trim().toLowerCase(), s = $('fStatus').value, c = $('fCenter').value;
+    return rows.filter(r =>
+      (!s || r.status === s) && (!c || r.center === c) &&
+      (!q || [r.name, r.school, r.center, receiptOf(r.id), r.reviewNo].some(v => String(v || '').toLowerCase().includes(q))));
+  }
+
+  function render() {
+    const list = filtered();
+    const count = s => rows.filter(r => r.status === s).length;
+    $('kTotal').textContent = rows.length;
+    $('kNew').textContent = count('접수');
+    $('kFix').textContent = count('보완요청');
+    $('kReview').textContent = count('심사대상');
+    $('kOut').textContent = count('제외');
+    $('kDup').textContent = rows.filter(r => r._dup === '이전본').length;
+
+    if (!list.length) {
+      $('rows').innerHTML = `<tr><td colspan="12" class="empty">${rows.length ? '조건에 맞는 접수 건이 없습니다.' : '아직 접수된 건이 없습니다.'}</td></tr>`;
+      return;
+    }
+    $('rows').innerHTML = list.map(r => `
+      <tr data-id="${esc(r.id)}">
+        <td class="mono">${receiptOf(r.id)}</td>
+        <td class="mono">${r.createdAt ? fmtKST.format(r.createdAt.toDate()) : ''}</td>
+        <td>${esc(r.name)}</td>
+        <td>${esc(r.school)}<br><span class="muted">${esc(r.grade)}</span></td>
+        <td>${esc(r.center)}</td>
+        <td class="mono">${esc(r.firstVisit)}</td>
+        <td>${esc(r.guardianName)}<br><span class="muted mono">${esc(r.guardianPhone)}</span></td>
+        <td><button type="button" data-act="view">보기</button><br><span class="muted">${fmtSize(r.fileSize)}</span></td>
+        <td>${r._dup ? `<span class="tag ${r._dup === '최종본' ? 'final' : 'dup'}">${r._dup}</span>` : ''}</td>
+        <td><select data-act="status">${STATUSES.map(s => `<option ${s === r.status ? 'selected' : ''}>${s}</option>`).join('')}</select></td>
+        <td class="mono">${esc(r.reviewNo || '')}</td>
+        <td><input class="memo" data-act="memo" value="${esc(r.memo || '')}" placeholder="메모 입력 후 Enter"></td>
+      </tr>`).join('');
+  }
+
+  ['q', 'fStatus', 'fCenter'].forEach(id => $(id).addEventListener('input', render));
+  $('reloadBtn').onclick = () => loadRows().catch(err => alert('불러오지 못했습니다: ' + err.message));
+
+  async function saveField(id, patch) {
+    await fs.updateDoc(fs.doc(db, 'submissions', id), { ...patch, updatedAt: fs.serverTimestamp() });
+    Object.assign(rows.find(r => r.id === id), patch);
+  }
+
+  $('rows').addEventListener('change', async e => {
+    const tr = e.target.closest('tr'); if (!tr) return;
+    const id = tr.dataset.id;
+    try {
+      if (e.target.dataset.act === 'status') { await saveField(id, { status: e.target.value }); render(); }
+      if (e.target.dataset.act === 'memo') { await saveField(id, { memo: e.target.value.trim() }); e.target.style.background = '#eaf6ef'; }
+    } catch (err) { alert('저장하지 못했습니다: ' + err.message); }
+  });
+  $('rows').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.dataset.act === 'memo') e.target.blur(); });
+
+  // PDF 보기: 다운로드 URL(링크만 알면 누구나 열람 가능)을 만들지 않고, 로그인한 관리자 권한으로 파일을 직접 받는다.
+  const getPdf = r => st.getBlob(st.ref(storage, r.filePath));
+  $('rows').addEventListener('click', async e => {
+    if (e.target.dataset.act !== 'view') return;
+    const r = rows.find(x => x.id === e.target.closest('tr').dataset.id);
+    const win = window.open('', '_blank');
+    try {
+      const blob = await getPdf(r);
+      win.location.href = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+    } catch (err) {
+      win && win.close();
+      alert('파일을 열지 못했습니다. (CORS 설정 확인 필요)\n' + err.message);
+    }
+  });
+
+  // ===== 내보내기 =====
+  const stamp = () => toKSTInput(Date.now()).replace(/[-:T]/g, '').slice(0, 12);
+  function downloadBlob(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+
+  $('excelBtn').onclick = () => {
+    const data = filtered().map(r => ({
+      '접수번호': receiptOf(r.id), '접수일시': r.createdAt ? fmtKST.format(r.createdAt.toDate()) : '',
+      '성명': r.name, '학교': r.school, '학년': r.grade, '센터': r.center, '최초 등원': r.firstVisit,
+      '보호자 성명': r.guardianName, '보호자 연락처': r.guardianPhone, '파일 크기': fmtSize(r.fileSize),
+      '중복': r._dup, '상태': r.status, '심사번호': r.reviewNo || '', '메모': r.memo || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '접수대장');
+    XLSX.writeFile(wb, `활용수기_접수대장_${stamp()}.xlsx`);
+  };
+
+  async function buildZip(list, nameOf, log, transform) {
+    const zip = new JSZip();
+    const failed = [];
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i];
+      log.textContent = `파일 받는 중 ${i + 1} / ${list.length}`;
+      try {
+        let bytes = await (await getPdf(r)).arrayBuffer();
+        if (transform) bytes = await transform(bytes, r, failed);
+        zip.file(nameOf(r), bytes);
+      } catch (err) {
+        failed.push(`${receiptOf(r.id)}: 파일을 받지 못함 (${err.message})`);
+      }
+    }
+    log.textContent = '압축 중';
+    const blob = await zip.generateAsync({ type: 'blob' });
+    log.textContent = `완료: ${list.length - failed.filter(f => f.includes('받지 못함')).length}건` + (failed.length ? `\n확인 필요:\n${failed.join('\n')}` : '');
+    return blob;
+  }
+
+  $('zipAllBtn').onclick = async () => {
+    const list = filtered();
+    if (!list.length) { alert('내려받을 건이 없습니다.'); return; }
+    if (!confirm(`현재 목록의 ${list.length}건을 내려받습니다. 파일명에 접수번호와 성명이 들어갑니다. 내부 보관용으로만 사용하세요.`)) return;
+    const blob = await buildZip(list, r => `${receiptOf(r.id)}_${r.name}.pdf`.replace(/[\\/:*?"<>|]/g, '_'), $('reviewLog'));
+    downloadBlob(blob, `활용수기_전체_${stamp()}.zip`);
+  };
+
+  // ===== 심사 자료 =====
+  $('assignBtn').onclick = async () => {
+    const targets = rows.filter(r => r.status === '심사대상').sort((a, b) => a.createdAt.toMillis() - b.createdAt.toMillis());
+    const used = targets.map(r => parseInt(String(r.reviewNo || '').replace(/\D/g, ''), 10)).filter(n => n > 0);
+    let next = used.length ? Math.max(...used) + 1 : 1;
+    const need = targets.filter(r => !r.reviewNo);
+    if (!need.length) { alert('번호를 새로 붙일 심사대상이 없습니다.'); return; }
+    if (!confirm(`심사대상 ${need.length}건에 심사번호를 부여합니다.`)) return;
+    try {
+      for (const r of need) await saveField(r.id, { reviewNo: `심사-${String(next++).padStart(3, '0')}` });
+      render();
+      $('reviewLog').textContent = `${need.length}건에 심사번호를 부여했습니다.`;
+    } catch (err) { alert('번호를 저장하지 못했습니다: ' + err.message); }
+  };
+
+  $('zipReviewBtn').onclick = async () => {
+    const list = rows.filter(r => r.status === '심사대상');
+    if (!list.length) { alert('심사대상이 없습니다.'); return; }
+    if (list.some(r => !r.reviewNo)) { alert('심사번호가 없는 심사대상이 있습니다. 먼저 [심사번호 부여]를 눌러 주세요.'); return; }
+    const strip = Math.max(0, parseInt($('stripPages').value, 10) || 0);
+    const transform = strip ? async (bytes, r, failed) => {
+      try {
+        const pdf = await PDFLib.PDFDocument.load(bytes);
+        const total = pdf.getPageCount();
+        if (total <= strip) { failed.push(`${r.reviewNo}: 전체 ${total}쪽이라 뒤 ${strip}쪽을 뺄 수 없어 원본 그대로 넣음`); return bytes; }
+        for (let i = 0; i < strip; i++) pdf.removePage(pdf.getPageCount() - 1);
+        return await pdf.save();
+      } catch (err) {
+        failed.push(`${r.reviewNo}: PDF를 편집할 수 없어 원본 그대로 넣음 (${err.message})`);
+        return bytes;
+      }
+    } : null;
+    const blob = await buildZip(list.sort((a, b) => a.reviewNo.localeCompare(b.reviewNo)), r => `${r.reviewNo}.pdf`, $('reviewLog'), transform);
+    downloadBlob(blob, `활용수기_심사용_${stamp()}.zip`);
+  };
+
+  // ===== 일괄 파기 =====
+  $('purgeBtn').onclick = async () => {
+    if ($('purgeConfirm').value.trim() !== '파기') { alert("확인 칸에 '파기'를 입력해 주세요."); return; }
+    if (!confirm('모든 접수 정보와 제출 파일을 삭제합니다. 되돌릴 수 없습니다. 계속할까요?')) return;
+    const log = $('purgeLog');
+    try {
+      const files = await st.listAll(st.ref(storage, 'submissions'));
+      for (let i = 0; i < files.items.length; i++) {
+        log.textContent = `파일 삭제 중 ${i + 1} / ${files.items.length}`;
+        await st.deleteObject(files.items[i]);
+      }
+      const docs = await fs.getDocs(fs.collection(db, 'submissions'));
+      for (let i = 0; i < docs.docs.length; i += 400) {
+        const batch = fs.writeBatch(db);
+        docs.docs.slice(i, i + 400).forEach(d => batch.delete(d.ref));
+        await batch.commit();
+      }
+      log.textContent = `파기 완료: 파일 ${files.items.length}개, 접수 정보 ${docs.size}건 삭제 (${fmtKST.format(new Date())})\n파기 일시와 건수를 파기 대장에 기록해 주세요.`;
+      $('purgeConfirm').value = '';
+      await loadRows();
+    } catch (err) {
+      log.textContent = '파기 중 오류가 발생했습니다. 다시 실행해 주세요: ' + err.message;
+    }
+  };
+</script>
+</body>
+</html>

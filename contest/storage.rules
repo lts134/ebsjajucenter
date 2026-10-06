@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// 2026 자기주도학습센터 활용수기 공모 - Storage 보안 규칙
+// Firebase 콘솔 > Storage > 규칙 탭에 전체를 붙여넣고 [게시]한다.
+// 응모 기간과 관리자 목록은 Firestore의 config 문서를 읽는다(서비스 간 규칙).
+// 처음 게시할 때 "Firestore 접근 권한 부여" 안내가 나오면 허용해야 한다.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.uid in firestore.get(/databases/(default)/documents/config/admins).data.uids;
+    }
+
+    function isOpen() {
+      let c = firestore.get(/databases/(default)/documents/config/contest).data;
+      return request.time >= c.openAt && request.time < c.closeAt;
+    }
+
+    match /submissions/{fileName} {
+      // 학생: 응모 기간 안에, 무작위 이름의 새 PDF만, 10MB 이하로 올릴 수 있다.
+      // 이미 있는 파일은 덮어쓸 수 없다(resource == null: 기존 파일이 없을 때만).
+      allow create: if resource == null
+        && isOpen()
+        && fileName.matches('[A-Za-z0-9]{20}[.]pdf')
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf';
+
+      // 관리자: 내려받기·목록·삭제
+      allow get, list, delete: if isAdmin();
+    }
+  }
+}
