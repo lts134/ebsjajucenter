@@ -94,3 +94,43 @@ def test_suggest_mapping_uses_claude_and_validates(monkeypatch):
     sent = fake.calls[0]["messages"][0]["content"]
     assert "등원율(%)" in sent and "가군" in sent and fake.calls[0]["schema"] is not None
     llm.reset()
+
+FX = Path(__file__).parent / "fixtures"
+
+def test_hwpx_merged_header_table_grid_and_conversion():
+    """한글식 표: 세로·가로 병합 머리글(cellAddr·cellSpan) → 격자 복원 → 머리글 합침 → 변환."""
+    import docread
+    data = (FX / "회신_병합머리글.hwpx").read_bytes()
+    tables = docread.hwpx_tables(data)
+    assert len(tables) == 1 and tables[0][0] == ["구분", "개소", "개소", "등록 학생 수", "등원율(%)"] and tables[0][1][1:3] == ["운영", "준비"]
+    grids, text = tabular.grids_from_document("회신_병합머리글.hwpx", data)
+    assert len(grids) == 1 and "2026. 6. 30. 기준" in text and grids[0].kind == "document"
+    info = tabular.analyze(grids[0])
+    assert info.header == ["구분", "개소 운영", "개소 준비", "등록 학생 수", "등원율(%)"] and info.center_col == 0 and info.value_cols == [1, 2, 3, 4]
+    df = tabular.wide_to_long(grids[0], info, 0, [3, 4], "2026-06-30", source_version="회신 문서 표에서 추출")
+    assert len(df) == 6 and set(df["indicator"]) == {"등록 학생 수", "등원율"} and df["source_row"].tolist() == [3, 3, 4, 4, 5, 5]
+
+def test_hwpx_nested_frame_table_picks_inner_data_table():
+    """공문 틀(바깥 표) 안에 내용 표가 중첩된 경우: 두 표 모두 나오고, 숫자가 많은 안쪽 표가 기본 선택. 바깥 셀 글자에 안쪽 표 글자가 섞이지 않음."""
+    import docread
+    data = (FX / "회신_공문틀_중첩.hwpx").read_bytes()
+    tables = docread.hwpx_tables(data)
+    assert len(tables) == 2 and tables[0][0] == ["○○공사 ○○센터"] and tables[0][1] == [None] and tables[1][2][0] == "센터A"
+    grids, text = tabular.grids_from_document("회신_공문틀_중첩.hwpx", data)
+    assert [g.source_sheet for g in grids] == ["표 1"] and grids[0].rows[2][0] == "센터A"       # 1열짜리 틀 표는 제외
+    assert text.count("센터A") == 1 and "○○공사 ○○센터" in text
+    assert tabular.numeric_cells(grids[0]) >= 12
+
+def test_docx_merged_header_table():
+    data = (FX / "회신_병합머리글.docx").read_bytes()
+    grids, _ = tabular.grids_from_document("회신_병합머리글.docx", data)
+    info = tabular.analyze(grids[0])
+    assert info.header == ["센터명", "지표 등록 학생 수", "지표 등원율(%)"] and info.center_col == 0 and info.value_cols == [1, 2]
+    df = tabular.wide_to_long(grids[0], info, 0, [1, 2], "2026-06-30", {1: "등록 학생 수", 2: "등원율"})
+    assert df["value"].tolist() == [120.0, 67.8, 95.0, 71.2]
+
+def test_numbers_with_korean_units():
+    assert tabular.is_num("120명") and tabular.is_num("3개소") and tabular.is_num("1,234천원") and not tabular.is_num("센터A")
+    assert compare.clean_number("120명") == 120.0 and compare.clean_number("1,234천원") == 1234.0 and compare.clean_number("67.8 %") == 67.8
+    g = tabular.read_grid(xlsx([["센터명", "등록 학생 수"], ["센터A", "120명"], ["센터B", "95명"]])); info = tabular.analyze(g)
+    assert info.value_cols == [1] and tabular.wide_to_long(g, info, 0, [1], "2026-06-30")["value"].tolist() == [120.0, 95.0]

@@ -33,7 +33,7 @@ def is_num(v) -> bool:
     """숫자로 볼 셀: 수치형, 또는 '67.8%' '1,234' '-' 같은 문자열. 날짜 셀·한글 문자열은 아님."""
     if isinstance(v, bool): return False
     if isinstance(v, (int, float)): return not pd.isna(v)
-    if isinstance(v, str): return bool(re.fullmatch(r"[-+]?[\d,]*\.?\d+\s*%?|-", v.strip()))
+    if isinstance(v, str): return bool(re.fullmatch(r"[-+]?[\d,]*\.?\d+\s*(?:%|" + compare.UNIT_SUFFIX + r")?|-", v.strip()))
     return False
 
 def is_date(v) -> bool:
@@ -101,6 +101,27 @@ def grids_from_text(doc_text: str, source_file: str = "") -> list[Grid]:
     flush()
     return grids
 
+def grids_from_document(name: str, data: bytes) -> tuple[list[Grid], str]:
+    """회신 문서 → 표 격자 목록과 본문 텍스트. hwpx·docx는 표 개체(셀 주소·병합 반영)에서 직접 꺼내고,
+    표 개체가 없거나 pdf·txt면 본문 텍스트에서 표 모양 줄을 찾는다. 2행·2열 미만 표는 버린다."""
+    import docread
+    text = docread.read(name, data)
+    tables = docread.tables(name, data)
+    grids = []
+    if tables:
+        for t in tables:
+            w = max((len(r) for r in t), default=0)
+            rows = [[(c if not is_blank(c) else None) for c in r] + [None] * (w - len(r)) for r in t]
+            if len(rows) >= 2 and w >= 2 and any(not is_blank(c) for r in rows for c in r):
+                grids.append(Grid(rows=rows, source_file=os.path.basename(name), source_sheet=f"표 {len(grids) + 1}", row_offset=1, kind="document"))
+    if not grids:
+        grids = grids_from_text(text, os.path.basename(name))
+    return grids, text
+
+def numeric_cells(grid: Grid) -> int:
+    """격자 안 숫자 셀 수 — 여러 표 중 값 표(기본 선택)를 고르는 데 쓴다."""
+    return sum(is_num(c) for r in grid.rows for c in r)
+
 # ---------- 표 구조 분석 ----------
 @dataclass
 class TableInfo:
@@ -119,7 +140,8 @@ class TableInfo:
 def _norm_header(h: str) -> str: return re.sub(r"\s+", " ", h).strip()
 
 def _alias_hits(cells: list) -> int:
-    return sum(1 for c in cells if _norm_header(text(c)) in ALIASES)
+    """긴 형식 머리글 판정용: 서로 다른 표준 열(지표·센터·기준일·값…)로 매핑되는 셀 수. '지표 | 지표'처럼 병합 반복은 1로 센다."""
+    return len({ALIASES[_norm_header(text(c))] for c in cells if _norm_header(text(c)) in ALIASES})
 
 def _looks_like_header(cells: list) -> bool:
     """'시군구 | 2024 | 2025 | 2026'처럼 연도·월 숫자가 머리글에 있는 행: 첫 칸이 센터류 이름이고 숫자는 모두 연도(1900~2100) 또는 1~12."""

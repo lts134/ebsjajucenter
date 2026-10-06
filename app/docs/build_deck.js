@@ -270,7 +270,7 @@ box(6.2, 2.1, 2.6, 1.5, "검색·제안", "search(문자 n-gram, 외부 API 없�
 box(0.8, 3.8, 2.5, 1.5, "대조·점검 (코드)", "compare(pandas) · pii\n차이·단서·점검표·출처");
 box(3.5, 3.8, 2.5, 1.5, "초안·출력·보조", "draft · hwpx_out\nassist(사유 후보·후속 질문) · history_qa(조회 도구 7종)");
 box(6.2, 3.8, 2.6, 1.5, "이력 DB (SQLite 1파일, 공유)", "requests · items · submissions\nsubmission_values(출처) · diff_reasons · drafts · reviews\nWAL 모드(동시 접속)");
-box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 72건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
+box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 76건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
 // 우: API
 box(9.3, 1.5, 3.45, 2.3, "LLM 공급자 모듈 (선택)", "llm.py 공통 호출 → providers.py 플러그인\n· 기본 Anthropic Claude, provider_*.py 파일 하나로 사내 게이트웨이 등 교체\n· 모델 자동 대체, 구조화 출력 + 텍스트 파싱 대체\n· 도구 호출 루프(⑧), 재시도·타임아웃\n· 호출별 모델·지연·토큰·추정 비용(세션별)", C.accent1, C.background1);
 box(9.3, 4.0, 3.45, 1.5, "밖으로 나가는 것", "요구서 문안 · 센터 단위 확정 집계값 · 담당자 입력 사유 · 산출 근거 메타\n(개인 단위 원자료는 전달하지 않음)", C.background2);
@@ -283,7 +283,7 @@ s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "구현" });
 s.addText("검증 결과 — 실측치", { placeholder: "title" });
 stat(s, 0.6, 1.5, 3.0, "25 / 25", "요구서 추출 필수 쌍 재현\nClaude 경로 · 9사례 · 초과·오탐 0\n(9/28·10/04 두 차례, sonnet-4-6)");
 stat(s, 3.7, 1.5, 3.0, "4.6초", "요구서 1건 추출 평균 지연\n(10/04, 9건, JSON 스키마 포함)");
-stat(s, 6.8, 1.5, 3.0, "72", "pytest 단위 테스트 통과\n(모듈 45 + 리뷰 회귀 10 + 보안 3 + 세션·공급자 6 + 표 구조 8)");
+stat(s, 6.8, 1.5, 3.0, "76", "pytest 단위 테스트 통과\n(모듈 45 + 리뷰 회귀 10 + 보안 3 + 세션·공급자 6 + 표 구조·문서 표 12)");
 stat(s, 9.9, 1.5, 3.0, "9 / 9", "화면 ①~⑧+설정 흐름 구동\nAppTest + 실제 브라우저, 오류 0");
 const rows = [
   [{ text: "항목", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "결과", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "비고", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }],

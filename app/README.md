@@ -40,7 +40,7 @@
 제출용 ZIP: `python make_submission_zip.py` → `../dist/` (이력 DB·출력물·캐시 제외)
 
 ## 점검
-- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 72건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
+- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 76건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
 - `python check_llm.py` → 샘플 4건 + 실전형 5건(`testcases.py`, 전부 가상)을 규칙/Claude 양쪽으로 추출해 정답표와 비교
 - 결과: `storage/llm_check_<날짜>.md`(채점표 + 사례별 추출 결과 + 호출 기록) / `.json`
 - 규칙 경로는 이 사례들에 맞춰 조정된 것이므로 100%가 당연함. Claude 경로 점수와 오류 유형이 실제 점검 대상

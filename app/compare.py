@@ -3,6 +3,7 @@ import io, os, re
 from pathlib import Path
 import pandas as pd
 
+UNIT_SUFFIX = r"(?:명|개소|개|건|원|회|시간|일|점|천원|백만원|억원|％)"
 KEY = ["indicator", "center", "base_date"]
 REQUIRED = ["indicator", "center", "base_date", "value"]
 
@@ -46,6 +47,7 @@ def clean_number(v):
     if v is None or (isinstance(v, float) and pd.isna(v)): return float("nan")
     if isinstance(v, (int, float)): return float(v)
     s = re.sub(r"[%,\s]", "", str(v))
+    s = re.sub(UNIT_SUFFIX + r"$", "", s)                      # '120명', '3개소', '1,234천원' → 숫자만
     if s in ("", "-", "nan", "None", "NaN"): return float("nan")
     try: return float(s)
     except ValueError: return float("nan")

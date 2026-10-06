@@ -112,11 +112,17 @@ def value_table_input(key: str, what: str = "제출값"):
     if mode.startswith("회신 문서"):
         up = st.file_uploader(f"{what}이 들어 있는 회신 문서 (hwpx / docx / pdf)", type=["hwpx", "docx", "pdf"], key=f"{key}_doc")
         if not up: return None, ""
-        text = read_doc(up)
-        grids = tabular.grids_from_text(text, up.name) if text else []
+        try: grids, text = tabular.grids_from_document(up.name, up.getvalue())
+        except Exception as e:
+            st.error(f"문서를 읽지 못했습니다: {e}"); return None, up.name
         if not grids:
-            st.error("문서에서 표를 찾지 못했습니다. PDF는 글자가 추출되는 파일이어야 하며(스캔본 불가), 표가 없으면 '직접 입력'을 쓰세요."); return None, up.name
-        g = st.selectbox("문서 안의 표", grids, format_func=lambda g: f"{g.source_sheet} — {len(g.rows)}행 × {g.width()}열 (문서 {g.row_offset}번째 줄부터)", key=f"{key}_tbl")
+            st.error("문서에서 표를 찾지 못했습니다. hwpx·docx는 표 개체여야 하고(탭·공백으로 맞춘 글은 표가 아님), PDF는 글자가 추출되는 파일이어야 합니다(스캔본 불가). 표가 없으면 '직접 입력'을 쓰세요.")
+            with st.expander(f"진단: 추출된 본문 {len(text)}자 — 앞부분 보기"):
+                st.text("\n".join(text.splitlines()[:40]) or "(본문이 비어 있음 — 배포용 문서이거나 그림으로 된 문서일 수 있음)")
+            return None, up.name
+        best = max(range(len(grids)), key=lambda i: tabular.numeric_cells(grids[i]))         # 숫자가 가장 많은 표를 기본 선택
+        g = st.selectbox("문서 안의 표 (숫자가 많은 표가 기본 선택)", grids, index=best, key=f"{key}_tbl",
+                         format_func=lambda g: f"{g.source_sheet} — {len(g.rows)}행 × {g.width()}열" + (f" (문서 {g.row_offset}번째 줄부터)" if g.row_offset > 1 else ""))
         return _grid_to_values(g, f"{key}_{g.source_sheet}", f"회신 문서({up.name}) 표에서 추출"), up.name
     st.caption("표 파일이 없을 때. 행을 추가해 지표명·센터명·기준일·값을 채우세요. 근거 4칸은 선택입니다.")
     man = st.data_editor(pd.DataFrame(columns=tabular.MANUAL_COLS), num_rows="dynamic", width="stretch", key=f"{key}_man")
