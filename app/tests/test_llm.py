@@ -12,9 +12,12 @@ class _M:
 def err(cls, status, msg):
     req = httpx.Request("POST", "https://x"); return cls(msg, response=httpx.Response(status, request=req, json={"error": {"message": msg}}), body=None)
 
-class Fake:
-    def __init__(s, script): s.script, s.calls = list(script), []; s.messages = s
-    def create(s, **kw):
+import providers
+
+class Fake(providers.AnthropicProvider):
+    """실제 SDK 대신 각본대로 응답하는 공급자. create_message 호출 인자를 calls에 기록."""
+    def __init__(s, script): super().__init__({"api_key": "sk-test"}); s.script, s.calls = list(script), []
+    def create_message(s, **kw):
         s.calls.append(kw); r = s.script.pop(0)
         if isinstance(r, Exception): raise r
         return _M(r)
@@ -22,22 +25,23 @@ class Fake:
 @pytest.fixture(autouse=True)
 def reset(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    llm._RESOLVED = None; llm._NO_STRUCTURED.clear(); llm.LOG.clear(); llm.LAST.clear()
+    llm.reset()
     yield
+    llm.reset()
 
-def use(monkeypatch, fake): monkeypatch.setattr(llm, "_client", lambda: fake); return fake
+def use(monkeypatch, fake): monkeypatch.setattr(llm, "_provider", lambda: fake); return fake
 
 def test_structured_output_used_and_recorded(monkeypatch):
     f = use(monkeypatch, Fake(['{"a": 1}']))
     assert llm.ask_json("p", schema={"type": "object"}) == {"a": 1}
-    assert "output_config" in f.calls[0] and llm.LAST["structured"] is True and llm.LAST["cost_usd"] == 0.0075
+    assert f.calls[0]["schema"] is not None and llm.LAST["structured"] is True and llm.LAST["cost_usd"] == 0.0075
 
 def test_400_on_output_config_falls_back_to_text_and_remembers(monkeypatch):
     f = use(monkeypatch, Fake([err(anthropic.BadRequestError, 400, "output_config: extra inputs"), '```json\n{"a": 2}\n```', '{"a": 3}']))
     assert llm.ask_json("p", schema={"type": "object"}) == {"a": 2}
-    assert [("output_config" in c) for c in f.calls[:2]] == [True, False] and llm.LAST["structured"] is False
+    assert [(c["schema"] is not None) for c in f.calls[:2]] == [True, False] and llm.LAST["structured"] is False
     llm.ask_json("p", schema={"type": "object"})
-    assert "output_config" not in f.calls[2]            # 같은 모델엔 다시 시도하지 않음
+    assert f.calls[2]["schema"] is None            # 같은 모델엔 다시 시도하지 않음
 
 def test_404_moves_to_next_candidate(monkeypatch):
     f = use(monkeypatch, Fake([err(anthropic.NotFoundError, 404, "model"), '{"ok": true}']))
@@ -58,7 +62,7 @@ def test_parse_json_array_and_noise():
 
 def test_usage_summary_and_pricing_unknown(monkeypatch):
     use(monkeypatch, Fake(['{"a":1}', '{"a":1}']))
-    llm.ask("p"); monkeypatch.setenv("CLAUDE_MODEL", "claude-unknown-9"); llm._RESOLVED = None; llm.ask("p")
+    llm.ask("p"); monkeypatch.setenv("CLAUDE_MODEL", "claude-unknown-9"); llm._GLOBAL_STATE["resolved"] = None; llm.ask("p")
     u = llm.usage_summary()
     assert u["calls"] == 2 and u["cost_unknown_calls"] == 1 and u["cost_usd"] == 0.0075
 

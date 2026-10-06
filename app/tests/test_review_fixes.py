@@ -30,9 +30,9 @@ def test_empty_text_similarity_is_zero():
     assert search._cos(search._grams("등원율"), search._grams("")) == 0.0
 
 def test_claude_model_preference_beats_resolved(monkeypatch):
-    monkeypatch.setenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001"); llm._RESOLVED = "claude-sonnet-4-6"
+    llm.reset(); monkeypatch.setenv("CLAUDE_MODEL", "claude-haiku-4-5-20251001"); llm._GLOBAL_STATE["resolved"] = "claude-sonnet-4-6"
     assert llm._model_order()[0] == "claude-haiku-4-5-20251001" and llm.model_label() == "claude-haiku-4-5-20251001"
-    llm._RESOLVED = None
+    llm.reset()
 
 def test_year_hint_from_due_or_document(monkeypatch):
     monkeypatch.setenv("APP_TODAY", "2031-01-15")

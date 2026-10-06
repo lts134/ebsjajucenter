@@ -24,6 +24,9 @@ HERE = Path(__file__).parent
 SAMPLE = HERE / "sample_data"
 TPL_DIR = HERE / "templates"
 OUT_DIR = HERE / "storage" / "out"; OUT_DIR.mkdir(parents=True, exist_ok=True)
+# ---- 접속자(세션)별 AI 설정: 키·모델·호출 기록은 이 브라우저 세션에만 속한다(다른 접속자와 공유되지 않음) ----
+st.session_state.setdefault("llm_cfg", {}); st.session_state.setdefault("llm_state", {}); st.session_state.setdefault("llm_log", [])
+llm.configure(st.session_state["llm_cfg"], st.session_state["llm_state"], st.session_state["llm_log"])
 HAS_API = llm.available()
 
 with st.sidebar:
@@ -34,11 +37,11 @@ with st.sidebar:
     USER = st.text_input("담당자 이름(기록용)", st.session_state.get("user_name", "담당자"), key="user_name") or "담당자"
     REVIEWER = st.text_input("검토자(팀장) 이름", st.session_state.get("reviewer_name", "팀장"), key="reviewer_name") or "팀장"
     st.divider()
-    st.caption(f"Claude API: {'연결됨 · ' + llm.model_label() if HAS_API else '없음 → 규칙 기반'}")
-    if HAS_API and llm.LOG:
+    st.caption(f"AI: {llm.provider_name()} · {'연결됨 · ' + llm.model_label() if HAS_API else '키 없음 → 규칙 기반'}")
+    if HAS_API and llm.log():
         u = llm.usage_summary()
         st.caption(f"이번 세션 호출 {u['calls']}회 · 토큰 {u['input_tokens']}/{u['output_tokens']} · 평균 {u['avg_latency_s']}초")
-        st.caption(f"추정 비용 ${u['cost_usd']:.4f}" + (f" (단가 미상 {u['cost_unknown_calls']}회 제외)" if u['cost_unknown_calls'] else "") + " · 구조화 출력 " + f"{u['structured_calls']}회")
+        st.caption(f"추정 비용 ${u['cost_usd']:.4f}" + (f" (단가 미상 {u['cost_unknown_calls']}회 제외)" if u['cost_unknown_calls'] else "") + " · 구조화 출력 " + f"{u['structured_calls']}회 · 이 세션(내 키)만 집계")
     st.caption(f"이력 DB: {db.DB_PATH.name}")
 
 @st.cache_data(show_spinner=False, max_entries=20)
@@ -433,31 +436,51 @@ elif page == "⑧ 이력에 묻기":
 
 # ================= 설정 =================
 else:
+    import providers
     st.header("설정")
-    st.subheader("Claude API")
-    st.write("키는 환경변수 `ANTHROPIC_API_KEY`로 두거나, 아래에 입력합니다. 입력한 키는 이 앱 실행(프로세스)이 끝날 때까지만 메모리에 있고 파일에 저장되지 않습니다. 한 PC에서 한 사람이 쓰는 전제이며, 여러 사람이 같은 실행을 공유하면 키도 공유됩니다. 없으면 규칙 기반으로 동작합니다.")
-    st.code('set ANTHROPIC_API_KEY=sk-ant-...   (cmd)\n$env:ANTHROPIC_API_KEY="sk-ant-..."   (PowerShell)')
-    key = st.text_input("API 키(이 실행 동안만)", type="password").strip()
-    if key:
-        os.environ["ANTHROPIC_API_KEY"] = key
-        if not HAS_API: st.rerun()                                      # 사이드바 상태·④ 'Claude 추가 점검' 버튼을 바로 갱신
-        st.success("이 세션에 적용됨. 아래 연결 테스트로 확인하세요.")
-    ws = st.text_input("워크스페이스 ID(ANTHROPIC_WORKSPACE_ID, wrkspc_…) — 키가 워크스페이스에 묶여 있지 않을 때만 필요", os.environ.get("ANTHROPIC_WORKSPACE_ID", ""), type="password")
-    if ws.strip(): os.environ["ANTHROPIC_WORKSPACE_ID"] = ws.strip()
-    elif "ANTHROPIC_WORKSPACE_ID" in os.environ: del os.environ["ANTHROPIC_WORKSPACE_ID"]
-    model = st.text_input("모델명(CLAUDE_MODEL, 비우면 자동: " + " → ".join(llm.CANDIDATES) + ")", os.environ.get("CLAUDE_MODEL", ""))
-    if model.strip(): os.environ["CLAUDE_MODEL"] = model.strip()
-    elif "CLAUDE_MODEL" in os.environ: del os.environ["CLAUDE_MODEL"]
-    if st.button("연결 테스트", type="primary", disabled=not llm.available()):
+    st.subheader("AI 공급자·키 (이 브라우저 세션에만 적용)")
+    st.write("접속한 사람마다 자기 키를 넣어 씁니다. 키는 서버 파일이나 다른 접속자에게 저장·공유되지 않고, 브라우저 탭을 닫으면 사라집니다. "
+             "운영자가 서버 환경변수에 공통 키를 두었다면 빈 칸으로 두어도 그 키로 동작합니다. 공급자는 모듈로 교체할 수 있습니다(아래 '공급자 추가 방법').")
+    cfg = st.session_state["llm_cfg"]
+    pnames = providers.names()
+    prov_name = st.selectbox("공급자", pnames, index=pnames.index(cfg.get("provider")) if cfg.get("provider") in pnames else 0,
+                             format_func=lambda n: f"{providers.PROVIDERS[n].label} ({n})")
+    pcls = providers.PROVIDERS[prov_name]
+    new_cfg = {"provider": prov_name}
+    for f in pcls.fields:
+        env_set = bool(os.environ.get(f.get("env", ""), ""))
+        hint = " · 서버 환경변수에 값이 있어 비워도 됨" if env_set else ""
+        new_cfg[f["key"]] = st.text_input(f["label"] + hint, value=cfg.get(f["key"], "") or "", type="password" if f.get("secret") else "default", key=f"cfg_{prov_name}_{f['key']}").strip()
+    models = st.session_state.get("model_list") or []
+    model_ids = [m["id"] for m in models]
+    pick = st.selectbox("모델 (비우면 공급자 기본 후보 순으로 자동: " + " → ".join(pcls.default_models) + ")", ["(자동)"] + model_ids + ["직접 입력"],
+                        index=(model_ids.index(cfg["model"]) + 1) if cfg.get("model") in model_ids else (len(model_ids) + 1 if cfg.get("model") else 0))
+    if pick == "직접 입력": new_cfg["model"] = st.text_input("모델 id", value=cfg.get("model", "") or "").strip()
+    elif pick == "(자동)": new_cfg["model"] = ""
+    else: new_cfg["model"] = pick
+    c1, c2, c3 = st.columns(3)
+    if c1.button("적용", type="primary"):
+        changed = {k: v for k, v in new_cfg.items() if v != cfg.get(k)}
+        cfg.clear(); cfg.update(new_cfg)
+        if "model" in changed or "provider" in changed: st.session_state["llm_state"] = {}    # 모델·공급자가 바뀌면 '성공한 모델' 기억을 지움
+        st.rerun()
+    if c2.button("키 지우기"):
+        cfg.clear(); st.session_state["llm_state"] = {}; st.session_state["model_list"] = []; st.rerun()
+    if c3.button("연결 테스트", disabled=not llm.available()):
         with st.spinner("호출 중…"):
             r = llm.test_connection()
-        if r.get("ok"): st.success(f"연결 성공 · 모델 {r['model']} · 왕복 {r['latency_s']}초 · 응답 {r.get('reply')}")
+        if r.get("ok"): st.success(f"연결 성공 · 공급자 {r.get('provider')} · 모델 {r['model']} · 왕복 {r['latency_s']}초 · 응답 {r.get('reply')}")
         else: st.error(f"연결 실패: {r.get('error')}")
         if r.get("models"):
-            st.caption("이 키로 쓸 수 있는 모델(위 모델명 칸에 id를 넣으면 고정)"); st.dataframe(pd.DataFrame(r["models"]), width="stretch", height=200)
+            st.session_state["model_list"] = r["models"]
+            st.caption("이 키로 쓸 수 있는 모델 — 위 '모델' 목록에 반영됨(다시 적용 필요)"); st.dataframe(pd.DataFrame(r["models"]), width="stretch", height=200)
         elif r.get("models_error"): st.caption(f"모델 목록 조회 실패: {r['models_error']}")
-    if llm.LOG:
-        st.caption("이번 세션 호출 기록"); st.dataframe(pd.DataFrame(llm.LOG), width="stretch", height=160)
+    st.caption(f"현재: 공급자 {llm.provider_name()} · {'키 있음' if HAS_API else '키 없음(규칙 기반)'} · 모델 {llm.model_label()}")
+    if providers._errors: st.warning("불러오지 못한 공급자 플러그인: " + "; ".join(f"{k}: {v}" for k, v in providers._errors.items()))
+    with st.expander("공급자 추가 방법(모듈 교체)"):
+        st.markdown("1. `docs/provider_template.py`를 복사해 `app/provider_<이름>.py`로 저장\n2. `name`·`label`·`fields`(입력칸)·`default_models`·`create_message()`를 채움. 응답은 Anthropic SDK 메시지와 같은 모양(`content` 블록, `stop_reason`, `usage`)이면 됨 — `providers.SimpleMessage`로 감싸면 됨\n3. 앱을 다시 시작하면 이 목록에 나타남. 기존 코드는 수정하지 않음\n4. 운영자가 서버 환경변수 `LLM_PROVIDER=<이름>`을 두면 그 공급자가 기본 선택")
+    if llm.log():
+        st.caption("이번 세션 호출 기록(내 키로 한 호출만)"); st.dataframe(pd.DataFrame(llm.log()), width="stretch", height=160)
     st.write("추출 품질 점검: 터미널에서 `python check_llm.py` 실행 → `storage/llm_check_날짜.md` (샘플 4건 + 실전형 5건을 규칙/Claude 양쪽으로 채점).")
     st.divider()
     st.write("회신 템플릿: `templates/` 폴더의 HWPX. 실제 부서 서식을 한글에서 열어 {{수신}} {{제목}} {{본문}} {{row.center}} 같은 자리표시자를 넣고 저장하면 그대로 사용됩니다.")

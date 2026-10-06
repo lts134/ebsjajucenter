@@ -96,6 +96,8 @@ def connect(_retry=True):
         con = sqlite3.connect(DB_PATH, timeout=15)
         con.row_factory = sqlite3.Row
         if str(DB_PATH) not in _initialized:      # 스키마 생성·마이그레이션은 프로세스당 1회
+            try: con.execute("PRAGMA journal_mode=WAL")   # 여러 접속자가 동시에 읽고 쓸 때 잠금 충돌을 줄인다
+            except sqlite3.DatabaseError: pass
             con.executescript(SCHEMA)
             _migrate(con)
             _initialized.add(str(DB_PATH))

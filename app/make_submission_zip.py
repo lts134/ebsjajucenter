@@ -6,7 +6,7 @@ from pathlib import Path
 APP = Path(__file__).parent
 DIST = APP.parent / "dist"; DIST.mkdir(exist_ok=True)
 EXCLUDE_DIRS = {"__pycache__", ".ruff_cache", "out", ".pytest_cache", "dist"}
-EXCLUDE_FILES = {"history.db", "history.db-journal", "shots.db", "apptest.db"}
+EXCLUDE_FILES = {"history.db", "history.db-journal", "history.db-wal", "history.db-shm", "shots.db", "apptest.db"}
 
 def wanted(p: Path) -> bool:
     if any(part in EXCLUDE_DIRS for part in p.relative_to(APP).parts): return False

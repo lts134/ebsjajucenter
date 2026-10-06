@@ -58,19 +58,20 @@ class _Use:
     def __init__(s, name, inp, id_): s.type, s.name, s.input, s.id = "tool_use", name, inp, id_
 class _M:
     def __init__(s, content, stop): s.content, s.stop_reason, s.usage = content, stop, _U()
-class Fake:
-    def __init__(s, script): s.script, s.calls = list(script), []; s.messages = s
-    def create(s, **kw):
+import providers
+class Fake(providers.AnthropicProvider):
+    def __init__(s, script): super().__init__({"api_key": "sk-test"}); s.script, s.calls = list(script), []
+    def create_message(s, **kw):
         s.calls.append(kw); r = s.script.pop(0)
         if isinstance(r, Exception): raise r
         return r
 
 def test_run_tools_loop_executes_handlers_and_returns_trace(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm._RESOLVED = None; llm.LOG.clear()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()
     fake = Fake([_M([_Use("search_requests", {"keyword": "감사실"}, "tu1")], "tool_use"),
                  _M([_Use("boom", {}, "tu2"), _Use("request_detail", {"request_id": 1}, "tu3")], "tool_use"),
                  _M([_T("감사실에 2026-05-20 제출(#1)")], "end_turn")])
-    monkeypatch.setattr(llm, "_client", lambda: fake)
+    monkeypatch.setattr(llm, "_provider", lambda: fake)
     handlers = {"search_requests": lambda keyword: [{"id": 1, "requester": keyword}], "request_detail": lambda request_id: {"id": request_id}}
     out = llm.run_tools("q", "sys", history_qa.TOOLS, handlers, max_turns=5)
     assert out["text"].startswith("감사실에") and out["turns"] == 3
@@ -78,19 +79,19 @@ def test_run_tools_loop_executes_handlers_and_returns_trace(monkeypatch):
     assert "error" in out["trace"][1]["result"]
     # 두 번째 요청에는 tool_result 2개가 한 user 메시지로 묶여 들어감
     tr = fake.calls[2]["messages"][-1]["content"]; assert len(tr) == 2 and tr[0]["type"] == "tool_result" and tr[0]["is_error"] is True
-    assert fake.calls[0]["tools"] is history_qa.TOOLS and llm.LOG[-1]["purpose"] == "도구 질의"
+    assert fake.calls[0]["tools"] is history_qa.TOOLS and llm.log()[-1]["purpose"] == "도구 질의"
 
 def test_run_tools_turn_limit(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm._RESOLVED = None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()
     fake = Fake([_M([_Use("search_requests", {"keyword": "x"}, f"t{i}")], "tool_use") for i in range(3)])
-    monkeypatch.setattr(llm, "_client", lambda: fake)
+    monkeypatch.setattr(llm, "_provider", lambda: fake)
     out = llm.run_tools("q", "s", history_qa.TOOLS, {"search_requests": lambda keyword: []}, max_turns=2)
     assert "한도" in out["text"] and out["turns"] == 2
 
 def test_run_tools_404_moves_to_next_model(monkeypatch):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm._RESOLVED = None
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()
     req = httpx.Request("POST", "https://x")
     e = anthropic.NotFoundError("no model", response=httpx.Response(404, request=req, json={}), body=None)
-    fake = Fake([e, _M([_T("ok")], "end_turn")]); monkeypatch.setattr(llm, "_client", lambda: fake)
+    fake = Fake([e, _M([_T("ok")], "end_turn")]); monkeypatch.setattr(llm, "_provider", lambda: fake)
     out = llm.run_tools("q", "s", history_qa.TOOLS, {}, max_turns=2)
-    assert out["text"] == "ok" and [c["model"] for c in fake.calls] == llm.CANDIDATES[:2]
+    assert out["text"] == "ok" and [c["model"] for c in fake.calls] == providers.AnthropicProvider.default_models[:2]

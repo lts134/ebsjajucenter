@@ -2,6 +2,8 @@ __pycache__/
 .ruff_cache/
 .pytest_cache/
 storage/history.db*
+storage/*.db-wal
+storage/*.db-shm
 storage/out/
 storage/*.broken
 tests/.flow_apptest.db*

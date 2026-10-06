@@ -3,14 +3,19 @@
 "EBS가 언제, 누구에게, 어떤 근거로 답변했는지 기억하고, 다음 답변의 수치와 문서를 검증하는 AI 에이전트."
 
 ## 실행
-- `run.bat` 더블클릭, 또는 `python start.py`, 또는 VS Code에서 `app.py` 실행 — 셋 다 같은 동작
-- 없는 모듈만 자동 설치(이미 있으면 건너뜀) → 브라우저에 앱이 열림. 종료: 터미널에서 Ctrl+C
-- Claude API 키: 실행 전 `set ANTHROPIC_API_KEY=...` 또는 앱의 **설정** 화면에 세션 한정 입력 → **연결 테스트**로 모델·왕복시간 확인
+| 방식 | 명령 | 접속 | 키 |
+|---|---|---|---|
+| 혼자 쓰기(PC) | `run.bat` 더블클릭(또는 `python start.py`) | 내 PC 브라우저만(localhost) | 설정 화면에 입력 또는 환경변수 |
+| 여러 사람(서버) | `run_server.bat` / `run_server.sh` | 같은 망의 PC에서 `http://<서버>:8501` | **접속자마다 설정 화면에 자기 키 입력**(브라우저 세션에만 보관, 서버에 저장 안 됨). 운영자가 서버 환경변수 `ANTHROPIC_API_KEY`에 공통 키를 두면 빈 칸으로도 동작 |
+
+- 없는 모듈만 자동 설치(이미 있으면 건너뜀). 종료: 터미널에서 Ctrl+C
+- **AI 공급자는 모듈형**: 기본은 Anthropic Claude API. `docs/provider_template.py`를 복사해 `app/provider_<이름>.py`로 두면 설정 화면 '공급자' 목록에 자동으로 나타남(사내 LLM 게이트웨이 등). 기존 코드 수정 없음. `LLM_PROVIDER` 환경변수로 기본 공급자 지정. '사용 안 함'을 고르면 전부 규칙 기반
+- 설정 화면 **연결 테스트**로 모델·왕복시간·사용 가능 모델(단가 포함) 확인 → 모델 선택
   - 키가 없으면 규칙 기반(정규식·동의어 사전)으로 동작. 심사용 시연은 Claude 경로 권장
   - 요구서 원문의 전화·이메일·주민번호·계좌 패턴은 Claude에 보내기 전 자동 마스킹. ⑧ 도구 결과에서는 직원 이름 필드 제거
-  - 워크스페이스에 묶이지 않은 키는 `ANTHROPIC_WORKSPACE_ID`(wrkspc_…)도 필요(설정 화면에 칸 있음). 워크스페이스 안에서 만든 키는 불필요
+  - 워크스페이스에 묶이지 않은 키는 워크스페이스 ID(wrkspc_…)도 필요(설정 화면에 칸 있음)
   - 호출에는 API 크레딧이 있어야 함(콘솔 Plans & Billing). 잔액 0이면 "credit balance is too low"로 거절됨
-  - 모델은 `CLAUDE_MODEL`로 지정. 비우면 `llm.py`의 후보 순서(sonnet-4-6 → sonnet-5 → sonnet-4-5 → haiku-4-5)로 자동 시도
+  - 호출 기록·추정 비용은 **접속자 세션별**로 집계(사이드바). 이력 DB는 모두가 공유(부서 공동 기억)
 
 ## 시연 순서 (샘플 데이터, 가상)
 1. **① 과거 자료 등록**: `요구서_01_의원실_2026-07-01.txt` + `등원율_2026-06-30기준_7월제출본.xlsx` → 추출 → 저장
@@ -35,7 +40,7 @@
 제출용 ZIP: `python make_submission_zip.py` → `../dist/` (이력 DB·출력물·캐시 제외)
 
 ## 점검
-- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 58건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
+- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 64건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
 - `python check_llm.py` → 샘플 4건 + 실전형 5건(`testcases.py`, 전부 가상)을 규칙/Claude 양쪽으로 추출해 정답표와 비교
 - 결과: `storage/llm_check_<날짜>.md`(채점표 + 사례별 추출 결과 + 호출 기록) / `.json`
 - 규칙 경로는 이 사례들에 맞춰 조정된 것이므로 100%가 당연함. Claude 경로 점수와 오류 유형이 실제 점검 대상
@@ -44,7 +49,8 @@
 | 파일 | 역할 |
 |---|---|
 | `app.py` / `start.py` / `run.bat` | 화면 / 실행·모듈 설치 / 실행 배치 |
-| `llm.py` | Claude API 공통 호출(모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 재시도·타임아웃, 호출 기록·토큰·추정 비용) |
+| `llm.py` / `providers.py` | LLM 공통 호출(세션별 설정, 모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 도구 루프, 호출 기록·비용) / 공급자 플러그인(기본 Anthropic, `provider_*.py` 자동 발견) |
+| `run_server.bat` / `run_server.sh` | 여러 사람 접속용 서버 모드 실행 |
 | `db.py` | SQLite: requests, items(period 포함), submissions, submission_values(출처 포함), diff_reasons, drafts, reviews |
 | `extract.py` / `normalize.py` / `docread.py` | 요구서 추출(Claude 또는 규칙) / 지표 동의어 사전 CANON / txt·hwpx·pdf·docx 본문 추출 |
 | `search.py` / `suggest.py` | 유사 검색(로컬 문자 n-gram, 외부 API 없음) / 데이터 카탈로그 CATALOG |
