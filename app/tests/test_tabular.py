@@ -134,3 +134,49 @@ def test_numbers_with_korean_units():
     assert compare.clean_number("120명") == 120.0 and compare.clean_number("1,234천원") == 1234.0 and compare.clean_number("67.8 %") == 67.8
     g = tabular.read_grid(xlsx([["센터명", "등록 학생 수"], ["센터A", "120명"], ["센터B", "95명"]])); info = tabular.analyze(g)
     assert info.value_cols == [1] and tabular.wide_to_long(g, info, 0, [1], "2026-06-30")["value"].tolist() == [120.0, 95.0]
+
+def test_hwp5_legacy_file_is_converted_and_tables_found():
+    """HWP 5.0(구형식) 회신 공문: 메모리 안에서 HWPX로 변환해 본문·표를 읽는다(공문 틀 중첩 + 병합 머리글 픽스처의 HWP 판)."""
+    import docread
+    data = (FX / "회신_공문틀_중첩.hwp").read_bytes()
+    assert data[:8] == b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"                           # OLE 복합문서 서명
+    text = docread.read("회신.hwp", data)
+    assert "2026. 6. 30. 기준" in text and "센터A | 1 | 0 | 120 | 67.8" in text
+    grids, _ = tabular.grids_from_document("회신.hwp", data)
+    assert len(grids) == 1 and grids[0].source_file == "회신.hwpx"
+    info = tabular.analyze(grids[0])
+    assert info.header == ["구분", "개소 운영", "개소 준비", "등록 학생 수", "등원율(%)"] and info.center_col == 0
+    df = tabular.wide_to_long(grids[0], info, 0, [4], "2026-06-30")
+    assert df["value"].tolist() == [67.8, 71.2, 66.4]
+    with pytest.raises(ValueError, match="변환하지 못했습니다"): docread.read("x.hwp", b"not an hwp file")
+
+def test_center_column_prefers_most_distinct_text_column():
+    """시·도(세로 병합으로 반복) | 시·군·구 | 값… 표에서는 고유값이 많은 시·군·구가 센터 열."""
+    rows = [["시·도", "시·군·구", "개소 수"], ["경기", "가군", 2], ["경기", "나군", 1], ["강원", "다군", 1], ["합계", "", 4]]
+    info = tabular.analyze(tabular.read_grid(xlsx(rows)))
+    assert info.center_col == 1 and info.value_cols == [2]
+
+def test_duplicate_row_names_combine_label_columns():
+    """여러 시·도에 같은 구 이름이 있으면 시·도 + 시·군·구를 이어 붙여 센터명으로. 연도 × 항목 표도 연도 + 항목."""
+    rows = [["시·도", "시·군·구", "개소 수"], ["서울", "중구", 2], ["부산", "중구", 1], ["부산", "남구", 1], ["합계", "", 4]]
+    g = tabular.read_grid(xlsx(rows)); info = tabular.analyze(g)
+    assert info.center_cols == [0, 1] and info.value_cols == [2]
+    df = tabular.wide_to_long(g, info, info.center_cols, [2], "2026-06-30")
+    assert df["center"].tolist() == ["서울 중구", "부산 중구", "부산 남구"]
+    rows = [["연도", "세부항목", "편성액", "집행액"], [2025, "인건비", 100, 90], [2025, "운영비", 50, 40], [2026, "인건비", 120, 30], [2026, "운영비", 60, 10]]
+    g = tabular.read_grid(xlsx(rows)); info = tabular.analyze(g)
+    assert info.center_cols == [0, 1] and info.value_cols == [2, 3]
+    df = tabular.wide_to_long(g, info, info.center_cols, info.value_cols, "2026-06-30")
+    assert len(df) == 8 and "2025 인건비" in set(df["center"])
+    with pytest.raises(ValueError, match="센터"): tabular.wide_to_long(g, info, [], [2], "2026-06-30")
+
+def test_same_named_value_columns_get_column_suffix():
+    rows = [["구분", "편성액", "집행액", "편성액", "집행액"], ["센터A", 1, 2, 3, 4]]
+    g = tabular.read_grid(xlsx(rows)); info = tabular.analyze(g)
+    df = tabular.wide_to_long(g, info, [0], [1, 2, 3, 4], "2026-06-30")
+    assert df["indicator"].tolist() == ["편성액 (2열)", "집행액 (3열)", "편성액 (4열)", "집행액 (5열)"]
+
+def test_sparse_note_column_is_not_center():
+    rows = [["연도", "세부항목", "편성액", "비고"], [2025, "인건비", 100, None], [2025, "운영비", 50, "이월"], [2026, "인건비", 120, None], [2026, "운영비", 60, None]]
+    info = tabular.analyze(tabular.read_grid(xlsx(rows)))
+    assert info.center_col == 1 and info.center_cols == [0, 1] and info.value_cols == [2]

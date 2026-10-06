@@ -105,6 +105,8 @@ def grids_from_document(name: str, data: bytes) -> tuple[list[Grid], str]:
     """회신 문서 → 표 격자 목록과 본문 텍스트. hwpx·docx는 표 개체(셀 주소·병합 반영)에서 직접 꺼내고,
     표 개체가 없거나 pdf·txt면 본문 텍스트에서 표 모양 줄을 찾는다. 2행·2열 미만 표는 버린다."""
     import docread
+    if name.lower().endswith(".hwp"):                      # 구형식은 한 번만 변환해서 본문·표 모두 꺼낸다
+        data, name = docread.hwp_to_hwpx(data), name[:-4] + ".hwpx"
     text = docread.read(name, data)
     tables = docread.tables(name, data)
     grids = []
@@ -133,6 +135,7 @@ class TableInfo:
     base_date_hint: str | None = None
     shape: str = "empty"             # long | wide | empty
     center_col: int | None = None
+    center_cols: list[int] = field(default_factory=list)      # 둘 이상이면 이어 붙여 센터명(예: 시·도 + 시·군·구, 연도 + 세부항목)
     value_cols: list[int] = field(default_factory=list)
     total_rows: list[int] = field(default_factory=list)
     def col_label(self, j: int) -> str: return self.header[j] if j < len(self.header) and self.header[j] else f"열{j + 1}"
@@ -195,7 +198,8 @@ def analyze(grid: Grid) -> TableInfo:
             parts = []
             for cells in filled:
                 if cells[j] and cells[j] not in parts: parts.append(cells[j])
-            header.append(" ".join(parts))
+            h = " ".join(parts)
+            header.append(h if len(h) <= 60 else h[:58] + "…")          # 머리글 칸에 긴 주석이 들어간 경우 표시용으로 자른다
         info.header = header
         start = info.header_rows[-1] + 1
     else:
@@ -227,10 +231,30 @@ def analyze(grid: Grid) -> TableInfo:
     def num_ratio(j):
         cs = [c for c in col_cells(j) if not is_blank(c)]
         return (sum(is_num(c) for c in cs) / len(cs)) if cs else 0.0
-    cands = [j for j in cols if CENTER_HDR_RE.search(info.header[j] or "") and num_ratio(j) < 0.5]
-    if not cands: cands = [j for j in cols if num_ratio(j) < 0.5 and any(not is_blank(c) for c in col_cells(j))]
-    info.center_col = cands[0] if cands else None
-    info.value_cols = [j for j in cols if j != info.center_col and num_ratio(j) >= 0.5]
+    def nonblank(j): return any(not is_blank(c) for c in col_cells(j))
+    def year_like(j):                                           # 연도 열(1900~2100 정수만): 숫자지만 행 이름의 일부로 쓸 수 있다
+        vs = [compare.clean_number(c) if is_num(c) else float("nan") for c in col_cells(j) if not is_blank(c)]
+        return bool(vs) and all(v == v and v == int(v) and 1900 <= v <= 2100 for v in vs)
+    label_cols = [j for j in cols if nonblank(j) and (num_ratio(j) < 0.5 or year_like(j))]
+    cands = [j for j in label_cols if CENTER_HDR_RE.search(info.header[j] or "") and not year_like(j)] or [j for j in label_cols if not year_like(j)] or label_cols
+    def labels(js): return [" ".join(t for t in (text(grid.cell(r, j)) for j in js) if t) for r in info.data_rows]
+    def distinct(j): return len({t for t in labels([j]) if t and not TOTAL_RE.match(t)})
+    def has_dup(js):
+        seen = [t for t in labels(js) if t and not TOTAL_RE.match(t)]
+        return len(seen) != len(set(seen))
+    # 후보가 여럿이면 고유값이 가장 많은 열(시·도보다 시·군·구). 그래도 행 이름이 겹치면(여러 시·도에 같은 구 이름, 연도별 같은 항목)
+    # 다른 이름 열을 왼쪽부터 이어 붙여 겹치지 않을 때까지 늘린다
+    base_rows = [r for r in info.data_rows if not any(TOTAL_RE.match(text(grid.cell(r, j))) for j in label_cols)]   # 합계 행은 빼고 채움 비율 계산
+    def fill(j): return sum(1 for r in base_rows if not is_blank(grid.cell(r, j))) / max(1, len(base_rows))
+    full = [j for j in cands if fill(j) >= 0.8] or cands                     # 비고처럼 드문드문 적힌 열은 행 이름이 아니다
+    info.center_col = max(full, key=distinct) if full else None             # 고유값이 같으면 왼쪽 열
+    if info.center_col is not None:
+        chosen = [info.center_col]
+        for j in label_cols:
+            if not has_dup(sorted(chosen)): break
+            if j not in chosen: chosen.append(j)
+        info.center_cols = sorted(chosen)
+    info.value_cols = [j for j in cols if j not in info.center_cols and num_ratio(j) >= 0.5]
     if info.center_col is not None:
         info.total_rows = [r for r in info.data_rows if TOTAL_RE.match(text(grid.cell(r, info.center_col)))]
     return info
@@ -266,22 +290,32 @@ def long_table(grid: Grid, info: TableInfo) -> pd.DataFrame:
     df["source_row"] = [grid.row_offset + r for r in info.data_rows]
     return compare.finalize(df, grid.source_file, grid.source_sheet)
 
-def wide_to_long(grid: Grid, info: TableInfo, center_col: int, value_cols: list[int], base_date: str,
+def wide_to_long(grid: Grid, info: TableInfo, center_col, value_cols: list[int], base_date: str,
                  indicators: dict[int, str] | None = None, drop_totals: bool = True, source_version: str | None = None) -> pd.DataFrame:
-    """가로 펼침 표 → 한 줄 한 값. indicators: 값 열 번호 → 지표명(없으면 default_indicator). 값은 그대로 옮기고 계산하지 않는다."""
-    if center_col is None: raise ValueError("센터(행 이름) 열을 고르세요.")
+    """가로 펼침 표 → 한 줄 한 값. center_col: 열 번호 하나 또는 여러 개(이어 붙여 센터명). indicators: 값 열 번호 → 지표명(없으면 default_indicator).
+    값은 그대로 옮기고 계산하지 않는다."""
+    ccols = [c for c in (center_col if isinstance(center_col, (list, tuple)) else [center_col]) if c is not None]
+    if not ccols: raise ValueError("센터(행 이름) 열을 고르세요.")
     if not value_cols: raise ValueError("값 열을 하나 이상 고르세요.")
     if not base_date: raise ValueError("기준일을 입력하세요(예: 2026-08-30). 표 제목에 '… 기준'이 있으면 자동으로 채워집니다.")
     indicators = indicators or {}
+    names = {j: (indicators.get(j) or default_indicator(info.col_label(j))) for j in value_cols}
+    seen: dict[str, int] = {}
+    for j in value_cols:                                     # 같은 이름의 값 열이 둘 이상이면(예: 사업별 '편성액' 반복) 열 번호를 붙여 구분
+        seen[names[j]] = seen.get(names[j], 0) + 1
+    dup_names = {n for n, k in seen.items() if k > 1}
+    for j in value_cols:
+        if names[j] in dup_names: names[j] = f"{names[j]} ({j + 1}열)"
     recs = []
     for r in info.data_rows:
-        center = text(grid.cell(r, center_col))
+        parts = [text(grid.cell(r, c)) for c in ccols]
+        if drop_totals and any(TOTAL_RE.match(t) for t in parts if t): continue
+        center = " ".join(t for t in parts if t)
         if not center: continue
-        if drop_totals and TOTAL_RE.match(center): continue
         for j in value_cols:
             v = grid.cell(r, j)
             if is_blank(v): continue
-            recs.append({"indicator": indicators.get(j) or default_indicator(info.col_label(j)), "center": center,
+            recs.append({"indicator": names[j], "center": center,
                          "base_date": base_date, "value": v, "source_row": grid.row_offset + r,
                          "source_version": source_version})
     if not recs: raise ValueError("변환된 값이 없습니다. 센터 열·값 열 선택을 확인하세요.")

@@ -203,12 +203,12 @@ s.addText("① 과거 자료 등록 — 그때 낸 실적표·회신 공문의 �
 shotWithFrame(s, "01b_열매핑.png", 0.6, 1.5, 2.5, 4.9, "가로 펼침 실적표 → 열 매핑 → 48건 변환");
 bullets(s, ["실무 서식 그대로 읽음: 제목 행('… 2026. 6. 30. 기준'), 병합 머리글('개소'+'운영' → '개소 운영'), 행=센터·열=지표인 가로 펼침, 합계·주석 행",
   "화면에서 센터 열·값 열·기준일(제목 날짜가 기본값)·값 열별 지표명(사전에 있으면 정규 지표명)을 확인해 변환. 값은 옮기기만 하고 계산하지 않음",
-  "그때 보낸 회신 공문(hwpx·docx·pdf)을 올리면 문서 안의 표를 찾아 같은 방식으로 읽고, 출처에 '회신 문서 표에서 추출'이 남음",
+  "그때 보낸 회신 공문(hwp·hwpx·docx·pdf)을 올리면 문서 안의 표를 찾아 같은 방식으로 읽고(HWP 5.0은 자동 변환), 출처에 '회신 문서 표에서 추출'이 남음",
   "표 파일이 없으면 직접 입력. 키가 있으면 Claude가 열 매핑을 제안하되 확정은 담당자"], 3.4, 1.5, 9.3, 3.0, 12.5);
 s.addText("제출값 입력 방식 3가지 (①·③ 공통)", { x: 3.4, y: 4.55, w: 9.3, h: 0.3, fontSize: 11, bold: true, color: C.text2, margin: 0, isTextBox: true, objectName: "tbl-title-input" });
 s.addTable([["방식", "받는 서식", "비고"].map(hdr),
   ["집계 엑셀/CSV", "긴 형식(지표명·센터명·기준일·값) 또는 실적표 그대로(제목·병합 머리글·가로 펼침)", "cp949 CSV, '67.8%', '2026. 6. 30.' 허용 · 시트 선택"],
-  ["회신 문서의 표", "hwpx · docx · pdf(글자 추출 가능한 것)", "HWP 구형식은 HWPX로 저장 후 · 스캔본 불가"],
+  ["회신 문서의 표", "hwp · hwpx · docx · pdf(글자 추출 가능한 것)", "HWP 5.0은 PC 안에서 자동 변환 · 암호·배포용 문서와 스캔본은 불가"],
   ["직접 입력", "화면에서 행 추가", "건수가 적은 과거 건"]],
   { x: 3.4, y: 4.9, w: 9.3, colW: [1.7, 4.6, 3.0], fontSize: 9.5, color: H.dk1, border: { type: "solid", color: H.accent6, pt: 0.75 }, fill: { color: H.lt1 }, valign: "middle", margin: 0.05, objectName: "tbl-input" });
 s.addNotes("실제 과거 제출값은 집계 엑셀보다 한글 공문의 표로 남아 있는 경우가 많습니다. 그래서 집계 엑셀을 따로 만들지 않아도 실적표나 회신 공문을 그대로 넣게 했습니다. 열 매핑은 담당자가 확인하고, 값은 계산하지 않습니다.");
@@ -265,12 +265,12 @@ function box(x, y, w, h, title, body, fill = C.background2, tcolor = C.text1) {
 s.addShape(pres.ShapeType.roundRect, { x: 0.6, y: 1.5, w: 8.4, h: 5.2, rectRadius: 0.15, fill: { color: C.background1 }, line: { color: C.accent6, width: 2 }, objectName: "arch-pc" });
 s.addText("담당자 PC 또는 부서 공용 PC — run.bat(혼자) / run_server.bat(여럿)", { x: 0.8, y: 1.6, w: 8, h: 0.4, fontSize: 13, bold: true, color: C.text2, margin: 0, isTextBox: true, objectName: "arch-pc-title" });
 box(0.8, 2.1, 2.5, 1.5, "화면 (Streamlit)", "8개 화면 + 설정\n접속자(브라우저 세션)별 키·모델·호출 기록");
-box(3.5, 2.1, 2.5, 1.5, "추출·정규화·표 읽기", "extract · normalize(지표 사전)\ndocread(txt·HWPX·PDF·DOCX)\ntabular(제목·병합 머리글·가로 펼침 표)");
+box(3.5, 2.1, 2.5, 1.5, "추출·정규화·표 읽기", "extract · normalize(지표 사전)\ndocread(txt·HWP·HWPX·PDF·DOCX)\ntabular(제목·병합 머리글·가로 펼침 표)");
 box(6.2, 2.1, 2.6, 1.5, "검색·제안", "search(문자 n-gram, 외부 API 없음)\nsuggest(데이터 카탈로그)");
 box(0.8, 3.8, 2.5, 1.5, "대조·점검 (코드)", "compare(pandas) · pii\n차이·단서·점검표·출처");
 box(3.5, 3.8, 2.5, 1.5, "초안·출력·보조", "draft · hwpx_out\nassist(사유 후보·후속 질문) · history_qa(조회 도구 7종)");
 box(6.2, 3.8, 2.6, 1.5, "이력 DB (SQLite 1파일, 공유)", "requests · items · submissions\nsubmission_values(출처) · diff_reasons · drafts · reviews\nWAL 모드(동시 접속)");
-box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 80건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
+box(0.8, 5.5, 8.0, 1.05, "점검 도구", "run_checks.py: ruff → pytest 85건 → 추출 품질 점검(규칙/Claude) → 화면 흐름 ①~⑧  ·  make_submission_zip.py  ·  capture_screens.py");
 // 우: API
 box(9.3, 1.5, 3.45, 2.3, "LLM 공급자 모듈 (선택)", "llm.py 공통 호출 → providers.py 플러그인\n· 기본 Anthropic Claude, provider_*.py 파일 하나로 사내 게이트웨이 등 교체\n· 모델 자동 대체, 구조화 출력 + 텍스트 파싱 대체\n· 도구 호출 루프(⑧), 재시도·타임아웃\n· 호출별 모델·지연·토큰·추정 비용(세션별)", C.accent1, C.background1);
 box(9.3, 4.0, 3.45, 1.5, "밖으로 나가는 것", "요구서 문안 · 센터 단위 확정 집계값 · 담당자 입력 사유 · 산출 근거 메타\n(개인 단위 원자료는 전달하지 않음)", C.background2);
@@ -283,7 +283,7 @@ s = pres.addSlide({ masterName: "CONTENT", sectionTitle: "구현" });
 s.addText("검증 결과 — 실측치", { placeholder: "title" });
 stat(s, 0.6, 1.5, 3.0, "25 / 25", "요구서 추출 필수 쌍 재현\nClaude 경로 · 9사례 · 초과·오탐 0\n(9/28·10/04 두 차례, sonnet-4-6)");
 stat(s, 3.7, 1.5, 3.0, "4.6초", "요구서 1건 추출 평균 지연\n(10/04, 9건, JSON 스키마 포함)");
-stat(s, 6.8, 1.5, 3.0, "80", "pytest 단위 테스트 통과\n(모듈 45 + 리뷰 회귀 10 + 보안 3 + 세션·공급자 6 + 표·문서 12 + 잘림 재시도 4)");
+stat(s, 6.8, 1.5, 3.0, "85", "pytest 단위 테스트 통과\n(모듈 45 + 리뷰 회귀 10 + 보안 3 + 세션·공급자 6 + 표·문서·HWP 17 + 잘림 재시도 4)");
 stat(s, 9.9, 1.5, 3.0, "9 / 9", "화면 ①~⑧+설정 흐름 구동\nAppTest + 실제 브라우저, 오류 0");
 const rows = [
   [{ text: "항목", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "결과", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }, { text: "비고", options: { bold: true, color: H.lt1, fill: { color: H.dk2 } } }],
@@ -322,7 +322,7 @@ s.addText("한계와 다음 단계", { placeholder: "title" });
 const lim = [
   ["규칙 경로는 정형 서식에 의존", "실제 운영은 Claude 경로. 실제 요구서를 점검 사례에 추가해 재채점"],
   ["유사 검색은 문자 n-gram(임베딩 아님)", "이력이 쌓이면 사내 임베딩 또는 API 임베딩 검토"],
-  ["HWP(구형식) 미지원, 자리표시자는 한글에서 삽입", "부서 회신 서식 HWPX 1종 템플릿화(2주 내)"],
+  ["HWP(구형식)는 읽기만, 회신 출력은 HWPX. 자리표시자는 한글에서 삽입", "부서 회신 서식 HWPX 1종 템플릿화(2주 내)"],
   ["충족 검사(코드)는 지표명 언급 수준", "Claude 추가 점검과 병행, 판정 규칙 보강"],
   ["샘플 데이터·지표 사전 7개", "실데이터 컬럼 맞춤, 지표 사전·데이터 카탈로그 확장"],
   ["서버 모드에 접속자 인증 없음", "사내망 안에서만 운영. 필요 시 사내 SSO·역방향 프록시 인증 앞단 검토"],

@@ -1,4 +1,4 @@
-"""요구서·회신 문서 본문 추출: txt / hwpx / pdf / docx → 문단 텍스트(표는 '셀 | 셀' 형태).
+"""요구서·회신 문서 본문 추출: txt / hwp / hwpx / pdf / docx → 문단 텍스트(표는 '셀 | 셀' 형태). HWP(5.0)는 HWPX로 변환해 읽는다.
 표는 격자(grid)로도 꺼낸다(tabular가 제출값 변환에 사용).
 
 HWPX는 정규식이 아니라 XML 파서로 읽는다. 한글이 저장한 실제 공문은
@@ -105,17 +105,31 @@ def _docx_text(data: bytes) -> str:
             out.append(" | ".join(c.text.strip() for c in r.cells))
     return "\n".join(out)
 
+def hwp_to_hwpx(data: bytes) -> bytes:
+    """HWP 5.0(구형식, OLE 복합문서) → HWPX 바이트. python-hwpx의 변환기를 쓴다(메모리 안, 외부 전송 없음).
+    암호·배포용 문서는 변환기가 거부한다."""
+    try:
+        from hwpx.hwp5 import package
+    except ImportError as e:
+        raise ValueError("HWP(구형식)를 읽으려면 python-hwpx 모듈이 필요합니다(start.py가 자동 설치). 또는 한글에서 HWPX로 저장해 올리세요.") from e
+    try:
+        conv = package.convert(data)
+        return package.to_hwpx_bytes(conv.files)
+    except Exception as e:
+        raise ValueError(f"HWP를 HWPX로 변환하지 못했습니다({type(e).__name__}: {str(e)[:120]}). 암호·배포용 문서이거나 HWP 3.0 이하일 수 있습니다. 한글에서 HWPX로 저장해 올리세요.") from e
+
 def read(name: str, data: bytes) -> str:
     n = name.lower()
+    if n.endswith(".hwp"): return _hwpx_text(hwp_to_hwpx(data))
     if n.endswith(".hwpx"): return _hwpx_text(data)
     if n.endswith(".pdf"): return _pdf_text(data)
     if n.endswith(".docx"): return _docx_text(data)
-    if n.endswith(".hwp"): raise ValueError("HWP(구형식)는 한글에서 HWPX로 저장 후 올려 주세요.")
     return data.decode("utf-8", errors="ignore")
 
 def tables(name: str, data: bytes) -> list[list[list]] | None:
-    """문서 형식별 표 격자. hwpx·docx는 표 개체에서 직접, 그 외(pdf·txt)는 None(본문 텍스트에서 찾아야 함)."""
+    """문서 형식별 표 격자. hwp·hwpx·docx는 표 개체에서 직접, 그 외(pdf·txt)는 None(본문 텍스트에서 찾아야 함)."""
     n = name.lower()
+    if n.endswith(".hwp"): return hwpx_tables(hwp_to_hwpx(data))
     if n.endswith(".hwpx"): return hwpx_tables(data)
     if n.endswith(".docx"): return docx_tables(data)
     return None

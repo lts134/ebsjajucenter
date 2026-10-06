@@ -12,6 +12,7 @@ REQUIRED = {
     "anthropic": "anthropic>=1.8",
     "pypdf": "pypdf>=4.0",
     "docx": "python-docx>=1.1",
+    "hwpx": "python-hwpx>=6.7",       # HWP(구형식 5.0) → HWPX 변환
 }
 
 def missing_modules():

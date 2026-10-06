@@ -75,12 +75,13 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None):
             except Exception as e: st.warning(f"Claude 제안 실패, 규칙 추정값을 사용합니다: {llm.explain_error(e) or e}")
     if sug and sug.get("note"): st.caption(f"Claude 메모: {sug['note']}")
     cols = list(range(grid.width())); label = info.col_label
-    c_default = sug["center_col"] if sug and sug.get("center_col") is not None else info.center_col
+    c_default = [sug["center_col"]] if sug and sug.get("center_col") is not None else (info.center_cols or ([info.center_col] if info.center_col is not None else []))
     v_default = [c for c, _ in sug["value_cols"]] if sug and sug.get("value_cols") else info.value_cols
     d_default = (sug.get("base_date") if sug else None) or info.base_date_hint or ""
-    c1, c2, c3 = st.columns([1, 2, 1])
-    center_col = c1.selectbox("센터(행 이름) 열", cols, index=cols.index(c_default) if c_default in cols else 0, format_func=label, key=f"{key}_cc")
-    value_cols = c2.multiselect("값 열", [c for c in cols if c != center_col], default=[c for c in v_default if c != center_col], format_func=label, key=f"{key}_vc")
+    if len(c_default) > 1: st.caption(f"행 이름이 겹쳐서({' + '.join(label(c) for c in c_default)}) 두 열을 이어 붙여 센터명으로 씁니다. 예: 여러 시·도에 같은 구 이름, 연도별 같은 항목.")
+    c1, c2, c3 = st.columns([1.3, 2, 1])
+    center_col = c1.multiselect("센터(행 이름) 열 — 둘 이상이면 이어 붙임", cols, default=[c for c in c_default if c in cols], format_func=label, key=f"{key}_cc")
+    value_cols = c2.multiselect("값 열", [c for c in cols if c not in center_col], default=[c for c in v_default if c not in center_col], format_func=label, key=f"{key}_vc")
     base_date = c3.text_input("기준일", d_default, placeholder="2026-06-30", key=f"{key}_bd", help="표 제목·주석의 '… 기준' 날짜를 자동으로 채웁니다. 없으면 공문 본문을 확인해 입력하세요.")
     names = dict(sug["value_cols"]) if sug and sug.get("value_cols") else {}
     ind_df = pd.DataFrame([{"열": label(c), "지표명": names.get(c) or tabular.default_indicator(label(c))} for c in value_cols])
@@ -97,8 +98,8 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None):
 
 def value_table_input(key: str, what: str = "제출값"):
     """①·③ 공용 값 입력: 집계 엑셀/CSV · 회신 문서(hwpx·docx·pdf)의 표 · 직접 입력. (df | None, 출처 이름) 반환."""
-    mode = st.radio("입력 방식", ["집계 엑셀/CSV", "회신 문서의 표 (hwpx·docx·pdf)", "직접 입력"], horizontal=True, key=f"{key}_mode",
-                    help="엑셀은 제목 행·병합 머리글·가로 펼침(행=센터, 열=지표) 서식도 읽습니다. 한글 HWP(구형식)는 한글에서 HWPX로 저장해 올리세요.")
+    mode = st.radio("입력 방식", ["집계 엑셀/CSV", "회신 문서의 표 (hwp·hwpx·docx·pdf)", "직접 입력"], horizontal=True, key=f"{key}_mode",
+                    help="엑셀은 제목 행·병합 머리글·가로 펼침(행=센터, 열=지표) 서식도 읽습니다. 한글 HWP(5.0)는 자동으로 HWPX로 변환해 읽습니다(암호·배포용 문서 제외).")
     if mode == "집계 엑셀/CSV":
         up = st.file_uploader(f"{what} 엑셀/CSV — 긴 형식(지표명·센터명·기준일·값) 또는 실적표 그대로", type=["xlsx", "xlsm", "csv"], key=f"{key}_xl")
         if not up: return None, ""
@@ -110,13 +111,13 @@ def value_table_input(key: str, what: str = "제출값"):
             st.error(f"파일을 읽지 못했습니다: {e}"); return None, ""
         return _grid_to_values(grid, f"{key}_{sheet}"), up.name
     if mode.startswith("회신 문서"):
-        up = st.file_uploader(f"{what}이 들어 있는 회신 문서 (hwpx / docx / pdf)", type=["hwpx", "docx", "pdf"], key=f"{key}_doc")
+        up = st.file_uploader(f"{what}이 들어 있는 회신 문서 (hwp / hwpx / docx / pdf)", type=["hwp", "hwpx", "docx", "pdf"], key=f"{key}_doc")
         if not up: return None, ""
         try: grids, text = tabular.grids_from_document(up.name, up.getvalue())
         except Exception as e:
             st.error(f"문서를 읽지 못했습니다: {e}"); return None, up.name
         if not grids:
-            st.error("문서에서 표를 찾지 못했습니다. hwpx·docx는 표 개체여야 하고(탭·공백으로 맞춘 글은 표가 아님), PDF는 글자가 추출되는 파일이어야 합니다(스캔본 불가). 표가 없으면 '직접 입력'을 쓰세요.")
+            st.error("문서에서 표를 찾지 못했습니다. hwp·hwpx·docx는 표 개체여야 하고(탭·공백으로 맞춘 글은 표가 아님), PDF는 글자가 추출되는 파일이어야 합니다(스캔본 불가). 표가 없으면 '직접 입력'을 쓰세요.")
             with st.expander(f"진단: 추출된 본문 {len(text)}자 — 앞부분 보기"):
                 st.text("\n".join(text.splitlines()[:40]) or "(본문이 비어 있음 — 배포용 문서이거나 그림으로 된 문서일 수 있음)")
             return None, up.name
@@ -160,7 +161,7 @@ ITEM_KO = {"seq": "번호", "item_text": "항목 원문", "indicator": "지표",
 # ================= ① 과거 자료 등록 =================
 if page == "① 과거 자료 등록":
     st.header("① 과거 요구서·제출본 등록 → 이력 저장")
-    st.caption("에이전트: 요구서 본문 추출(txt·hwpx·pdf·docx) → 항목·지표·기준일 추출 → 제출값과 산출 근거·출처 저장. 담당자: 파일 준비, 추출 결과 확인.")
+    st.caption("에이전트: 요구서 본문 추출(txt·hwp·hwpx·pdf·docx) → 항목·지표·기준일 추출 → 제출값과 산출 근거·출처 저장. 담당자: 파일 준비, 추출 결과 확인.")
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("1) 요구서")
@@ -170,7 +171,7 @@ if page == "① 과거 자료 등록":
             pick = st.selectbox("샘플", files, format_func=lambda p: p.name)
             req_text, req_name = pick.read_text(encoding="utf-8"), pick.name
         else:
-            up = st.file_uploader("요구서 파일 (txt / hwpx / pdf / docx)", type=["txt", "hwpx", "pdf", "docx"], key="reg_up")
+            up = st.file_uploader("요구서 파일 (txt / hwp / hwpx / pdf / docx)", type=["txt", "hwp", "hwpx", "pdf", "docx"], key="reg_up")
             req_text, req_name = (read_doc(up), up.name) if up else ("", "")
         req_text = st.text_area("요구서 원문 (수정 가능)", req_text, height=220)
         if st.button("요구 항목 추출", type="primary", disabled=not req_text):
@@ -178,7 +179,7 @@ if page == "① 과거 자료 등록":
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
         st.subheader("2) 그때 제출한 값")
-        st.caption("집계 엑셀이 없어도 됩니다. 그때 보낸 회신 문서(hwpx·docx·pdf)의 표를 그대로 읽거나, 직접 입력할 수 있습니다.")
+        st.caption("집계 엑셀이 없어도 됩니다. 그때 보낸 회신 문서(hwp·hwpx·docx·pdf)의 표를 그대로 읽거나, 직접 입력할 수 있습니다.")
         use_sample_v = st.checkbox("샘플 제출본 사용", value=True)
         if use_sample_v:
             vfiles = sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx"))
@@ -223,7 +224,7 @@ elif page == "② 새 요구서 분석":
                              index=next((i for i, f in enumerate(sfiles) if "의원실" in f.name), 0), format_func=lambda p: p.name)
         text, name = spick.read_text(encoding="utf-8"), spick.name
     else:
-        up = st.file_uploader("새 요구서 (txt / hwpx / pdf / docx)", type=["txt", "hwpx", "pdf", "docx"], key="new_up")
+        up = st.file_uploader("새 요구서 (txt / hwp / hwpx / pdf / docx)", type=["txt", "hwp", "hwpx", "pdf", "docx"], key="new_up")
         text, name = (read_doc(up), up.name) if up else ("", "")
     text = st.text_area("요구서 원문", text, height=200)
     if st.button("분석", type="primary", disabled=not text):

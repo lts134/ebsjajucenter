@@ -41,7 +41,7 @@
 제출용 ZIP: `python make_submission_zip.py` → `../dist/` (이력 DB·출력물·캐시 제외)
 
 ## 점검
-- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 80건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
+- `python run_checks.py`(또는 `run_checks.bat`): ruff → pytest 85건(`tests/`) → 추출 품질 점검 → 6단계 화면 흐름(AppTest)을 한 번에. 배포 전 모두 '통과' 확인
 - `python check_llm.py` → 샘플 4건 + 실전형 5건(`testcases.py`, 전부 가상)을 규칙/Claude 양쪽으로 추출해 정답표와 비교
 - 결과: `storage/llm_check_<날짜>.md`(채점표 + 사례별 추출 결과 + 호출 기록) / `.json`
 - 규칙 경로는 이 사례들에 맞춰 조정된 것이므로 100%가 당연함. Claude 경로 점수와 오류 유형이 실제 점검 대상
@@ -54,7 +54,7 @@
 | `run_server.bat` / `run_server.sh` | 여러 사람 접속용 서버 모드 실행 |
 | `update.bat` / `update.sh` | git clone 한 폴더에서 최신 코드 받기 + 실행 |
 | `db.py` | SQLite: requests, items(period 포함), submissions, submission_values(출처 포함), diff_reasons, drafts, reviews |
-| `extract.py` / `normalize.py` / `docread.py` | 요구서 추출(Claude 또는 규칙) / 지표 동의어 사전 CANON / txt·hwpx·pdf·docx 본문 추출 |
+| `extract.py` / `normalize.py` / `docread.py` | 요구서 추출(Claude 또는 규칙) / 지표 동의어 사전 CANON / txt·hwp·hwpx·pdf·docx 본문·표 추출(HWP 5.0은 python-hwpx로 HWPX 변환) |
 | `search.py` / `suggest.py` | 유사 검색(로컬 문자 n-gram, 외부 API 없음) / 데이터 카탈로그 CATALOG |
 | `tabular.py` | 표 구조 분석(제목·병합 머리글·가로 펼침·합계 행), 문서 안 표 찾기, 열 매핑 → 긴 형식 변환, Claude 열 매핑 제안(선택) |
 | `compare.py` / `pii.py` | 수치 대조·점검표·출처 / 개인정보 패턴 검출 |
@@ -71,7 +71,7 @@
 1. 제출값 입력은 세 가지(①·③ 공통): **집계 엑셀/CSV**, **회신 문서(hwpx·docx·pdf)의 표**, **직접 입력**
    - 긴 형식(`지표명, 센터명, 기준일, 값` + 선택 `지표 정의, 집계기간, 추출시점, 원자료 버전`)은 그대로 읽음. 한글 컬럼명·cp949 CSV·'2026. 6. 30.'·'67.8%' 허용, 시트 선택 가능
    - 실적표 서식 그대로(제목 행, 병합 머리글, 행=센터·열=지표인 가로 펼침, 합계 행)도 읽음 → 화면에서 센터 열·값 열·기준일·지표명을 확인해 변환(`tabular.py`). 제목의 '… 기준' 날짜가 기준일 기본값. 키가 있으면 Claude가 열 매핑을 제안하고 담당자가 확정
-   - 회신 문서의 표는 "회신 문서 표에서 추출"로 출처가 남음. HWP(구형식)는 한글에서 HWPX로 저장 후 업로드. 스캔 PDF는 불가
+   - 회신 문서의 표는 "회신 문서 표에서 추출"로 출처가 남음. HWP(5.0 구형식)도 자동 변환해 읽음(암호·배포용 문서 제외). 스캔 PDF는 불가
 2. 부서 지표명을 `normalize.py`의 CANON에 추가(동의어 포함) → 추출·검색·제안·충족 검사가 같은 이름을 씀
 3. 데이터 출처·담당을 `suggest.py`의 CATALOG에 기입
 4. 실제 회신 서식 HWPX를 한글에서 열어 `{{수신}} {{제목}} {{본문}} {{차이사유}} {{산출근거}} {{row.center}} {{row.value}}` 등 자리표시자를 넣고 `templates/`에 저장
@@ -91,7 +91,7 @@
 
 ## 알려진 한계
 - 유사 검색은 임베딩이 아닌 문자 n-gram 유사도(사내 PC 완결)
-- HWP(구형식) 미지원 — HWPX로 저장 필요. 자리표시자는 한 문단 안에 있으면 run이 쪼개져 저장돼도 인식됨(2026-10-04)
+- HWP(5.0)는 읽기만 지원(변환해 읽음), 회신 출력은 HWPX. 자리표시자는 한 문단 안에 있으면 run이 쪼개져 저장돼도 인식됨(2026-10-04)
 - 충족 검사 규칙 판정은 '지표명 언급 여부' 수준
 - 규칙 기반 추출은 정해진 서식(줄머리 번호·'기준' 표기)에 의존 — 실제 요구서는 Claude 경로 필요
 
