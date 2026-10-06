@@ -9,6 +9,7 @@
 | 여러 사람(서버) | `run_server.bat` / `run_server.sh` | 같은 망의 PC에서 `http://<서버>:8501` | **접속자마다 설정 화면에 자기 키 입력**(브라우저 세션에만 보관, 서버에 저장 안 됨). 운영자가 서버 환경변수 `ANTHROPIC_API_KEY`에 공통 키를 두면 빈 칸으로도 동작 |
 
 - 없는 모듈만 자동 설치(이미 있으면 건너뜀). 종료: 터미널에서 Ctrl+C
+- **받는 방법 두 가지**: ① 제출 ZIP(심사용 고정본) 압축 해제 ② GitHub에서 `git clone -b claude/demo-refinement-efn737 https://github.com/lts134/ebsjajucenter.git` 한 뒤 `app` 폴더 사용. ②로 받았으면 이후 갱신은 `update.bat`(최신 코드 받기 + 실행) 한 번으로 끝. 이력 DB(`storage/`)는 유지됨
 - **AI 공급자는 모듈형**: 기본은 Anthropic Claude API. `docs/provider_template.py`를 복사해 `app/provider_<이름>.py`로 두면 설정 화면 '공급자' 목록에 자동으로 나타남(사내 LLM 게이트웨이 등). 기존 코드 수정 없음. `LLM_PROVIDER` 환경변수로 기본 공급자 지정. '사용 안 함'을 고르면 전부 규칙 기반
 - 설정 화면 **연결 테스트**로 모델·왕복시간·사용 가능 모델(단가 포함) 확인 → 모델 선택
   - 키가 없으면 규칙 기반(정규식·동의어 사전)으로 동작. 심사용 시연은 Claude 경로 권장
@@ -51,6 +52,7 @@
 | `app.py` / `start.py` / `run.bat` | 화면 / 실행·모듈 설치 / 실행 배치 |
 | `llm.py` / `providers.py` | LLM 공통 호출(세션별 설정, 모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 도구 루프, 호출 기록·비용) / 공급자 플러그인(기본 Anthropic, `provider_*.py` 자동 발견) |
 | `run_server.bat` / `run_server.sh` | 여러 사람 접속용 서버 모드 실행 |
+| `update.bat` / `update.sh` | git clone 한 폴더에서 최신 코드 받기 + 실행 |
 | `db.py` | SQLite: requests, items(period 포함), submissions, submission_values(출처 포함), diff_reasons, drafts, reviews |
 | `extract.py` / `normalize.py` / `docread.py` | 요구서 추출(Claude 또는 규칙) / 지표 동의어 사전 CANON / txt·hwpx·pdf·docx 본문 추출 |
 | `search.py` / `suggest.py` | 유사 검색(로컬 문자 n-gram, 외부 API 없음) / 데이터 카탈로그 CATALOG |
