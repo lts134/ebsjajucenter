@@ -1,0 +1,7 @@
+# SQLite 이력 파일을 Cloud Storage(또는 S3 호환 저장소)에 실시간 복제한다. 컨테이너가 꺼져도 다음 시작 때 복원되므로
+# Cloud Run처럼 디스크가 사라지는 환경에서도 이력이 유지된다. 복제 대상은 환경변수 LITESTREAM_REPLICA_URL(예: gcs://버킷/history).
+dbs:
+  - path: ${HISTORY_DB}
+    replicas:
+      - url: ${LITESTREAM_REPLICA_URL}
+        sync-interval: 1s

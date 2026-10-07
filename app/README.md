@@ -6,7 +6,7 @@
 | 방식 | 명령 | 접속 | 키 |
 |---|---|---|---|
 | 혼자 쓰기(PC) | `run.bat` 더블클릭(또는 `python start.py`) | 내 PC 브라우저만(localhost) | 설정 화면에 입력(세션 한정) 또는 `set_key.bat`로 환경변수에 한 번 저장 |
-| 클라우드(시연용) | `deploy_cloudrun.sh` (Google Cloud Run, Dockerfile 포함) | 공개 URL + 접속 비밀번호(`APP_PASSWORD`) | 접속자마다 설정 화면에 입력. 컨테이너 재시작 시 이력이 사라지므로 시연·심사용. 상세·한계는 `docs/배포_클라우드.md` |
+| **클라우드(권장)** | `deploy_cloudrun.sh` — Google Cloud Run(쓴 만큼 과금, 요청 없으면 0) + 이력 DB를 Cloud Storage에 실시간 복제(Litestream) | 공개 URL + 접속 비밀번호(`APP_PASSWORD`) | 접속자마다 설정 화면에 입력(또는 공통 키 환경변수). 이력은 컨테이너가 꺼져도 유지. 비용·절차·보안은 `docs/배포_클라우드.md` |
 | 여러 사람(서버) | `run_server.bat` / `run_server.sh` | 같은 망의 PC에서 `http://<서버>:8501` | **접속자마다 설정 화면에 자기 키 입력**(브라우저 세션에만 보관, 서버에 저장 안 됨). 운영자가 서버 환경변수 `ANTHROPIC_API_KEY`에 공통 키를 두면 빈 칸으로도 동작 |
 
 - 없는 모듈만 자동 설치(이미 있으면 건너뜀). 종료: 터미널에서 Ctrl+C
@@ -53,7 +53,8 @@
 |---|---|
 | `app.py` / `start.py` / `run.bat` | 화면 / 실행·모듈 설치 / 실행 배치 |
 | `llm.py` / `providers.py` | LLM 공통 호출(세션별 설정, 모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 도구 루프, 호출 기록·비용) / 공급자 플러그인(기본 Anthropic, `provider_*.py` 자동 발견) |
-| `run_server.bat` / `run_server.sh` | 여러 사람 접속용 서버 모드 실행 |
+| `run_server.bat` / `run_server.sh` | 사내 PC 서버 모드 실행 |
+| `Dockerfile` / `start_cloud.sh` / `litestream.yml` / `deploy_cloudrun.sh` | 클라우드(Cloud Run) 배포: 이력 DB 복원·복제 포함 |
 | `update.bat` / `update.sh` | git clone 한 폴더에서 최신 코드 받기 + 실행 |
 | `set_key.bat` / `unset_key.bat` | 혼자 쓰는 PC에서 API 키를 사용자 환경변수로 저장/삭제(재시작해도 유지, 설정 화면 입력 불필요) |
 | `db.py` | SQLite: requests, items(period 포함), submissions, submission_values(출처 포함), diff_reasons, drafts, reviews |
