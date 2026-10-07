@@ -22,10 +22,11 @@ REPO="cloud-run-source-deploy"
 gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 || gcloud artifacts repositories create "$REPO" --repository-format=docker --location="$REGION"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/$SERVICE:$(date +%Y%m%d-%H%M%S)"
 gcloud builds submit --tag "$IMAGE" --region "$REGION" --timeout 1200 .
-ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=${APP_PASSWORD:-}"
+ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic"
+[ -n "${APP_PASSWORD:-}" ] && ENVS="$ENVS,APP_PASSWORD=$APP_PASSWORD"          # 생략하면 기존 비밀번호 유지
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENVS="$ENVS,ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
 gcloud run deploy "$SERVICE" --image "$IMAGE" --region "$REGION" --platform managed --allow-unauthenticated \
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --cpu-boost --timeout 3600 --session-affinity \
-  --set-env-vars "$ENVS"
+  --update-env-vars "$ENVS"
 echo "접속 URL: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"
 echo "내리기: gcloud run services delete $SERVICE --region $REGION   (이력 복제본은 gs://$BUCKET 에 남음)"

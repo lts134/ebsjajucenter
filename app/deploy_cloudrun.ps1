@@ -64,11 +64,13 @@ gcloud builds submit --tag $image --region $Region --timeout 1200 .
 if ($LASTEXITCODE -ne 0) { Fail "컨테이너 빌드 실패. 위 로그 링크의 마지막 부분을 확인하세요." }
 
 Step "배포"
-$envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=$AppPassword"
+# 환경변수는 '갱신'만 한다(--update-env-vars): 다시 배포할 때 -AppPassword를 생략해도 이미 설정된 비밀번호·키가 유지된다.
+$envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic"
+if ($AppPassword) { $envs += ",APP_PASSWORD=$AppPassword" } else { Write-Host "비밀번호를 지정하지 않아 기존 값을 유지합니다." }
 if ($AnthropicApiKey) { $envs += ",ANTHROPIC_API_KEY=$AnthropicApiKey" }
 gcloud run deploy $Service --image $image --region $Region --platform managed --allow-unauthenticated `
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --cpu-boost --timeout 3600 --session-affinity `
-  --set-env-vars $envs
+  --update-env-vars $envs
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
   Write-Host "배포 실패. 진단 정보:" -ForegroundColor Yellow
