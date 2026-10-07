@@ -1,0 +1,6 @@
+# 셸 스크립트·컨테이너 설정은 어느 OS에서 받아도 LF 유지(Windows CRLF로 바뀌면 컨테이너에서 실행 실패)
+*.sh text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
