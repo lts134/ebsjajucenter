@@ -98,7 +98,6 @@
   td button { height: 32px; padding: 0 10px; font-size: 13px; }
   td select { height: 32px; font-size: 13px; padding-right: 8px; }
   td.mono, span.mono { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  td.mono:first-child { font-weight: 600; letter-spacing: .04em; }
   td input.memo { width: 100%; min-width: 150px; height: 32px; font-size: 13px; }
   .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
   .tag.dup { background: var(--amber-weak); color: var(--amber); }
@@ -169,7 +168,7 @@
     <section class="card">
       <h2>접수 목록</h2>
       <div class="toolbar">
-        <input class="grow" type="search" id="q" placeholder="성명·학교·센터·접수번호 검색">
+        <input class="grow" type="search" id="q" placeholder="성명·학교·센터·심사번호 검색">
         <select id="fStatus"><option value="">상태 전체</option></select>
         <select id="fCenter"><option value="">센터 전체</option></select>
         <button type="button" id="reloadBtn">새로고침</button>
@@ -181,7 +180,7 @@
         <table>
           <thead>
             <tr>
-              <th>접수번호</th><th>접수일시</th><th>성명</th><th>학교 / 학년</th><th>센터</th><th>최초 등원</th>
+              <th>접수일시</th><th>성명</th><th>학교 / 학년</th><th>센터</th><th>최초 등원</th>
               <th>보호자</th><th>파일</th><th>중복</th><th>상태</th><th>심사번호</th><th>메모</th>
             </tr>
           </thead>
@@ -235,7 +234,6 @@
   const STATUSES = ['접수', '보완요청', '심사대상', '제외'];
   const $ = id => document.getElementById(id);
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const receiptOf = id => id.slice(0, 8).toUpperCase();
   const fmtSize = b => b >= 1024 * 1024 ? (b / 1024 / 1024).toFixed(1) + 'MB' : Math.max(1, Math.round(b / 1024)) + 'KB';
   const fmtKST = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
   const toKSTInput = ms => new Date(ms + 9 * 3600e3).toISOString().slice(0, 16);
@@ -357,7 +355,7 @@
     const q = $('q').value.trim().toLowerCase(), s = $('fStatus').value, c = $('fCenter').value;
     return rows.filter(r =>
       (!s || r.status === s) && (!c || r.center === c) &&
-      (!q || [r.name, r.school, r.center, receiptOf(r.id), r.reviewNo].some(v => String(v || '').toLowerCase().includes(q))));
+      (!q || [r.name, r.school, r.center, r.reviewNo].some(v => String(v || '').toLowerCase().includes(q))));
   }
 
   function render() {
@@ -371,12 +369,11 @@
     $('kDup').textContent = rows.filter(r => r._dup === '이전본').length;
 
     if (!list.length) {
-      $('rows').innerHTML = `<tr><td colspan="12" class="empty">${rows.length ? '조건에 맞는 접수 건이 없습니다.' : '아직 접수된 건이 없습니다.'}</td></tr>`;
+      $('rows').innerHTML = `<tr><td colspan="11" class="empty">${rows.length ? '조건에 맞는 접수 건이 없습니다.' : '아직 접수된 건이 없습니다.'}</td></tr>`;
       return;
     }
     $('rows').innerHTML = list.map(r => `
       <tr data-id="${esc(r.id)}">
-        <td class="mono">${receiptOf(r.id)}</td>
         <td class="mono">${r.createdAt ? fmtKST.format(r.createdAt.toDate()) : ''}</td>
         <td>${esc(r.name)}</td>
         <td>${esc(r.school)}<br><span class="muted">${esc(r.grade)}</span></td>
@@ -434,7 +431,7 @@
 
   $('excelBtn').onclick = () => {
     const data = filtered().map(r => ({
-      '접수번호': receiptOf(r.id), '접수일시': r.createdAt ? fmtKST.format(r.createdAt.toDate()) : '',
+      '접수일시': r.createdAt ? fmtKST.format(r.createdAt.toDate()) : '',
       '성명': r.name, '학교': r.school, '학년': r.grade, '센터': r.center, '최초 등원': r.firstVisit,
       '보호자 성명': r.guardianName, '보호자 연락처': r.guardianPhone, '파일 크기': fmtSize(r.fileSize),
       '중복': r._dup, '상태': r.status, '심사번호': r.reviewNo || '', '메모': r.memo || ''
@@ -454,9 +451,11 @@
       try {
         let bytes = await (await getPdf(r)).arrayBuffer();
         if (transform) bytes = await transform(bytes, r, failed);
-        zip.file(nameOf(r), bytes);
+        let name = nameOf(r), n = 2;
+        while (zip.file(name)) name = nameOf(r).replace(/\.pdf$/, `_${n++}.pdf`);
+        zip.file(name, bytes);
       } catch (err) {
-        failed.push(`${receiptOf(r.id)}: 파일을 받지 못함 (${err.message})`);
+        failed.push(`${r.name}(${r.school}): 파일을 받지 못함 (${err.message})`);
       }
     }
     log.textContent = '압축 중';
@@ -468,8 +467,8 @@
   $('zipAllBtn').onclick = async () => {
     const list = filtered();
     if (!list.length) { alert('내려받을 건이 없습니다.'); return; }
-    if (!confirm(`현재 목록의 ${list.length}건을 내려받습니다. 파일명에 접수번호와 성명이 들어갑니다. 내부 보관용으로만 사용하세요.`)) return;
-    const blob = await buildZip(list, r => `${receiptOf(r.id)}_${r.name}.pdf`.replace(/[\\/:*?"<>|]/g, '_'), $('reviewLog'));
+    if (!confirm(`현재 목록의 ${list.length}건을 내려받습니다. 파일명에 접수일시, 성명, 학교가 들어갑니다. 내부 보관용으로만 사용하세요.`)) return;
+    const blob = await buildZip(list, r => `${toKSTInput(r.createdAt.toMillis()).replace(/[-:]/g, '').replace('T', '-')}_${r.name}_${r.school}.pdf`.replace(/[\\/:*?"<>|]/g, '_'), $('reviewLog'));
     downloadBlob(blob, `활용수기_전체_${stamp()}.zip`);
   };
 

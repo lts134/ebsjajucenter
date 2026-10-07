@@ -142,10 +142,9 @@
   .done { text-align: center; padding: 40px 20px 36px; }
   .done .icon { width: 56px; height: 56px; margin: 0 auto 18px; border-radius: 50%; background: var(--success-weak); color: var(--success); display: grid; place-items: center; }
   .done h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
-  .receipt { margin: 24px auto 0; max-width: 320px; padding: 18px 20px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--line); }
-  .receipt .k { font-size: 14px; color: var(--text-3); }
-  .receipt .v { margin-top: 2px; font-size: 30px; font-weight: 700; letter-spacing: .08em; font-variant-numeric: tabular-nums; color: var(--text); }
-  .copy { margin-top: 10px; padding: 7px 14px; border: 1px solid var(--line-strong); border-radius: 8px; background: #fff; color: var(--text-2); font-size: 14px; font-weight: 600; cursor: pointer; }
+  .summary { display: grid; grid-template-columns: 76px 1fr; gap: 10px 14px; max-width: 420px; margin: 24px auto 0; padding: 18px 20px; text-align: left; font-size: 15px; border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--line); }
+  .summary dt { color: var(--text-3); }
+  .summary dd { font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .done p { margin-top: 20px; font-size: 15px; color: var(--text-2); }
 
   .foot { margin-top: 28px; text-align: center; font-size: 13.5px; color: var(--text-3); }
@@ -186,7 +185,7 @@
         </li>
         <li>공정한 심사를 위해 <strong>원고에는 이름, 학교명, 센터명을 쓰지 마세요.</strong></li>
         <li>여러 번 제출하면 <strong>마지막 제출본</strong>으로 심사합니다.</li>
-        <li>제출이 끝나면 접수번호가 표시됩니다. 화면을 캡처해 보관해 주세요.</li>
+        <li>제출이 끝나면 완료 화면에서 제출 내용을 확인할 수 있습니다.</li>
       </ul>
     </section>
 
@@ -276,12 +275,13 @@
   <section class="section done" id="doneView" hidden>
     <div class="icon"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>
     <h2>접수가 완료되었습니다</h2>
-    <div class="receipt">
-      <div class="k">접수번호</div>
-      <div class="v" id="receiptNo"></div>
-      <button type="button" class="copy" id="copyBtn">접수번호 복사</button>
-    </div>
-    <p>이 화면을 캡처해 보관해 주세요.<br>내용을 고치려면 다시 제출하시면 되며, 마지막 제출본으로 심사합니다.</p>
+    <dl class="summary">
+      <dt>성명</dt><dd id="sumName"></dd>
+      <dt>학교</dt><dd id="sumSchool"></dd>
+      <dt>제출 파일</dt><dd id="sumFile"></dd>
+      <dt>접수 일시</dt><dd id="sumTime"></dd>
+    </dl>
+    <p>내용을 고치려면 다시 제출하시면 되며, 마지막 제출본으로 심사합니다.</p>
   </section>
 
   <p class="foot" id="contactText"></p>
@@ -486,11 +486,6 @@
     return '제출 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요.';
   }
 
-  $('copyBtn').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText($('receiptNo').textContent); $('copyBtn').textContent = '복사했습니다'; }
-    catch { $('copyBtn').textContent = '길게 눌러 직접 복사해 주세요'; }
-  });
-
   $('applyForm').addEventListener('submit', async e => {
     e.preventDefault();
     showError('');
@@ -528,7 +523,10 @@
         createdAt: fs.serverTimestamp()
       });
 
-      $('receiptNo').textContent = id.slice(0, 8).toUpperCase();
+      $('sumName').textContent = data.name;
+      $('sumSchool').textContent = `${data.school} ${data.grade}`;
+      $('sumFile').textContent = file.name;
+      $('sumTime').textContent = fmtKST(Date.now());
       $('applyForm').hidden = true;
       $('statusBox').hidden = true;
       $('doneView').hidden = false;
