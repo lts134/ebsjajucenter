@@ -162,6 +162,43 @@ def value_table_input(key: str, what: str = "값", base_date_default: str | None
     try: return tabular.from_records(man), "직접 입력"
     except ValueError as e: st.error(str(e)); return None, ""
 
+def _src_key(df: pd.DataFrame) -> str:
+    return f"{df['source_file'].iloc[0]}/{df['source_sheet'].iloc[0]}"
+
+def value_sources(key: str, what: str = "값", base_date_default: str | None = None, demo_files: list[Path] | None = None):
+    """여러 출처(엑셀 + 회신 문서의 표 여러 개 + 직접 입력)를 하나로 모은다.
+    지금 읽은 표는 '담기' 없이도 포함되고, 다른 파일을 이어서 넣으려면 '담기'로 묶어 둔다. (df | None, 출처 이름) 반환."""
+    pile: list[dict] = st.session_state.setdefault(f"{key}_pile", [])
+    cur_df, cur_name = value_table_input(key, what, base_date_default, demo_files)
+    cur_key = _src_key(cur_df) if cur_df is not None and len(cur_df) else None
+    in_pile = cur_key is not None and any(p["key"] == cur_key for p in pile)
+    if cur_df is not None and len(cur_df):
+        a, b = st.columns([3, 1.2])
+        a.caption(f"지금 읽은 표: {len(cur_df)}건 · {cur_key}" + (" · 담겨 있음" if in_pile else ""))
+        label = "다시 담기" if in_pile else "담고 다른 파일 추가"
+        if b.button(label, key=f"{key}_add", icon=":material/add:", type="tertiary",
+                    help="이 표를 묶음에 넣어 두고, 위에서 다른 파일이나 다른 표를 이어서 읽습니다. 엑셀과 한글 문서를 함께 넣을 때 씁니다."):
+            pile[:] = [p for p in pile if p["key"] != cur_key] + [{"key": cur_key, "name": cur_name, "df": cur_df}]
+            st.rerun()
+    if pile:
+        with st.container(border=True):
+            st.markdown(f"**담아 둔 표 {len(pile)}개 · {sum(len(p['df']) for p in pile)}건**  \n<span class='small-muted'>다른 파일이나 표를 더 넣으려면 위 '어디에 있나요?'에서 고르면 됩니다. 담은 것은 그대로 남습니다.</span>", unsafe_allow_html=True)
+            for i, p in enumerate(pile):
+                a, b = st.columns([5, 1])
+                a.caption(f"{p['key']} · {len(p['df'])}건 · 지표 {', '.join(sorted(p['df']['indicator'].unique())[:4])}")
+                if b.button("빼기", key=f"{key}_rm_{i}", type="tertiary", icon=":material/close:"):
+                    pile.pop(i); st.rerun()
+    parts = [p["df"] for p in pile] + ([cur_df] if cur_df is not None and len(cur_df) and not in_pile else [])
+    if not parts: return None, ""
+    df = pd.concat(parts, ignore_index=True)
+    dup = df.duplicated(subset=["indicator", "center", "base_date"], keep=False)
+    if dup.any():
+        st.warning(f"같은 지표·센터·기준일 값이 두 출처에 있습니다({int(dup.sum())}행). 나중에 넣은 출처의 값만 남깁니다. "
+                   "둘 다 두려면 한쪽 지표명을 바꾸세요. 예: " + " / ".join(f"{r.indicator}·{r.center}·{r.base_date}" for r in df[dup].head(3).itertuples()))
+        df = df.drop_duplicates(subset=["indicator", "center", "base_date"], keep="last").reset_index(drop=True)
+    names = list(dict.fromkeys([p["name"] for p in pile] + ([cur_name] if cur_df is not None and not in_pile else [])))
+    return df, " + ".join(n for n in names if n)
+
 def analyze_with_status(text: str):
     """추출을 돌리면서 단계(모델·출력 한도·응답 시간·잘림 재시도)를 보여 준다. 긴 요구서는 수십 초~수 분."""
     if not HAS_API:
@@ -241,11 +278,12 @@ def page_register():
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
         st.markdown("### 2. 그때 보낸 값")
-        st.caption("집계 엑셀이 없어도 됩니다. 그때 보낸 회신 공문(hwp·hwpx·docx·pdf)의 표를 그대로 읽거나, 직접 입력할 수 있습니다.")
-        vdf, vname = value_table_input("reg_val", "그때 보낸 값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
+        st.caption("집계 엑셀, 회신 공문(hwp·hwpx·docx·pdf)의 표, 직접 입력 중 무엇이든 됩니다. 여러 파일·여러 표를 함께 넣으려면 하나 읽을 때마다 '담고 다른 파일 추가'.")
+        vdf, vname = value_sources("reg_val", "그때 보낸 값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
         if vdf is not None:
             st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=200, width="stretch")
-            st.caption(f"{len(vdf)}건 읽음 · 출처 {vdf['source_file'][0]}" + (f" / {vdf['source_sheet'][0]}" if vdf['source_sheet'][0] else ""))
+            srcs = list(dict.fromkeys(f"{f}{' / ' + str(sh) if sh else ''}" for f, sh in zip(vdf["source_file"], vdf["source_sheet"], strict=True)))
+            st.caption(f"저장될 값 {len(vdf)}건 · 출처 {len(srcs)}개: {', '.join(srcs[:4])}" + (" …" if len(srcs) > 4 else ""))
     if "reg_extract" in st.session_state:
         res = st.session_state["reg_extract"]
         st.markdown("### 3. 확인하고 저장")
@@ -267,7 +305,7 @@ def page_register():
             vals = vdf.to_dict("records") if vdf is not None else []
             sid = db.add_submission(rid, submitted_date, USER, vname, "confirmed", "과거 제출본 등록", vals)
             st.success(f"저장했습니다. 요구서 #{rid}, 제출본 #{sid}, 값 {len(vals)}건. 다음에 같은 지표·기준일을 물으면 자동으로 찾아 줍니다.")
-            del st.session_state["reg_extract"]
+            del st.session_state["reg_extract"]; st.session_state.pop("reg_val_pile", None)
 
 # ================= 새 요구서 처리 (1→2→3) =================
 def page_process():
@@ -346,7 +384,7 @@ def step_compare():
             st.caption(f"값 {len(old_df)}건 · 지표 {', '.join(sorted(old_df['indicator'].unique())[:5])} · 기준일 {', '.join(old_dates[:3])}. 같은 지표명·센터명·기준일인 행끼리 맞춰 봅니다.")
     with c1:
         st.markdown("**이번에 낼 수치**")
-        new_df, _ = value_table_input("cmp_new", "이번 수치", base_date_default=old_dates[0] if len(old_dates) == 1 else None, demo_files=sorted(SAMPLE.glob("등원율_*9월*.xlsx")))
+        new_df, _ = value_sources("cmp_new", "이번 수치", base_date_default=old_dates[0] if len(old_dates) == 1 else None, demo_files=sorted(SAMPLE.glob("등원율_*9월*.xlsx")))
         if new_df is not None: st.caption(f"{len(new_df)}건 준비됨.")
     st.markdown("#### 맞춰 본 결과")
     tol = st.number_input("허용 오차 — 지난번 값과 이번 값의 차이가 이 값 이하면 '일치'로 봅니다. 0이면 완전히 같아야 일치. 단위는 값과 같음(등원율 % 포인트, 학생 수 명)",
@@ -401,6 +439,7 @@ def step_compare():
             if reason.strip() and m is not None:
                 row = m[(m["indicator"] == key[0]) & (m["center"] == key[1]) & (m["base_date"] == key[2])].iloc[0]
                 db.add_reason(sid, *key, row["old_value"], row["new_value"], reason, USER)
+        st.session_state.pop("cmp_new_pile", None)
         st.session_state.update(last_submission=sid, last_request=target["id"], target_request=target["id"],
                                 last_checklist=ck.to_dict("records") if ck is not None else None, last_reasons={" | ".join(k): v for k, v in reasons.items() if v.strip()})
         go("새 요구서 처리", 3)
