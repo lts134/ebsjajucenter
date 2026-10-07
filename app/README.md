@@ -54,7 +54,7 @@
 | `app.py` / `start.py` / `run.bat` | 화면 / 실행·모듈 설치 / 실행 배치 |
 | `llm.py` / `providers.py` | LLM 공통 호출(세션별 설정, 모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 도구 루프, 호출 기록·비용) / 공급자 플러그인(기본 Anthropic, `provider_*.py` 자동 발견) |
 | `run_server.bat` / `run_server.sh` | 사내 PC 서버 모드 실행 |
-| `Dockerfile` / `start_cloud.sh` / `litestream.yml` / `deploy_cloudrun.sh` | 클라우드(Cloud Run) 배포: 이력 DB 복원·복제 포함 |
+| `Dockerfile` / `start_cloud.sh` / `litestream.yml` / `deploy_cloudrun.sh`·`.ps1` | 클라우드(Cloud Run) 배포: 이력 DB 복원·복제 포함 |
 | `update.bat` / `update.sh` | git clone 한 폴더에서 최신 코드 받기 + 실행 |
 | `set_key.bat` / `unset_key.bat` | 혼자 쓰는 PC에서 API 키를 사용자 환경변수로 저장/삭제(재시작해도 유지, 설정 화면 입력 불필요) |
 | `db.py` | SQLite: requests, items(period 포함), submissions, submission_values(출처 포함), diff_reasons, drafts, reviews |
