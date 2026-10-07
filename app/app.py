@@ -664,4 +664,5 @@ def page_settings():
 
 PAGES = {"홈": page_home, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register,
          "이력 조회": page_history, "현황": page_status, "이력에 묻기": page_ask, "설정": page_settings}
+if not HAS_API and page != "설정": ui.ai_banner(lambda: go("설정"))
 PAGES[page]()

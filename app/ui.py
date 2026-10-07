@@ -31,9 +31,8 @@ h4 {{font-size: .95rem !important; font-weight: 700 !important; color: {TEXT}; m
 .brand .mark {{width: 36px; height: 36px; border-radius: 9px; background: {PRIMARY}; color: #fff; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; letter-spacing: 0; font-family: Pretendard, Arial, sans-serif !important;}}
 .brand .t {{font-weight: 700; font-size: .98rem; color: {TEXT}; letter-spacing: -0.01em; line-height: 1.2;}}
 .brand .s {{font-size: .74rem; color: {MUTED}; margin-top: 2px;}}
-.navsec {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; height: 34px; display: flex; align-items: flex-end; padding: 0 10px 6px; margin: 0;}}
-[data-testid="stSidebar"] [data-testid="stMarkdown"] {{overflow: visible;}}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{gap: .3rem;}}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; margin: 0; padding: 14px 10px 2px; line-height: 1.2;}}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{gap: .35rem;}}
 [data-testid="stSidebar"] .stButton {{margin: 0;}}
 [data-testid="stSidebar"] [class*="st-key-nav"] button {{
   justify-content: flex-start !important; text-align: left; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent;
@@ -102,7 +101,7 @@ def nav(sections: list[tuple[str, list[tuple[str, str]]]], current: str) -> str 
     """사이드바 메뉴. sections: [(구역 이름, [(메뉴 이름, material 아이콘)])]. 눌린 메뉴 이름을 돌려준다(없으면 None)."""
     clicked = None
     for sec, items in sections:
-        if sec: st.markdown(f'<div class="navsec">{sec}</div>', unsafe_allow_html=True)
+        if sec: st.caption(sec)
         for i, (name, icon) in enumerate(items):
             key = f"navon_{sec}_{i}" if name == current else f"nav_{sec}_{i}"
             if st.button(name, key=key, icon=f":material/{icon}:", type="tertiary", width="stretch"): clicked = name
@@ -137,3 +136,9 @@ def action_card(col, title: str, desc: str, button: str, key: str, icon: str, pr
 
 def status_line(on: bool, text: str):
     st.markdown(f'<span class="pill"><i class="{"on" if on else ""}"></i>{text}</span>', unsafe_allow_html=True)
+
+def ai_banner(on_click_settings) -> None:
+    """AI가 연결되지 않았을 때 본문 맨 위에 크게 알린다. 규칙 기반으로도 동작하지만 읽기 정확도가 떨어지므로 눈에 띄어야 한다."""
+    c1, c2 = st.columns([6, 1], vertical_alignment="center")
+    c1.warning("**AI가 연결되지 않았습니다.** 지금은 규칙 기반으로만 동작해 요구서 읽기·초안·후속 질문의 정확도가 낮습니다. 설정에서 API 키를 넣으면 바로 전환됩니다.", icon=":material/link_off:")
+    if c2.button("설정으로", type="primary", width="stretch", key="banner_settings"): on_click_settings()
