@@ -78,7 +78,7 @@
 
 `public/apply.html`에서 아래 항목을 확정한 값으로 바꾸고 `firebase deploy --only hosting`을 실행합니다.
 
-- `GRADE_OPTIONS`: 응모 대상 학년
+- `GRADE_OPTIONS`: 응모 대상 학년 (현재 중1~고3)
 - `CENTER_OPTIONS`: 센터 목록 (비워 두면 학생이 직접 입력)
 - `CONTACT_TEXT`: 문의처
 - 개인정보 수집·이용 안내 표의 **보유 기간**
