@@ -1,0 +1,9 @@
+storage/*.db*
+storage/out/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+tests/.flow_apptest.db*
+docs/screens/
+docs/*.pptx
+docs/*.pdf

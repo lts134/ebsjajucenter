@@ -27,6 +27,13 @@ import db, extract, compare, pii, docread, normalize, search, suggest, draft, hw
 
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
+if os.environ.get("APP_PASSWORD") and not st.session_state.get("authed"):          # 외부 서버에 올릴 때의 최소 잠금. 사내망 전용이면 비워 둔다
+    import hmac
+    st.markdown("# 대외 요구자료 대응"); st.caption("접속 비밀번호를 입력하세요.")
+    pw = st.text_input("비밀번호", type="password", label_visibility="collapsed")
+    if pw and hmac.compare_digest(pw, os.environ["APP_PASSWORD"]): st.session_state["authed"] = True; st.rerun()
+    elif pw: st.error("비밀번호가 맞지 않습니다.")
+    st.stop()
 HERE = Path(__file__).parent
 SAMPLE = HERE / "sample_data"
 TPL_DIR = HERE / "templates"
@@ -200,11 +207,11 @@ def req_label(r): return f"#{r['id']} {r['received_date']} · {r['requester']} �
 
 # ================= 홈 =================
 def page_home():
-    ui.page_title(f"{USER}님, 무엇을 할까요", f"{dt.date.today():%Y년 %m월 %d일} · 같은 수치를 다시 묻는 요구에 지난번과 같은 근거로 답하기 위한 도구입니다.", "홈")
+    ui.page_title(f"{USER}님, 무엇을 할까요", "", "홈")
     c1, c2, c3 = st.columns(3)
-    if ui.action_card(c1, "새 요구서가 왔다", "요구서를 올리면 항목을 읽고, 전에 낸 적 있는 수치를 찾아 맞춰 본 뒤 회신 초안까지 만듭니다.", "새 요구서 처리 시작", "home_new", "upload_file", primary=True): go("새 요구서 처리", 1)
-    if ui.action_card(c2, "예전에 낸 답변을 넣는다", "과거 요구서와 그때 보낸 값(엑셀·회신 공문의 표)을 등록해 두면 다음 요구 때 자동으로 찾아 줍니다.", "과거 답변 등록", "home_reg", "library_add"): go("과거 답변 등록")
-    if ui.action_card(c3, "기록에 물어본다", "'감사실에 등원율 언제 얼마로 냈지?'처럼 물으면 기록을 찾아 근거와 함께 답합니다.", "이력에 묻기", "home_ask", "forum"): go("이력에 묻기")
+    if ui.action_card(c1, "새 요구서 처리", "요구서 읽기 → 수치 맞춰 보기 → 회신 초안", "시작", "home_new", "upload_file", primary=True): go("새 요구서 처리", 1)
+    if ui.action_card(c2, "과거 답변 등록", "예전 요구서와 그때 보낸 값을 기억에 저장", "등록", "home_reg", "library_add"): go("과거 답변 등록")
+    if ui.action_card(c3, "기록에 묻기", "언제, 누구에게, 얼마로 냈는지 바로 찾기", "질문", "home_ask", "forum"): go("이력에 묻기")
     ov = db.request_overview(); pending = db.list_drafts("review_requested")
     st.markdown("## 현황")
     if not ov:

@@ -6,6 +6,7 @@
 | 방식 | 명령 | 접속 | 키 |
 |---|---|---|---|
 | 혼자 쓰기(PC) | `run.bat` 더블클릭(또는 `python start.py`) | 내 PC 브라우저만(localhost) | 설정 화면에 입력(세션 한정) 또는 `set_key.bat`로 환경변수에 한 번 저장 |
+| 클라우드(시연용) | `deploy_cloudrun.sh` (Google Cloud Run, Dockerfile 포함) | 공개 URL + 접속 비밀번호(`APP_PASSWORD`) | 접속자마다 설정 화면에 입력. 컨테이너 재시작 시 이력이 사라지므로 시연·심사용. 상세·한계는 `docs/배포_클라우드.md` |
 | 여러 사람(서버) | `run_server.bat` / `run_server.sh` | 같은 망의 PC에서 `http://<서버>:8501` | **접속자마다 설정 화면에 자기 키 입력**(브라우저 세션에만 보관, 서버에 저장 안 됨). 운영자가 서버 환경변수 `ANTHROPIC_API_KEY`에 공통 키를 두면 빈 칸으로도 동작 |
 
 - 없는 모듈만 자동 설치(이미 있으면 건너뜀). 종료: 터미널에서 Ctrl+C

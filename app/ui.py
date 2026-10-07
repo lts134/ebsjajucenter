@@ -28,7 +28,7 @@ h4 {{font-size: .95rem !important; font-weight: 700 !important; color: {TEXT}; m
 [data-testid="stSidebar"] > div:first-child {{padding-top: 1.2rem;}}
 [data-testid="stSidebar"] .block-container {{padding: 0 .9rem 1rem;}}
 .brand {{display: flex; gap: 10px; align-items: center; padding: 2px 6px 16px;}}
-.brand .mark {{width: 34px; height: 34px; border-radius: 9px; background: {PRIMARY}; color: #fff; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center; letter-spacing: -0.02em;}}
+.brand .mark {{width: 36px; height: 36px; border-radius: 9px; background: {PRIMARY}; color: #fff; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; letter-spacing: 0; font-family: Pretendard, Arial, sans-serif !important;}}
 .brand .t {{font-weight: 700; font-size: .98rem; color: {TEXT}; letter-spacing: -0.01em; line-height: 1.2;}}
 .brand .s {{font-size: .74rem; color: {MUTED}; margin-top: 2px;}}
 .navsec {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; height: 34px; display: flex; align-items: flex-end; padding: 0 10px 6px; margin: 0;}}
@@ -72,7 +72,7 @@ h4 {{font-size: .95rem !important; font-weight: 700 !important; color: {TEXT}; m
 .kpi .v {{font-size: 1.75rem; font-weight: 800; color: {TEXT}; line-height: 1.1; letter-spacing: -0.02em;}}
 .kpi .l {{color: {MUTED}; font-size: .84rem; margin-top: 6px;}}
 .card-t {{font-weight: 700; font-size: 1.02rem; color: {TEXT}; margin: 2px 0 4px; letter-spacing: -0.01em;}}
-.card-d {{color: {MUTED}; font-size: .9rem; min-height: 70px; line-height: 1.55;}}
+.card-d {{color: {MUTED}; font-size: .9rem; min-height: 44px; line-height: 1.55;}}
 div[data-testid="stMetric"] {{background: #fff; border: 1px solid {LINE}; border-radius: 12px; padding: 12px 16px;}}
 div[data-testid="stMetric"] label p {{color: {MUTED} !important; font-size: .84rem !important;}}
 div[data-testid="stMetricValue"] {{font-size: 1.6rem !important; font-weight: 800 !important; letter-spacing: -0.02em;}}
@@ -95,7 +95,7 @@ hr {{margin: 1.4rem 0 1.1rem; border-color: {LINE};}}
 def inject():
     st.markdown(CSS, unsafe_allow_html=True)
 
-def brand(title: str, sub: str, mark: str = "요"):
+def brand(title: str, sub: str, mark: str = "EBS"):
     st.markdown(f'<div class="brand"><div class="mark">{mark}</div><div><div class="t">{title}</div><div class="s">{sub}</div></div></div>', unsafe_allow_html=True)
 
 def nav(sections: list[tuple[str, list[tuple[str, str]]]], current: str) -> str | None:
