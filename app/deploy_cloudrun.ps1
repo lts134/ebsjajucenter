@@ -39,13 +39,30 @@ $sa = "$pn-compute@developer.gserviceaccount.com"
 gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --member="serviceAccount:$sa" --role=roles/storage.objectAdmin 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { Write-Host "권한 부여에 실패했습니다(기본 서비스 계정이 아직 없을 수 있음). 배포 후 다시 한 번 이 스크립트를 실행하면 됩니다." -ForegroundColor Yellow }
 
+Step "Cloud Run 서비스 에이전트에 컨테이너 저장소 읽기 권한(새 프로젝트에서 'Container import failed' 방지)"
+$agent = "service-$pn@serverless-robot-prod.iam.gserviceaccount.com"
+gcloud projects add-iam-policy-binding $Project --member="serviceAccount:$agent" --role=roles/artifactregistry.reader --condition=None 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "서비스 에이전트가 아직 만들어지지 않았을 수 있어 20초 기다린 뒤 다시 시도합니다." -ForegroundColor Yellow
+  gcloud beta services identity create --service=run.googleapis.com --project=$Project 2>&1 | Out-Null
+  Start-Sleep -Seconds 20
+  gcloud projects add-iam-policy-binding $Project --member="serviceAccount:$agent" --role=roles/artifactregistry.reader --condition=None 2>&1 | Out-Null
+}
+
 Step "배포(소스에서 컨테이너 빌드, 3~6분). 질문이 나오면 y"
 $envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=$AppPassword"
 if ($AnthropicApiKey) { $envs += ",ANTHROPIC_API_KEY=$AnthropicApiKey" }
 gcloud run deploy $Service --source . --region $Region --platform managed --allow-unauthenticated `
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --timeout 3600 --session-affinity `
   --set-env-vars $envs
-if ($LASTEXITCODE -ne 0) { Fail "배포 실패. 위 출력의 마지막 ERROR 문구를 확인하세요." }
+if ($LASTEXITCODE -ne 0) {
+  Write-Host "첫 시도 실패. 새 프로젝트는 권한 전파에 시간이 걸리는 경우가 있어 30초 뒤 한 번 더 시도합니다." -ForegroundColor Yellow
+  Start-Sleep -Seconds 30
+  gcloud run deploy $Service --source . --region $Region --platform managed --allow-unauthenticated `
+    --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --timeout 3600 --session-affinity `
+    --set-env-vars $envs
+  if ($LASTEXITCODE -ne 0) { Fail "배포 실패. 위 출력의 마지막 ERROR 문구를 확인하세요." }
+}
 
 $url = gcloud run services describe $Service --region $Region --format="value(status.url)" 2>$null
 Write-Host ""

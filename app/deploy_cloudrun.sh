@@ -15,6 +15,8 @@ fi
 PN=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
 SA="${PN}-compute@developer.gserviceaccount.com"
 gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member="serviceAccount:$SA" --role=roles/storage.objectAdmin >/dev/null
+# 2-b) Cloud Run 서비스 에이전트에 컨테이너 저장소 읽기 권한(새 프로젝트의 'Container import failed' 방지)
+gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:service-${PN}@serverless-robot-prod.iam.gserviceaccount.com" --role=roles/artifactregistry.reader --condition=None >/dev/null || true
 # 3) 배포: 인스턴스 1개 상한(SQLite는 한 곳에서만 써야 함), 요청 없으면 0으로, 웹소켓 유지 시간 1시간
 ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=${APP_PASSWORD:-}"
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENVS="$ENVS,ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
