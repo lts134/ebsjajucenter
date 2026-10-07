@@ -17,10 +17,14 @@ SA="${PN}-compute@developer.gserviceaccount.com"
 gcloud storage buckets add-iam-policy-binding "gs://$BUCKET" --member="serviceAccount:$SA" --role=roles/storage.objectAdmin >/dev/null
 # 2-b) Cloud Run 서비스 에이전트에 컨테이너 저장소 읽기 권한(새 프로젝트의 'Container import failed' 방지)
 gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:service-${PN}@serverless-robot-prod.iam.gserviceaccount.com" --role=roles/artifactregistry.reader --condition=None >/dev/null || true
-# 3) 배포: 인스턴스 1개 상한(SQLite는 한 곳에서만 써야 함), 요청 없으면 0으로, 웹소켓 유지 시간 1시간
+# 3) 빌드와 배포를 나눈다(새 프로젝트의 'Container import failed' 회피)
+REPO="cloud-run-source-deploy"
+gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 || gcloud artifacts repositories create "$REPO" --repository-format=docker --location="$REGION"
+IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/$SERVICE:$(date +%Y%m%d-%H%M%S)"
+gcloud builds submit --tag "$IMAGE" --region "$REGION" --timeout 1200 .
 ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=${APP_PASSWORD:-}"
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENVS="$ENVS,ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
-gcloud run deploy "$SERVICE" --source . --region "$REGION" --platform managed --allow-unauthenticated \
+gcloud run deploy "$SERVICE" --image "$IMAGE" --region "$REGION" --platform managed --allow-unauthenticated \
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --timeout 3600 --session-affinity \
   --set-env-vars "$ENVS"
 echo "접속 URL: $(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')"

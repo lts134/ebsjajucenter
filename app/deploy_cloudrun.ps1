@@ -49,19 +49,31 @@ if ($LASTEXITCODE -ne 0) {
   gcloud projects add-iam-policy-binding $Project --member="serviceAccount:$agent" --role=roles/artifactregistry.reader --condition=None 2>&1 | Out-Null
 }
 
-Step "배포(소스에서 컨테이너 빌드, 3~6분). 질문이 나오면 y"
+Step "컨테이너 빌드(Cloud Build, 3~5분)"
+# 'gcloud run deploy --source'는 빌드와 배포를 한 번에 하지만, 새 프로젝트에서 'Container import failed'가 반복되는 사례가 있어
+# 빌드(gcloud builds submit)와 배포(gcloud run deploy --image)를 나눈다. 이미지 참조가 단순해져 가져오기 실패를 피한다.
+$repoName = "cloud-run-source-deploy"
+$repoExists = gcloud artifacts repositories list --location=$Region --format="value(name)" --filter="name~$repoName" 2>$null
+if (-not $repoExists) {
+  gcloud artifacts repositories create $repoName --repository-format=docker --location=$Region 2>&1 | Out-Null
+}
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$image = "$Region-docker.pkg.dev/$Project/$repoName/${Service}:$stamp"
+gcloud builds submit --tag $image --region $Region --timeout 1200 .
+if ($LASTEXITCODE -ne 0) { Fail "컨테이너 빌드 실패. 위 로그 링크의 마지막 부분을 확인하세요." }
+
+Step "배포"
 $envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=$AppPassword"
 if ($AnthropicApiKey) { $envs += ",ANTHROPIC_API_KEY=$AnthropicApiKey" }
-gcloud run deploy $Service --source . --region $Region --platform managed --allow-unauthenticated `
+gcloud run deploy $Service --image $image --region $Region --platform managed --allow-unauthenticated `
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --timeout 3600 --session-affinity `
   --set-env-vars $envs
 if ($LASTEXITCODE -ne 0) {
-  Write-Host "첫 시도 실패. 새 프로젝트는 권한 전파에 시간이 걸리는 경우가 있어 30초 뒤 한 번 더 시도합니다." -ForegroundColor Yellow
-  Start-Sleep -Seconds 30
-  gcloud run deploy $Service --source . --region $Region --platform managed --allow-unauthenticated `
-    --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --timeout 3600 --session-affinity `
-    --set-env-vars $envs
-  if ($LASTEXITCODE -ne 0) { Fail "배포 실패. 위 출력의 마지막 ERROR 문구를 확인하세요." }
+  Write-Host ""
+  Write-Host "배포 실패. 진단 정보:" -ForegroundColor Yellow
+  gcloud run services describe $Service --region $Region --format="yaml(status.conditions)"
+  gcloud logging read "resource.type=cloud_run_revision AND severity>=ERROR" --project $Project --limit 5 --format="value(timestamp,textPayload,protoPayload.status.message)" --freshness=1h
+  Fail "배포 실패. 위 진단 정보(status.conditions의 message)를 보내 주세요."
 }
 
 $url = gcloud run services describe $Service --region $Region --format="value(status.url)" 2>$null
