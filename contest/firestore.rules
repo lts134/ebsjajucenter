@@ -1,0 +1,78 @@
+rules_version = '2';
+
+// 2026 자기주도학습센터 활용수기 공모 - Firestore 보안 규칙
+// Firebase 콘솔 > Firestore Database > 규칙 탭에 전체를 붙여넣고 [게시]한다.
+//
+// 문서 구조
+//   config/contest      응모 기간(openAt, closeAt). 누구나 읽기, 관리자만 수정
+//   config/admins       관리자 UID 목록(uids). 콘솔에서만 수정
+//   submissions/{id}    접수 정보. 학생은 새로 제출만, 관리자만 조회·수정·삭제
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.uid in get(/databases/$(database)/documents/config/admins).data.uids;
+    }
+
+    // 응모 기간 안인지 서버 시각(request.time)으로 판단한다. 학생 기기 시계와 무관하다.
+    function isOpen() {
+      let c = get(/databases/$(database)/documents/config/contest).data;
+      return request.time >= c.openAt && request.time < c.closeAt;
+    }
+
+    function isText(v, maxLen) {
+      return v is string && v.size() > 0 && v.size() <= maxLen;
+    }
+
+    function isValidSubmission(id) {
+      let d = request.resource.data;
+      let required = ['name', 'school', 'grade', 'center', 'firstVisit',
+                      'guardianName', 'guardianPhone', 'consents',
+                      'filePath', 'fileSize', 'status', 'createdAt'];
+      return d.keys().hasOnly(required) && d.keys().hasAll(required)
+        && isText(d.name, 30)
+        && isText(d.school, 50)
+        && isText(d.grade, 20)
+        && isText(d.center, 60)
+        && d.firstVisit is string && d.firstVisit.matches('20[0-9]{2}-(0[1-9]|1[0-2])')
+        && isText(d.guardianName, 30)
+        && d.guardianPhone is string && d.guardianPhone.matches('01[0-9]-[0-9]{3,4}-[0-9]{4}')
+        && d.consents is map
+        && d.consents.keys().hasOnly(['privacy', 'guardian', 'original'])
+        && d.consents.privacy == true
+        && d.consents.guardian == true
+        && d.consents.original == true
+        && d.filePath == 'submissions/' + id + '.pdf'
+        && d.fileSize is int && d.fileSize > 0 && d.fileSize <= 10 * 1024 * 1024
+        && d.status == '접수'
+        && d.createdAt == request.time;
+    }
+
+    match /config/contest {
+      allow read: if true;
+      allow write: if isAdmin()
+        && request.resource.data.keys().hasOnly(['openAt', 'closeAt', 'updatedAt', 'updatedBy'])
+        && request.resource.data.openAt is timestamp
+        && request.resource.data.closeAt is timestamp
+        && request.resource.data.openAt < request.resource.data.closeAt;
+    }
+
+    match /config/admins {
+      allow read: if isAdmin();
+      allow write: if false; // 관리자 추가·삭제는 Firebase 콘솔에서만 한다.
+    }
+
+    match /submissions/{id} {
+      // 학생: 응모 기간 안에 새 문서만 만들 수 있다. 이미 있는 문서를 덮어쓰면 update로 판단되어 거부된다.
+      allow create: if isOpen() && isValidSubmission(id);
+
+      // 관리자: 조회·삭제, 처리 정보(상태·메모·심사번호)만 수정
+      allow read, delete: if isAdmin();
+      allow update: if isAdmin()
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'memo', 'reviewNo', 'updatedAt']);
+    }
+  }
+}

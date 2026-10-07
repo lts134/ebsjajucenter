@@ -1,0 +1,10 @@
+[
+  {
+    "origin": [
+      "https://jajucenter-4ce99.web.app",
+      "https://jajucenter-4ce99.firebaseapp.com"
+    ],
+    "method": ["GET"],
+    "maxAgeSeconds": 3600
+  }
+]
