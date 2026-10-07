@@ -37,32 +37,32 @@ st.session_state.setdefault("llm_cfg", {}); st.session_state.setdefault("llm_sta
 llm.configure(st.session_state["llm_cfg"], st.session_state["llm_state"], st.session_state["llm_log"])
 HAS_API = llm.available()
 
-NAV = [("홈", "할 일과 현황"), ("새 요구서 처리", "읽기 → 수치 맞춰 보기 → 회신 초안"), ("검토·승인", "팀장 승인·반려"),
-       ("과거 답변 등록", "예전에 낸 요구서와 값을 기억에 넣기"), ("이력 조회", "요구·제출·초안 기록 찾기"), ("현황", "기한·반복 요구·관리대장"),
-       ("이력에 묻기", "말로 물어보면 기록을 찾아 답함"), ("설정", "AI 연결·템플릿·초기화")]
+NAV = [("업무", [("홈", "home"), ("새 요구서 처리", "description"), ("검토·승인", "task_alt")]),
+       ("기록", [("과거 답변 등록", "library_add"), ("이력 조회", "search"), ("현황", "monitoring"), ("이력에 묻기", "forum")]),
+       ("", [("설정", "settings")])]
+PAGE_NAMES = [n for _, items in NAV for n, _ in items]
 
 def go(page: str, step: int | None = None):
-    """다음 실행에서 메뉴·단계를 바꾼다(위젯 키는 생성 뒤에 직접 바꿀 수 없어 예약해 두고 다시 실행)."""
+    """다음 실행에서 메뉴·단계를 바꾼다."""
     st.session_state["_goto"] = (page, step); st.rerun()
 
 if "_goto" in st.session_state:
     _p, _s = st.session_state.pop("_goto")
     st.session_state["nav"] = _p
     if _s is not None: st.session_state["step"] = _s
+page = st.session_state.get("nav") if st.session_state.get("nav") in PAGE_NAMES else "홈"
 
 with st.sidebar:
-    ui.brand("대외 요구자료 대응", "국정감사·감사·교육부 요구자료 — 기억하고 검증하는 도구")
-    page = st.radio("메뉴", [n for n, _ in NAV], captions=[c for _, c in NAV], key="nav", label_visibility="collapsed")
-    st.divider()
+    ui.brand("대외 요구자료 대응", "국정감사·감사·교육부 요구자료")
+    clicked = ui.nav(NAV, page)
+    if clicked and clicked != page: go(clicked)
     with st.expander("내 이름(기록용)", expanded=False):
-        USER = st.text_input("담당자", st.session_state.get("user_name", "담당자"), key="user_name") or "담당자"
-        REVIEWER = st.text_input("검토자(팀장)", st.session_state.get("reviewer_name", "팀장"), key="reviewer_name") or "팀장"
+        st.text_input("담당자", st.session_state.get("user_name", "담당자"), key="user_name")
+        st.text_input("검토자(팀장)", st.session_state.get("reviewer_name", "팀장"), key="reviewer_name")
     USER = st.session_state.get("user_name") or "담당자"; REVIEWER = st.session_state.get("reviewer_name") or "팀장"
-    ui.status_line(HAS_API, f"AI {llm.model_label()} 연결됨" if HAS_API else "AI 연결 안 됨 — 규칙만으로 동작(설정에서 키 입력)")
-    if HAS_API and llm.log():
-        u = llm.usage_summary()
-        st.markdown(f'<div class="small-muted">이 세션 호출 {u["calls"]}회 · 추정 ${u["cost_usd"]:.3f}</div>', unsafe_allow_html=True)
-    if DEMO: st.markdown('<div class="small-muted">시연 모드(샘플 파일 선택칸 표시)</div>', unsafe_allow_html=True)
+    u = llm.usage_summary() if HAS_API and llm.log() else None
+    ui.sidefoot(USER, HAS_API, f"AI {llm.model_label()}" if HAS_API else "AI 연결 안 됨 · 규칙만 동작",
+                (f"이 세션 호출 {u['calls']}회 · 추정 ${u['cost_usd']:.3f}" if u else "") + ("<br>시연 모드(샘플 파일 선택칸 표시)" if DEMO else ""))
 
 @st.cache_data(show_spinner=False, max_entries=20)
 def render_hwpx_cached(tpl_bytes: bytes, fill_json: str, rows_json: str) -> bytes:
@@ -200,11 +200,11 @@ def req_label(r): return f"#{r['id']} {r['received_date']} · {r['requester']} �
 
 # ================= 홈 =================
 def page_home():
-    ui.page_title("오늘 할 일", "같은 수치를 다시 묻는 요구에 지난번과 같은 근거로 답하기 위한 도구입니다. 아래 셋 중 하나를 고르세요.")
+    ui.page_title(f"{USER}님, 무엇을 할까요", f"{dt.date.today():%Y년 %m월 %d일} · 같은 수치를 다시 묻는 요구에 지난번과 같은 근거로 답하기 위한 도구입니다.", "홈")
     c1, c2, c3 = st.columns(3)
-    if ui.action_card(c1, "새 요구서가 왔다", "요구서를 올리면 항목을 읽고, 전에 낸 적 있는 수치를 찾아 맞춰 본 뒤 회신 초안까지 만듭니다.", "새 요구서 처리 시작", "home_new"): go("새 요구서 처리", 1)
-    if ui.action_card(c2, "예전에 낸 답변을 넣는다", "과거 요구서와 그때 보낸 값(엑셀·회신 공문의 표)을 등록해 두면 다음 요구 때 자동으로 찾아 줍니다.", "과거 답변 등록", "home_reg"): go("과거 답변 등록")
-    if ui.action_card(c3, "기록에 물어본다", "'감사실에 등원율 언제 얼마로 냈지?'처럼 물으면 기록을 찾아 근거와 함께 답합니다.", "이력에 묻기", "home_ask"): go("이력에 묻기")
+    if ui.action_card(c1, "새 요구서가 왔다", "요구서를 올리면 항목을 읽고, 전에 낸 적 있는 수치를 찾아 맞춰 본 뒤 회신 초안까지 만듭니다.", "새 요구서 처리 시작", "home_new", "upload_file", primary=True): go("새 요구서 처리", 1)
+    if ui.action_card(c2, "예전에 낸 답변을 넣는다", "과거 요구서와 그때 보낸 값(엑셀·회신 공문의 표)을 등록해 두면 다음 요구 때 자동으로 찾아 줍니다.", "과거 답변 등록", "home_reg", "library_add"): go("과거 답변 등록")
+    if ui.action_card(c3, "기록에 물어본다", "'감사실에 등원율 언제 얼마로 냈지?'처럼 물으면 기록을 찾아 근거와 함께 답합니다.", "이력에 묻기", "home_ask", "forum"): go("이력에 묻기")
     ov = db.request_overview(); pending = db.list_drafts("review_requested")
     st.markdown("## 현황")
     if not ov:
@@ -215,8 +215,8 @@ def page_home():
     df["상태"] = df.apply(lambda r: "확정 제출" if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
     live = df[df["상태"] == "진행 중"]; soon = live[live["D-day"].between(0, 3)]
     k1, k2, k3, k4 = st.columns(4)
-    ui.kpi(k1, len(df), "등록된 요구서"); ui.kpi(k2, len(live), "진행 중"); ui.kpi(k3, len(soon), "기한 3일 이내", "warn" if len(soon) else ""); ui.kpi(k4, len(pending), "팀장 검토 대기", "warn" if pending else "")
-    df.loc[df["상태"] == "확정 제출", "D-day"] = None                      # 끝난 건은 D-day를 비운다
+    ui.kpi(k1, len(df), "등록된 요구서", "ok"); ui.kpi(k2, len(live), "진행 중", "ok" if len(live) else ""); ui.kpi(k3, len(soon), "기한 3일 이내", "warn" if len(soon) else ""); ui.kpi(k4, len(pending), "팀장 검토 대기", "warn" if pending else "")
+    df["D-day"] = df["D-day"].astype("object"); df.loc[df["상태"] == "확정 제출", "D-day"] = ""      # 끝난 건은 D-day를 비운다
     show = df.sort_values(["상태", "D-day"], ascending=[False, True]).head(8)
     st.dataframe(show.rename(columns={"id": "번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_confirmed": "확정 제출본"})
                  [["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "확정 제출본"]], width="stretch", hide_index=True)
@@ -224,7 +224,7 @@ def page_home():
 
 # ================= 과거 답변 등록 =================
 def page_register():
-    ui.page_title("과거 답변 등록", "예전에 받은 요구서와 그때 보낸 값을 넣어 두면, 다음에 같은 수치를 물을 때 '언제 누구에게 얼마로 답했는지'가 자동으로 붙습니다.")
+    ui.page_title("과거 답변 등록", "예전 요구서와 그때 보낸 값을 넣어 두면, 다음에 같은 수치를 물을 때 '언제 누구에게 얼마로 답했는지'가 자동으로 붙습니다.", "기록")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 1. 그때 받은 요구서")
@@ -266,16 +266,16 @@ def page_register():
 def page_process():
     step = st.session_state.setdefault("step", 1)
     done = 2 if st.session_state.get("last_submission") else (1 if st.session_state.get("new_registered") else 0)
-    ui.page_title("새 요구서 처리", "세 단계로 끝납니다. 각 단계의 큰 파란 버튼을 누르면 다음으로 넘어갑니다.")
-    ui.steps(STEPS, step, done)
+    ui.page_title("새 요구서 처리", "", "업무")
+    ui.stepper([n for _, n in STEPS], step, done)
     {1: step_read, 2: step_compare, 3: step_draft}[step]()
     st.divider()
     b1, b2, b3 = st.columns([1, 4, 1])
-    if step > 1 and b1.button("← 이전 단계"): go("새 요구서 처리", step - 1)
-    if step < 3 and b3.button("다음 단계 →"): go("새 요구서 처리", step + 1)
+    if step > 1 and b1.button("이전 단계", type="tertiary", icon=":material/arrow_back:"): go("새 요구서 처리", step - 1)
+    if step < 3 and b3.button("다음 단계", type="tertiary", icon=":material/arrow_forward:", icon_position="right"): go("새 요구서 처리", step + 1)
 
 def step_read():
-    st.markdown("### 1단계. 요구서 읽기")
+    st.markdown("### 요구서 읽기")
     st.caption("요구서를 올리면 항목·지표·기준일을 뽑고, 같은 수치를 전에 낸 적이 있는지 기록에서 찾습니다.")
     text, name = request_input("new", "새요구서_*.txt")
     if st.button("요구 항목 읽기", type="primary", disabled=not text):
@@ -319,7 +319,7 @@ def step_read():
         go("새 요구서 처리", 2)
 
 def step_compare():
-    st.markdown("### 2단계. 수치 맞춰 보기")
+    st.markdown("### 수치 맞춰 보기")
     st.caption("이번에 낼 수치를 지난번에 보낸 값과 맞춰 봅니다. 맞춰 보는 계산은 코드가 하고, 차이가 난 이유는 담당자가 적습니다.")
     reqs = db.list_requests(); subs = db.list_submissions()
     if not reqs:
@@ -399,7 +399,7 @@ def step_compare():
         go("새 요구서 처리", 3)
 
 def step_draft():
-    st.markdown("### 3단계. 회신 초안")
+    st.markdown("### 회신 초안")
     st.caption("확정한 수치와 적어 둔 사유만으로 공문체 초안을 만듭니다. 수치가 없는 항목은 지어내지 않고 [확인 필요]로 남깁니다.")
     reqs = db.list_requests()
     if not reqs: st.warning("요구서가 없습니다. 1단계에서 등록하세요."); return
@@ -479,7 +479,7 @@ def step_draft():
 
 # ================= 검토·승인 =================
 def page_review():
-    ui.page_title("검토·승인", "담당자가 올린 회신 초안을 팀장이 확인합니다. 승인하면 그 초안이 확정 기록으로 남습니다.")
+    ui.page_title("검토·승인", "담당자가 올린 회신 초안을 팀장이 확인합니다. 승인하면 확정 기록으로 남습니다.", "업무")
     pending = db.list_drafts("review_requested")
     st.metric("검토 대기", len(pending))
     drafts = db.list_drafts()
@@ -499,7 +499,7 @@ def page_review():
 
 # ================= 이력 조회 =================
 def page_history():
-    ui.page_title("이력 조회", "요구서마다 항목 → 보낸 값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다.")
+    ui.page_title("이력 조회", "요구서마다 항목 → 보낸 값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다.", "기록")
     reqs = db.list_requests()
     kw = st.text_input("찾기 (요청 주체·제목·항목·본문)", placeholder="예: 등원율, 의원실, 2026-06-30")
     if kw.strip():
@@ -520,7 +520,7 @@ def page_history():
 
 # ================= 현황 =================
 def page_status():
-    ui.page_title("현황", "기한이 가까운 요구, 반복해서 들어오는 지표, 관리대장.")
+    ui.page_title("현황", "기한이 가까운 요구, 반복해서 들어오는 지표, 관리대장.", "기록")
     ov = db.request_overview()
     if not ov: st.info("등록된 요구서가 없습니다."); return
     df = pd.DataFrame(ov); today = pd.Timestamp(dt.date.today())
@@ -548,7 +548,7 @@ def page_status():
 # ================= 이력에 묻기 =================
 def page_ask():
     ui.page_title("이력에 묻기", "말로 물으면 기록을 찾아 근거(요구번호·제출일·기관)와 함께 답합니다. 평균·증감 같은 계산은 하지 않습니다."
-                  + ("" if HAS_API else " 지금은 AI 연결이 없어 키워드 검색으로 동작합니다."))
+                  + ("" if HAS_API else " 지금은 AI 연결이 없어 키워드 검색으로 동작합니다."), "기록")
     examples = ["감사실에 등원율을 언제 어떤 값으로 냈지?", "2026-06-30 기준 등원율을 제출한 기관과 날짜를 전부 보여줘", "센터C 등원율이 달라진 사유로 뭐라고 적었나", "기한이 가장 가까운 요구서는?"]
     q = st.text_input("질문", placeholder=examples[0], key="qa_q")
     c1, c2 = st.columns([1, 4])
@@ -585,7 +585,7 @@ def page_ask():
 # ================= 설정 =================
 def page_settings():
     import providers
-    ui.page_title("설정", "AI 연결, 서식, 시연용 데이터와 초기화.")
+    ui.page_title("설정", "AI 연결, 서식, 시연용 데이터와 초기화.", "설정")
     tab_ai, tab_data, tab_demo = st.tabs(["AI 연결", "서식·사전", "시연·초기화"])
     with tab_ai:
         st.markdown("키는 이 브라우저 세션에만 보관되고 파일에 저장되지 않습니다. 탭을 닫으면 사라집니다. 혼자 쓰는 PC라면 `set_key.bat`으로 한 번 저장해 두면 매번 넣지 않아도 됩니다.")

@@ -10,11 +10,11 @@ toolbarMode = "minimal"
 
 [theme]
 base = "light"
-primaryColor = "#1B4F8A"
-backgroundColor = "#F4F6F9"
+primaryColor = "#256EF4"
+backgroundColor = "#F5F6F8"
 secondaryBackgroundColor = "#FFFFFF"
-textColor = "#1E293B"
-borderColor = "#E2E8F0"
+textColor = "#1E2124"
+borderColor = "#E4E7EB"
 baseRadius = "10px"
 font = "\"Pretendard\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans KR\", sans-serif"
 headingFont = "\"Pretendard\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans KR\", sans-serif"
@@ -22,4 +22,4 @@ showSidebarBorder = true
 
 [theme.sidebar]
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#F5F6F8"
