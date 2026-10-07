@@ -31,7 +31,8 @@ h4 {{font-size: .95rem !important; font-weight: 700 !important; color: {TEXT}; m
 .brand .mark {{width: 36px; height: 36px; border-radius: 9px; background: {PRIMARY}; color: #fff; font-weight: 800; font-size: 11px; display: flex; align-items: center; justify-content: center; letter-spacing: 0; font-family: Pretendard, Arial, sans-serif !important;}}
 .brand .t {{font-weight: 700; font-size: .98rem; color: {TEXT}; letter-spacing: -0.01em; line-height: 1.2;}}
 .brand .s {{font-size: .74rem; color: {MUTED}; margin-top: 2px;}}
-[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; margin: 0; padding: 14px 10px 2px; line-height: 1.2;}}
+[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; margin: 0; padding: 0 10px; line-height: 1.2;}}
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has([data-testid="stCaptionContainer"]) {{min-height: 18px; margin-top: 14px; margin-bottom: 6px;}}
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{gap: .35rem;}}
 [data-testid="stSidebar"] .stButton {{margin: 0;}}
 [data-testid="stSidebar"] [class*="st-key-nav"] button {{
