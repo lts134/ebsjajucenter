@@ -37,7 +37,8 @@ $pn = (gcloud projects describe $Project --format="value(projectNumber)" 2>$null
 if (-not $pn) { Fail "프로젝트 번호를 읽지 못했습니다." }
 $sa = "$pn-compute@developer.gserviceaccount.com"
 gcloud storage buckets add-iam-policy-binding "gs://$Bucket" --member="serviceAccount:$sa" --role=roles/storage.objectAdmin 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Write-Host "권한 부여에 실패했습니다(기본 서비스 계정이 아직 없을 수 있음). 배포 후 다시 한 번 이 스크립트를 실행하면 됩니다." -ForegroundColor Yellow }
+if ($LASTEXITCODE -ne 0) { Write-Host "권한 부여 실패($sa). 기본 서비스 계정이 아직 없을 수 있습니다. 배포 후 이 스크립트를 한 번 더 실행하세요." -ForegroundColor Yellow }
+else { Write-Host "권한 부여됨: $sa" }
 
 Step "Cloud Run 서비스 에이전트에 컨테이너 저장소 읽기 권한(새 프로젝트에서 'Container import failed' 방지)"
 $agent = "service-$pn@serverless-robot-prod.iam.gserviceaccount.com"
@@ -66,13 +67,14 @@ Step "배포"
 $envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic,APP_PASSWORD=$AppPassword"
 if ($AnthropicApiKey) { $envs += ",ANTHROPIC_API_KEY=$AnthropicApiKey" }
 gcloud run deploy $Service --image $image --region $Region --platform managed --allow-unauthenticated `
-  --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --timeout 3600 --session-affinity `
+  --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --cpu-boost --timeout 3600 --session-affinity `
   --set-env-vars $envs
 if ($LASTEXITCODE -ne 0) {
   Write-Host ""
   Write-Host "배포 실패. 진단 정보:" -ForegroundColor Yellow
   gcloud run services describe $Service --region $Region --format="yaml(status.conditions)"
-  gcloud logging read "resource.type=cloud_run_revision AND severity>=ERROR" --project $Project --limit 5 --format="value(timestamp,textPayload,protoPayload.status.message)" --freshness=1h
+  Write-Host "--- 컨테이너 로그(최근 30분, 최신 순) ---"
+  gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=$Service" --project $Project --limit 40 --format="value(timestamp,severity,textPayload)" --freshness=30m
   Fail "배포 실패. 위 진단 정보(status.conditions의 message)를 보내 주세요."
 }
 
