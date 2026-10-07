@@ -2,20 +2,36 @@
   아임웹 /event 페이지의 "코드" 요소에 이 파일 내용을 전부 그대로 붙여넣는다.
   Firebase 프로젝트: jajucenter-4ce99
 -->
-<iframe id="jc-contest-frame"
-        src="https://jajucenter-4ce99.web.app/apply"
-        title="2026 자기주도학습센터 활용수기 공모 접수"
-        style="display:block;width:100%;max-width:760px;margin:0 auto;height:2600px;border:0;"
-        scrolling="no"></iframe>
+<div id="jc-contest-wrap" style="max-width:760px;margin:0 auto;">
+  <p style="margin:0 0 8px;text-align:right;font-size:13px;">
+    <a href="https://jajucenter-4ce99.web.app/apply" target="_blank" rel="noopener" style="color:#0b4fb3;">접수 화면이 보이지 않으면 여기를 눌러 새 창에서 여세요</a>
+  </p>
+  <div id="jc-contest-fallback" style="display:none;margin:12px 0;padding:28px 16px;border:1px solid #c9daf3;border-radius:12px;background:#eef4fc;text-align:center;line-height:1.6;">
+    <p style="margin:0 0 14px;font-size:15px;color:#1b2533;">이 화면에서 접수 화면을 불러오지 못했습니다.<br>아래 버튼을 눌러 새 창에서 접수해 주세요.</p>
+    <a href="https://jajucenter-4ce99.web.app/apply" target="_blank" rel="noopener"
+       style="display:inline-block;padding:13px 26px;border-radius:10px;background:#0b4fb3;color:#fff;font-weight:700;font-size:16px;text-decoration:none;">활용수기 접수 페이지 열기</a>
+  </div>
+  <iframe id="jc-contest-frame"
+          src="https://jajucenter-4ce99.web.app/apply"
+          title="2026 자기주도학습센터 활용수기 공모 접수"
+          style="display:block;width:100%;height:1200px;border:0;"></iframe>
+</div>
 <script>
-  // 접수 화면이 알려주는 높이에 맞춰 iframe 높이를 조절하고, 오류·완료 시 해당 위치로 스크롤한다.
-  // 이 스크립트가 실행되지 않는 경우에도 위 height(2600px)로 접수는 가능하다.
+  // 1) 접수 화면이 알려주는 높이에 맞춰 iframe 높이를 조절하고, 오류·완료 시 해당 위치로 스크롤한다.
+  // 2) 8초 안에 접수 화면 신호가 없으면(휴대폰 브라우저의 차단 기능 등) iframe을 접고 "새 창에서 접수" 버튼을 보여 준다.
+  //    늦게라도 신호가 오면 다시 iframe을 보여 준다.
+  // 이 스크립트가 실행되지 않는 경우에도 위쪽 "새 창에서 여세요" 링크로 접수할 수 있다.
   (function () {
     var ORIGIN = 'https://jajucenter-4ce99.web.app';
     var frame = document.getElementById('jc-contest-frame');
+    var fallback = document.getElementById('jc-contest-fallback');
+    var loaded = false;
     window.addEventListener('message', function (e) {
       if (e.origin !== ORIGIN || !e.data) return;
       if (e.data.type === 'jc-contest-height' && e.data.height > 0) {
+        loaded = true;
+        fallback.style.display = 'none';
+        frame.style.display = 'block';
         frame.style.height = e.data.height + 'px';
       }
       if (e.data.type === 'jc-contest-scroll') {
@@ -23,5 +39,10 @@
         window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
       }
     });
+    setTimeout(function () {
+      if (loaded) return;
+      fallback.style.display = 'block';
+      frame.style.height = '0';
+    }, 8000);
   })();
 </script>
