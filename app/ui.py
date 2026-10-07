@@ -31,8 +31,9 @@ h4 {{font-size: .95rem !important; font-weight: 700 !important; color: {TEXT}; m
 .brand .mark {{width: 34px; height: 34px; border-radius: 9px; background: {PRIMARY}; color: #fff; font-weight: 800; font-size: 15px; display: flex; align-items: center; justify-content: center; letter-spacing: -0.02em;}}
 .brand .t {{font-weight: 700; font-size: .98rem; color: {TEXT}; letter-spacing: -0.01em; line-height: 1.2;}}
 .brand .s {{font-size: .74rem; color: {MUTED}; margin-top: 2px;}}
-.navsec {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; padding: 16px 10px 6px; line-height: 1;}}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{gap: .15rem;}}
+.navsec {{font-size: .72rem; font-weight: 700; color: #99A2AC; letter-spacing: .06em; height: 34px; display: flex; align-items: flex-end; padding: 0 10px 6px; margin: 0;}}
+[data-testid="stSidebar"] [data-testid="stMarkdown"] {{overflow: visible;}}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{gap: .3rem;}}
 [data-testid="stSidebar"] .stButton {{margin: 0;}}
 [data-testid="stSidebar"] [class*="st-key-nav"] button {{
   justify-content: flex-start !important; text-align: left; width: 100%; padding: 7px 10px; border: 0; border-radius: 8px; background: transparent;
