@@ -70,7 +70,7 @@
 5. 위탁사에 팝업 연결 주소 `https://jajucenter.ebs.co.kr/event`를 전달합니다.
 
 **참고**
-- 접수 화면은 `jajucenter.ebs.co.kr`과 `*.imweb.me` 안에서만 보이도록 막아 두었습니다(`firebase.json`의 `frame-ancestors`). 아임웹 편집기 미리보기에서 화면이 안 보이면, 게시된 실제 주소에서 확인합니다. 홈페이지 주소가 바뀌면 이 값을 고친 뒤 `firebase deploy --only hosting`을 실행합니다.
+- 접수 화면은 `jajucenter.ebs.co.kr`, `자기주도학습센터.kr`(`xn--ok0bv9ht5mcnbrxlpkcd3xm0h.kr`), `*.imweb.me` 안에서만 보이도록 막아 두었습니다(`firebase.json`의 `frame-ancestors`). 아임웹 편집기 미리보기에서 화면이 안 보이면, 게시된 실제 주소에서 확인합니다. 홈페이지 주소가 바뀌면 이 값을 고친 뒤 `firebase deploy --only hosting`을 실행합니다.
 - 관리자 화면은 다른 사이트 안에 끼워 넣을 수 없도록 막아 두었습니다. 아임웹에 넣지 말고 `web.app` 주소로 직접 엽니다.
 - 아임웹 코드 요소가 스크립트를 실행하지 않는 경우에도 접수는 됩니다. 이때 화면 높이가 2600px로 고정되어 아래쪽에 여백이 생길 수 있습니다.
 
