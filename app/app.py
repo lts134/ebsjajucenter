@@ -266,8 +266,8 @@ def req_label(r): return f"#{r['id']} {r['received_date'] or '접수일 미기�
 REQ_EXT = (".hwp", ".hwpx", ".pdf", ".docx", ".txt"); VAL_EXT = (".xlsx", ".xls", ".xlsm", ".csv")
 
 def _template_bytes() -> bytes | None:
-    if st.session_state.get("tpl_custom"): return st.session_state["tpl_custom"]
-    tpls = sorted(TPL_DIR.glob("*.hwpx")); return tpls[0].read_bytes() if tpls else None
+    """대화 처리의 HWPX 서식: 설정에서 자리표시자 서식을 올렸을 때만 그 서식, 아니면 None(답변자료 양식을 처음부터 생성)."""
+    return st.session_state.get("tpl_custom")
 
 def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
     """대화에 붙인 파일 처리: 요구서 문서는 작업의 요구서로, 집계 파일(엑셀·CSV)은 지표 데이터로 넣는다. 설명 줄을 돌려준다."""
@@ -338,7 +338,7 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                         if new != case["reasons"].get(k, ""): case["reasons"][k] = new; changed = True
                     if changed or case.get("draft_stale"):
                         if st.button("사유 반영해 초안 다시 쓰기", key="rv_redraft"):
-                            run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), tpl and agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
+                            run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
         with t3:
             d = case["draft"] or {}
             st.caption(f"생성 방식: {case.get('draft_how', '')} · 고치면 HWPX에 반영됩니다.")
@@ -366,10 +366,10 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
             sid, did = case["approved"]; b1.success(f"승인됨 · 제출본 #{sid} · 초안 #{did}")
         elif b1.button("승인하고 확정", type="primary", key="rv_approve", icon=":material/task_alt:", disabled=case["values"] is None or not len(case["values"]),
                        help="이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 삭제."):
-            if tpl and (case["hwpx"] is None or case.get("draft_stale")): agent.step_hwpx(case, tpl)
+            if case["hwpx"] is None or case.get("draft_stale"): agent.step_hwpx(case, tpl)
             agent.approve(case, USER, REVIEWER, OUT_DIR); st.toast("승인·확정했습니다"); st.rerun()
         if case["hwpx"]:
-            if tpl and case.get("draft") and b2.button("HWPX 다시 만들기", key="rv_rehwpx", help="초안을 고쳤으면 눌러 반영"): agent.step_hwpx(case, tpl); st.rerun()
+            if case.get("draft") and b2.button("HWPX 다시 만들기", key="rv_rehwpx", help="초안·사유를 고쳤으면 눌러 반영"): agent.step_hwpx(case, tpl); st.rerun()
             b3.download_button("회신 HWPX 받기", case["hwpx"], file_name=case["hwpx_name"], key="rv_dl", icon=":material/download:")
         if b4.button("단계 화면에서 자세히 고치기", key="rv_detail", type="tertiary"):
             st.session_state["target_request"] = case["request_id"]; go("새 요구서 처리", 2)
@@ -378,7 +378,7 @@ def page_chat():
     ui.page_title(f"{USER}님, 무엇을 할까요", "", "홈")
     case: agent.Case = st.session_state.setdefault("case", agent.Case())
     hist: list = st.session_state.setdefault("chat", []); st.session_state.setdefault("chat_msgs", [])
-    tpl = _template_bytes()
+    tpl = _template_bytes(); case["dept_head"] = st.session_state.get("dept_head", os.environ.get("DEPT_HEAD", "")); case["phone"] = st.session_state.get("dept_phone", os.environ.get("DEPT_PHONE", ""))
     if not hist:
         with st.container(border=True):
             st.markdown("**의뢰서를 붙이고 말하면 됩니다.** 예: \"이 의뢰서에서 요구하는 것들 작성해 줘\"  \n요구 항목을 읽고 → 가진 자료(지표 데이터·과거 제출값)에서 기준일을 정해 값을 모으고 → 과거 제출값과 맞춰 보고 → 차이 사유 후보를 채우고 → 회신 초안과 HWPX를 만듭니다. 사람은 아래 검수 화면에서 확인하고 승인합니다.")
@@ -972,6 +972,14 @@ def page_settings():
             with st.expander("이 세션 호출 기록"): st.dataframe(pd.DataFrame(llm.log()), width="stretch", height=160, hide_index=True)
     with tab_data:
         st.markdown("**회신 서식**: `templates/` 폴더의 HWPX. 실제 부서 서식을 한글에서 열어 {{수신}} {{제목}} {{본문}} {{row.center}} 같은 자리표시자를 넣고 저장하면 그대로 쓰입니다.")
+        st.markdown("**회신 문서(답변자료) 양식** — 대화 처리의 HWPX는 '○○ 의원실 답변자료 / 날짜 / 번호 항목 / 【확인 : 부서장 ☎ 내선】 / 본문 / 수치표 / ※ 산출 근거' 틀로 만들어집니다. 【확인】 줄에 들어갈 값을 적어 두세요(세션에만 저장).")
+        c1, c2 = st.columns(2)
+        st.session_state["dept_head"] = c1.text_input("부서장 이름", st.session_state.get("dept_head", os.environ.get("DEPT_HEAD", "")), key="cfg_dept_head")
+        st.session_state["dept_phone"] = c2.text_input("내선 번호", st.session_state.get("dept_phone", os.environ.get("DEPT_PHONE", "")), key="cfg_dept_phone")
+        up_tpl2 = st.file_uploader("대신 쓸 자리표시자 서식(HWPX, {{수신}} {{본문}} {{row.center}} …)", type=["hwpx"], key="tpl_custom_up", help="올리면 답변자료 양식 대신 이 서식에 채웁니다. 비우면 기본 양식.")
+        if up_tpl2: st.session_state["tpl_custom"] = up_tpl2.getvalue(); st.caption("자리표시자: " + ", ".join(hwpx_out.placeholders(up_tpl2.getvalue())))
+        elif st.session_state.get("tpl_custom") and st.button("자리표시자 서식 쓰지 않기(기본 양식으로)", key="tpl_custom_clear"): st.session_state.pop("tpl_custom"); st.rerun()
+        st.divider()
         st.markdown("**지표 동의어 사전**: `normalize.py`의 CANON. 요구서의 표현이 달라도 같은 지표로 묶는 기준입니다. **데이터 카탈로그**: `suggest.py`의 CATALOG.")
         st.markdown("**추출 품질 점검**: 터미널에서 `python check_llm.py` → `storage/llm_check_날짜.md`.")
     with tab_demo:

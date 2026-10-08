@@ -9,7 +9,7 @@
 from __future__ import annotations
 import datetime as dt, re
 import pandas as pd
-import db, extract, normalize, plan, compare, assist, draft, hwpx_out, llm, pii, history_qa
+import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa
 
 VAL_COLS = ["indicator", "center", "base_date", "value", "definition", "calc_period", "extract_date", "source_version"]
 SRC_COLS = ["source_file", "source_sheet", "source_row"]
@@ -154,18 +154,22 @@ def step_foresee(case: Case) -> dict:
     case["foresee"] = (qs, how); case.note(f"예상 질문 {len(qs)}건 ({how})")
     return {"how": how, "questions": qs}
 
-def step_hwpx(case: Case, template_bytes: bytes) -> dict:
-    """회신 HWPX 생성(서식 자리표시자 치환 + 표 행 복제)."""
+def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = "", phone: str = "") -> dict:
+    """회신 HWPX 생성. 기본은 부서 '답변자료' 양식을 처음부터 만들고(hwpx_build), 자리표시자 서식(template_bytes)이 주어지면 그 서식에 채운다."""
     if not case["draft"]: step_draft(case)
     req = db.get_request(case["request_id"]); d = case["draft"]; values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
     items = db.get_items(case["request_id"])
-    fill = {"수신": req.get("requester") or "", "제목": d.get("제목", ""), "본문": d.get("본문", ""), "차이사유": d.get("차이사유", "") or "해당 없음",
-            "산출근거": d.get("산출근거", ""), "요구항목": "\n".join(f"{i + 1}. {it['item_text']}" for i, it in enumerate(items)), "발신": "한국교육방송공사", "담당자": ""}
-    rows = [{"no": i + 1, "indicator": r["indicator"], "center": r["center"], "base_date": r["base_date"], "value": r["value"]} for i, (_, r) in enumerate(values.iterrows())]
-    out = hwpx_out.render(template_bytes, fill, rows)
-    name = f"회신_{req.get('requester') or '요구'}_{dt.date.today()}.hwpx".replace("/", "-")
-    case["hwpx"], case["hwpx_name"] = out, name; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB)")
-    return {"file_name": name, "bytes": len(out), "rows": len(rows)}
+    if template_bytes:
+        fill = {"수신": req.get("requester") or "", "제목": d.get("제목", ""), "본문": d.get("본문", ""), "차이사유": d.get("차이사유", "") or "해당 없음",
+                "산출근거": d.get("산출근거", ""), "요구항목": "\n".join(f"{i + 1}. {it['item_text']}" for i, it in enumerate(items)), "발신": "한국교육방송공사", "담당자": ""}
+        rows = [{"no": i + 1, "indicator": r["indicator"], "center": r["center"], "base_date": r["base_date"], "value": r["value"]} for i, (_, r) in enumerate(values.iterrows())]
+        out, kind = hwpx_out.render(template_bytes, fill, rows), "서식 치환"
+    else:
+        out, kind = hwpx_build.build_reply(req, items, values, d, dict(case["reasons"]), case["compare"], dept_head=dept_head or case.get("dept_head", ""), phone=phone or case.get("phone", "")), "답변자료 양식"
+        rows = values
+    name = f"답변자료_{req.get('requester') or '요구'}_{dt.date.today()}.hwpx".replace("/", "-")
+    case["hwpx"], case["hwpx_name"] = out, name; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB, {kind})")
+    return {"file_name": name, "bytes": len(out), "rows": len(rows), "kind": kind}
 
 def approve(case: Case, user: str, reviewer: str, out_dir=None, comment: str = "검수 승인") -> dict:
     """사람의 승인: 값을 확정 제출본으로 저장, 사유 기록, 초안을 승인 상태로 저장. 에이전트는 이 함수를 호출하지 않는다."""
@@ -206,8 +210,7 @@ def autopilot(case: Case, template_bytes: bytes | None = None) -> list[str]:
     d = step_draft(case)
     cov = d["coverage"]; n_ok = sum(1 for x in cov if x.get("판정") == "충족")
     lines.append(f"회신 초안을 썼습니다({d['how']}). 요구 항목 충족 {n_ok}/{len(cov)}" + (", 나머지는 [확인 필요]로 남겼습니다" if n_ok < len(cov) else "") + ".")
-    if template_bytes:
-        h = step_hwpx(case, template_bytes); lines.append(f"회신 HWPX를 만들었습니다: {h['file_name']} (표 {h['rows']}행).")
+    h = step_hwpx(case, template_bytes); lines.append(f"회신 HWPX를 만들었습니다({h['kind']}): {h['file_name']} (값 {h['rows']}건).")
     lines.append("아래 검수 화면에서 수치·대조·사유·초안을 확인하고 승인하면 확정 기록으로 남고 HWPX를 내려받을 수 있습니다. 메일 발송은 담당자가 합니다.")
     return lines
 
@@ -228,7 +231,7 @@ TOOLS = [
     {"name": "edit_draft", "description": "초안의 한 칸(제목·본문·차이사유·산출근거)을 사용자가 말한 대로 바꾼다.",
      "input_schema": {"type": "object", "properties": {"field": {"type": "string"}, "text": {"type": "string"}}, "required": ["field", "text"]}},
     {"name": "foresee_questions", "description": "이 회신을 받은 쪽이 다음에 물을 만한 질문과 준비할 자료를 예측한다.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "make_hwpx", "description": "회신 HWPX 파일을 만든다(부서 서식에 초안·수치표 채움).", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "make_hwpx", "description": "회신 HWPX 파일을 만든다. 기본은 부서 '답변자료' 양식(제목·날짜·번호 항목·【확인】·본문·수치표·※ 근거), 설정에 자리표시자 서식이 있으면 그 서식.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "run_all", "description": "표준 순서로 전부 실행: 읽기→등록→계획→값 가져오기→대조→사유 후보→초안→HWPX. 사용자가 '작성해 줘' '다 해 줘'라고 하면 이것 하나로 시작한다.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "case_status", "description": "지금 작업 상태(어디까지 됐는지, 수치 건수, 차이 수, 초안 유무)를 본다.", "input_schema": {"type": "object", "properties": {}}},
 ] + history_qa.TOOLS
@@ -256,9 +259,7 @@ def handlers(case: Case, template_bytes: bytes | None):
                 "has_draft": bool(case["draft"]), "has_hwpx": bool(case["hwpx"]), "log": case["log"][-8:]}
     def run_all():
         lines = autopilot(case, template_bytes); return {"summary": lines, **status()}
-    def hwpx():
-        if not template_bytes: raise ValueError("회신 서식 HWPX가 없습니다(설정 → 서식).")
-        return step_hwpx(case, template_bytes)
+    def hwpx(): return step_hwpx(case, template_bytes)
     own = {"read_request": lambda: step_read(case), "register_request": lambda: step_register(case), "plan_data": lambda: step_plan(case),
            "set_dates": lambda item_no, dates: set_dates(case, item_no, dates), "pull_values": lambda: step_pull(case),
            "compare_with_past": lambda tolerance=0.0: step_compare(case, float(tolerance or 0)), "suggest_reasons": lambda: step_reasons(case),
