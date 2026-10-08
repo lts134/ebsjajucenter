@@ -247,7 +247,7 @@ VAL_KO = {"indicator": "지표", "center": "센터", "base_date": "기준일", "
 ITEM_KO = {"seq": "번호", "item_text": "항목 원문", "indicator": "지표", "base_date": "기준일", "period": "기간", "unit": "단위"}
 STEPS = [("1단계", "요구서 읽기"), ("2단계", "수치 맞춰 보기"), ("3단계", "회신 초안")]
 
-def req_label(r): return f"#{r['id']} {r['received_date']} · {r['requester']} — {r['title']}"
+def req_label(r): return f"#{r['id']} {r['received_date'] or '접수일 미기재'} · {r['requester'] or '요청 주체 미기재'} — {r['title'] or '(제목 없음)'}"
 
 # ================= 홈 =================
 def page_home():
@@ -383,27 +383,72 @@ def step_compare():
     if not reqs:
         st.warning("등록된 요구서가 없습니다. 1단계에서 요구서를 등록하세요."); return
     tgt_default = next((i for i, r in enumerate(reqs) if r["id"] == st.session_state.get("target_request")), 0)
+    target = st.selectbox("이번에 회신할 요구서", reqs, index=tgt_default, format_func=req_label)
+    items = db.get_items(target["id"])
+    # 1) 기록에서 먼저 찾는다: 항목의 지표·기준일이 이미 낸 값과 같으면 그 값을 쓰면 된다(새로 만들 필요 없음)
+    found, missing, hit_sids = {}, [], {}
+    for it in items:
+        if it.get("indicator") and it.get("base_date"):
+            past = db.past_values_for(it["indicator"], it["base_date"])
+            if past:
+                latest_sid = past[0]["submission_id"]; rows = [v for v in past if v["submission_id"] == latest_sid]
+                found[(it["indicator"], it["base_date"])] = (rows, past[0]); hit_sids[latest_sid] = hit_sids.get(latest_sid, 0) + 1; continue
+        missing.append(it)
+    hist_key = ("cmp_hist", target["id"])
+    with st.container(border=True):
+        st.markdown("**기록에서 찾기** — 이 요구서의 항목 중 이미 낸 적이 있는 지표·기준일은 그 값을 그대로 가져옵니다. 새로 만들 것은 아래에만 올리면 됩니다.")
+        if items:
+            rows_tbl = [{"항목": it["item_text"], "지표": it.get("indicator") or "-", "기준일": it.get("base_date") or "-",
+                         "기록": (f"제출본 #{found[k][1]['submission_id']} · {found[k][1]['submitted_date']} · {found[k][1]['requester']} · {len(found[k][0])}건" if (k := (it.get("indicator"), it.get("base_date"))) in found
+                                 else ("기준일이 없어 찾을 수 없음" if not it.get("base_date") else ("지표를 모름" if not it.get("indicator") else "없음 → 새로 산출")))} for it in items]
+            st.dataframe(pd.DataFrame(rows_tbl), width="stretch", hide_index=True)
+        else: st.caption("이 요구서에 항목이 없습니다. 이력 조회에서 항목을 넣거나 1단계에서 다시 읽으세요.")
+        b1, b2, b3 = st.columns([2.4, 1.3, 2.6])
+        n_found = sum(len(v[0]) for v in found.values())
+        if found and b1.button(f"기록의 값 가져오기 ({len(found)}개 항목 · {n_found}건)", type="primary", key="cmp_pull", icon=":material/history:"):
+            parts = []
+            for rows, meta in found.values():
+                df = pd.DataFrame(rows)[VAL_COLS].copy(); df["source_file"] = f"기록 제출본 #{meta['submission_id']} ({meta['submitted_date']} {meta['requester']})"; df["source_sheet"] = ""; df["source_row"] = None
+                parts.append(df)
+            st.session_state[hist_key] = pd.concat(parts, ignore_index=True); st.rerun()
+        if st.session_state.get(hist_key) is not None and b2.button("가져온 값 비우기", key="cmp_pull_clear"):
+            st.session_state.pop(hist_key); st.rerun()
+        if missing:
+            # 새로 산출할 항목의 입력 서식: 지표·센터(기록에 있는 센터 목록)·기준일을 채워 두고 값만 비운 엑셀
+            centers = sorted({v["center"] for v in db.all_values_sample(limit=2000) if v["center"]})
+            tmpl = pd.DataFrame([{"지표명": it.get("indicator") or it["item_text"][:30], "센터명": c, "기준일": it.get("base_date") or "", "값": None, "지표 정의": "", "집계기간": "", "추출시점": "", "원자료 버전": ""}
+                                 for it in missing for c in (centers or [""])])
+            buf = io.BytesIO(); pii.excel_safe(tmpl).to_excel(buf, index=False)
+            b3.download_button(f"새로 산출할 {len(missing)}개 항목 입력 서식(엑셀)", buf.getvalue(), file_name=f"입력서식_요구{target['id']}_{dt.date.today()}.xlsx", key="cmp_tmpl",
+                               help="지표·센터·기준일이 채워진 긴 형식 서식. '값' 칸만 채워 아래에 올리면 바로 읽힙니다.")
+        if st.session_state.get(hist_key) is not None: st.caption(f"가져온 값 {len(st.session_state[hist_key])}건. 아래에 파일을 올리면 같은 지표·센터·기준일은 올린 값이 우선합니다.")
+    # 2) 지난번 값: 기록에서 가장 많이 맞은 제출본을 기본 선택
     c1, c2 = st.columns(2)
     with c2:
         st.markdown("**지난번에 보낸 값**")
         if not subs:
             st.info("아직 등록된 과거 답변이 없습니다. '과거 답변 등록'에서 먼저 넣으면 맞춰 볼 수 있습니다. 지금은 이번 수치만 확정하고 넘어갈 수 있습니다."); old_df, s = None, None
         else:
-            s = st.selectbox("어느 답변과 맞춰 볼까요", subs, format_func=lambda s: f"#{s['id']} {s['submitted_date']} {s['requester']} — {s['request_title']} ({s['file_name']})")
+            best_sid = max(hit_sids, key=hit_sids.get) if hit_sids else None
+            s_default = next((i for i, x in enumerate(subs) if x["id"] == best_sid), 0)
+            s = st.selectbox("어느 답변과 맞춰 볼까요", subs, index=s_default, format_func=lambda s: f"#{s['id']} {s['submitted_date']} {s['requester'] or '(요청 주체 미기재)'} — {s['request_title'] or '(제목 없음)'} ({s['file_name']})")
             old_df = pd.DataFrame(db.get_values(s["id"]))
-        target = st.selectbox("이번에 회신할 요구서", reqs, index=tgt_default, format_func=req_label)
         old_dates = sorted(old_df["base_date"].dropna().unique().tolist()) if old_df is not None and len(old_df) else []
         if old_df is not None and len(old_df):
             st.caption(f"값 {len(old_df)}건 · 지표 {', '.join(sorted(old_df['indicator'].unique())[:5])} · 기준일 {', '.join(old_dates[:3])}. 같은 지표명·센터명·기준일인 행끼리 맞춰 봅니다.")
     with c1:
-        st.markdown("**이번에 낼 수치**")
-        new_df, _ = value_sources("cmp_new", "이번 수치", base_date_default=old_dates[0] if len(old_dates) == 1 else None, demo_files=sorted(SAMPLE.glob("등원율_*9월*.xlsx")))
-        if new_df is not None: st.caption(f"{len(new_df)}건 준비됨.")
+        st.markdown("**이번에 낼 수치** — 새로 산출한 것만")
+        up_df, _ = value_sources("cmp_new", "이번 수치", base_date_default=old_dates[0] if len(old_dates) == 1 else None, demo_files=sorted(SAMPLE.glob("등원율_*9월*.xlsx")))
+        hist_df = st.session_state.get(hist_key)
+        parts = [d for d in (hist_df, up_df) if d is not None and len(d)]
+        new_df = pd.concat(parts, ignore_index=True).drop_duplicates(subset=["indicator", "center", "base_date"], keep="last").reset_index(drop=True) if parts else None
+        if new_df is not None:
+            st.caption(f"{len(new_df)}건 준비됨" + (f" (기록에서 {len(hist_df)}건" + (f" + 올린 값 {len(up_df)}건, 겹치면 올린 값" if up_df is not None and len(up_df) else "") + ")" if hist_df is not None and len(hist_df) else "") + ".")
     st.markdown("#### 맞춰 본 결과")
     tol = st.number_input("허용 오차 — 지난번 값과 이번 값의 차이가 이 값 이하면 '일치'로 봅니다. 0이면 완전히 같아야 일치. 단위는 값과 같음(등원율 % 포인트, 학생 수 명)",
                           value=0.0, step=0.1, min_value=0.0, help="예: 지난번 67.8, 이번 67.9 → 차이 0.1. 허용 오차 0이면 '차이', 0.1이면 '일치'. 반올림 자릿수 차이만 무시하려면 0.05~0.1.")
     if new_df is None:
-        st.info("이번에 낼 수치가 아직 없습니다. 왼쪽에서 파일을 올리면(표 읽는 법 확인까지 마치면) 여기 결과가 나타납니다."); return
+        st.info("이번에 낼 수치가 아직 없습니다. 위 '기록의 값 가져오기'를 누르거나, 새로 산출한 파일을 왼쪽에 올리면 여기 결과가 나타납니다."); return
     reasons, m, ck = {}, None, None
     if old_df is not None and len(old_df):
         m = compare.compare(new_df, old_df, tol)
@@ -451,6 +496,7 @@ def step_compare():
             if reason.strip() and m is not None:
                 row = m[(m["indicator"] == key[0]) & (m["center"] == key[1]) & (m["base_date"] == key[2])].iloc[0]
                 db.add_reason(sid, *key, row["old_value"], row["new_value"], reason, USER)
+        st.session_state.pop(hist_key, None)
         st.session_state.update(last_submission=sid, last_request=target["id"], target_request=target["id"],
                                 last_checklist=ck.to_dict("records") if ck is not None else None, last_reasons={" | ".join(k): v for k, v in reasons.items() if v.strip()})
         go("새 요구서 처리", 3)

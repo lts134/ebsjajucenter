@@ -316,6 +316,12 @@ def latest_confirmed_values(request_id):
     con.close()
     return (s["id"], get_values(s["id"])) if s else (None, [])
 
+def all_values_sample(limit=2000):
+    """입력 서식용: 최근 제출값 일부(센터 목록 뽑기)."""
+    con = connect()
+    rows = con.execute("SELECT indicator, center, base_date FROM submission_values ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
 # ---------- 통계 ----------
 def request_overview():
     """요구별 현황: 항목 수, 제출본 수, 확정 여부"""

@@ -78,6 +78,10 @@ assert at.session_state["step"] == 2 and at.session_state.get("target_request");
 # 2단계: 시연 9월 재산출 vs 제출본 #1 → 후보 → 적용 → 사유 → 확정(3단계로)
 keep = {k: at.session_state[k] for k in ("target_request", "new_registered")}
 at = app("새 요구서 처리", 2, keep)
+# 기록에서 찾기: '6/30 기준 등원율'은 제출본 #1에 있음 → 가져오기 → 시연 9월 파일(자동 선택)이 겹치는 값을 덮어 차이 3 유지
+assert any("제출본 #1" in str(v) for v in at.dataframe[0].value["기록"].tolist()), at.dataframe[0].value
+button(at, "기록의 값 가져오기")
+assert any("기록에서 12건" in c.value for c in at.caption), [c.value for c in at.caption if "준비됨" in c.value]
 print("2단계 metric:", [(m.label, m.value) for m in at.metric])
 assert any(m.label == "차이" and m.value == "3" for m in at.metric), "차이 3건이어야 함"
 button(at, "문구 후보 받기")
