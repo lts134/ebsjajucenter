@@ -1,6 +1,6 @@
 """⑧ 이력에 묻기: 자연어 질문 → Claude가 이력 DB 조회 도구를 골라 호출 → 조회 결과만 근거로 답한다.
 도구는 읽기 전용이며 DB 함수를 그대로 감싼다. 키가 없으면 keyword_search(규칙)만 제공."""
-import db, normalize, suggest, llm, pii
+import db, normalize, suggest, llm, pii, refdocs
 
 TOOLS = [
     {"name": "search_requests", "description": "요청 주체·제목·원문·항목·지표에 키워드가 포함된 요구서를 찾는다(최근순).",
@@ -17,7 +17,11 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"indicator": {"type": "string"}, "base_date": {"type": "string", "description": "선택. YYYY-MM-DD"}}, "required": ["indicator"]}},
     {"name": "overview", "description": "요구서 현황(기한·확정 제출본 수)과 요청 주체별·반복 지표 통계.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "indicators", "description": "지표 사전(정규 지표명과 동의어)과 데이터 카탈로그(출처·담당).", "input_schema": {"type": "object", "properties": {}}},
-]
+    {"name": "center_info", "description": "센터 명부(통합 대시보드에서 가져온 기초자료)에서 센터 1곳을 찾는다: 표준 이름·교육청·지역·시설 유형·규모·개소일·정원·주말 운영·2025 운영/2026 선정 여부. 이름 일부로도 찾는다.",
+     "input_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+    {"name": "list_centers", "description": "센터 명부를 조건으로 거른다(지역·교육청·유형·시설·상태 글자 포함). 비우면 전체. 개수 세기·목록 답변용.",
+     "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "예: '경남', '학교 밖', '2026', '취소'"}}}},
+] + refdocs.TOOLS
 
 PERSON_KEYS = ("submitted_by", "entered_by", "reviewer")   # 직원 이름은 API로 보내지 않는다
 
@@ -50,6 +54,9 @@ _RAW = {
     "diff_reasons": lambda indicator=None: db.all_reasons(indicator),
     "overview": lambda: {"requests": db.request_overview(), "by_requester": db.requester_stats()[0], "by_indicator": db.requester_stats()[1]},
     "indicators": lambda: {"지표 사전": normalize.CANON, "데이터 카탈로그": {k: {"출처": v[0], "담당": v[1]} for k, v in suggest.CATALOG.items()}},
+    "center_info": lambda name: (db.list_centers(name, limit=5) or {"note": f"'{name}'과 맞는 센터가 명부에 없습니다. 명부는 '지표 데이터' 화면에서 대시보드 저장 파일을 가져오면 채워집니다."}),
+    "list_centers": lambda query=None: {"n": len(db.list_centers(query or None, limit=500)), "centers": [{k: c.get(k) for k in ("center_id", "name", "edu", "region", "facility", "type", "size", "open_date", "capacity", "weekend", "year25", "year26", "status")} for c in db.list_centers(query or None, limit=500)]},
+    **refdocs.HANDLERS,
 }
 def _wrap(fn):
     def h(*a, **kw): return pii.redact_obj(_strip(fn(*a, **kw)))   # 직원 이름 제거 + 전화·이메일 등 마스킹 후 API로
@@ -62,7 +69,9 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 이력 DB
 (2) 수치는 레코드 값을 그대로 인용합니다. 평균·합계·차이값·증감률을 계산하지 않습니다. 두 값이 다르면 두 값을 나란히 보여 주고 '다름'이라고만 표시합니다.
 (3) 답에는 근거가 된 요구번호(#id)·제출본번호·제출일·요청 주체를 적습니다.
 (4) '어떤 지표를 어디에 언제 냈나'는 indicator_history 하나로 먼저 확인하고, 센터별 값이 필요할 때만 past_values_for·submission_values를 씁니다. 날짜 표현('작년', '7월')은 조회 결과의 날짜로 범위를 확인합니다.
-(5) 한국어 설명체로 간결하게. 이모지·장식 기호를 쓰지 않고, 도구 이름(search_requests, diff_reasons 등)을 답에 쓰지 않습니다('차이 사유 기록'처럼 우리말로). 표가 적절하면 마크다운 표. 사용자에게 "조회를 요청해 달라"고 하지 말고 필요한 도구를 직접 호출합니다."""
+(5) 한국어 설명체로 간결하게. 이모지·장식 기호를 쓰지 않고, 도구 이름(search_requests, diff_reasons 등)을 답에 쓰지 않습니다('차이 사유 기록'처럼 우리말로). 표가 적절하면 마크다운 표. 사용자에게 "조회를 요청해 달라"고 하지 말고 필요한 도구를 직접 호출합니다.
+- 사업 자체에 대한 질문(대상·비용·운영 시간·인원 구성·절차·근거)은 search_docs로 참고 문서(지침·매뉴얼)를 찾아 그 문구만 근거로 답하고 문서 이름과 쪽을 밝힌다. 센터의 지역·유형·개소일·정원은 center_info / list_centers.
+"""
 
 def ask(question: str) -> dict:
     """{"text", "trace", "turns", "how"}"""

@@ -110,7 +110,7 @@ button(at, "팀장 검토 요청"); print("3단계:", [s.value[:60] for s in at.
 at = app("검토·승인"); button(at, "승인"); print("승인 후 대기:", [(m.label, m.value) for m in at.metric])
 
 # 나머지 화면
-for pg in ("홈", "이력 조회", "현황", "이력에 묻기", "설정"):
+for pg in ("홈", "지표 데이터", "참고 문서", "이력 조회", "현황", "이력에 묻기", "설정"):
     at = app(pg); print(pg, "OK")
 # 설정 — 공급자 셋(OpenAI 호환·Gemini 포함) 선택 시 입력칸이 뜨고 예외 없음
 for pv in ("openai", "gemini", "none"):

@@ -103,6 +103,28 @@ CREATE TABLE IF NOT EXISTS diff_reasons (      -- 차이 사유(담당자 입력
     entered_by TEXT,
     created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS centers (           -- 센터 명부(통합 대시보드 등에서 가져온 기초자료). 이름 표준화·센터 현황 답변에 쓴다. 개인 이름·연락처는 넣지 않는다
+    center_id TEXT PRIMARY KEY,
+    name TEXT,
+    aliases TEXT,                               -- JSON 배열(다른 표기)
+    year25 INTEGER,                             -- 2025 운영 센터면 1
+    year26 INTEGER,                             -- 2026 선정 센터면 1
+    status TEXT,                                -- 2026 공모 결과 등('취소' 등)
+    edu TEXT, region TEXT, facility TEXT, type TEXT, size TEXT,
+    open_date TEXT, capacity INTEGER,
+    weekend TEXT, weekend_days INTEGER,
+    source TEXT, loaded_at TEXT
+);
+CREATE TABLE IF NOT EXISTS ref_docs (          -- 참고 문서(지침·매뉴얼·FAQ): 사업 자체 질문에 답할 근거
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT, file_name TEXT, pages INTEGER, chars INTEGER,
+    uploaded_by TEXT, uploaded_at TEXT, note TEXT
+);
+CREATE TABLE IF NOT EXISTS ref_chunks (        -- 참고 문서 조각(쪽·순번)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id INTEGER, page INTEGER, seq INTEGER, text TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ref_chunks_doc ON ref_chunks(doc_id);
 """
 
 _initialized = set()
@@ -464,3 +486,61 @@ def request_detail(request_id: int):
     r["submissions"] = subs
     r["drafts"] = [{k: d[k] for k in ("id", "status", "title", "hwpx_name", "created_at")} | {"reviews": reviews_for(d["id"])} for d in list_drafts() if d["request_id"] == request_id]
     return r
+
+
+# ---------- 센터 명부 ----------
+def replace_centers(rows: list[dict], source: str) -> int:
+    """센터 명부 전체 교체(대시보드 저장 파일을 다시 가져올 때). aliases는 리스트로 받아 JSON으로 저장."""
+    import json
+    con = connect(); con.execute("DELETE FROM centers")
+    con.executemany("""INSERT INTO centers(center_id,name,aliases,year25,year26,status,edu,region,facility,type,size,open_date,capacity,weekend,weekend_days,source,loaded_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    [(_s(r.get("center_id")), _s(r.get("name")), json.dumps(r.get("aliases") or [], ensure_ascii=False), 1 if r.get("year25") else 0, 1 if r.get("year26") else 0, _s(r.get("status")),
+                      _s(r.get("edu")), _s(r.get("region")), _s(r.get("facility")), _s(r.get("type")), _s(r.get("size")), _s(r.get("open_date")), _int_or_none(r.get("capacity")),
+                      _s(r.get("weekend")), _int_or_none(r.get("weekend_days")), source, now()) for r in rows if _s(r.get("center_id")) and _s(r.get("name"))])
+    con.commit(); n = con.execute("SELECT COUNT(*) FROM centers").fetchone()[0]; con.close(); return n
+
+def list_centers(q: str | None = None, limit: int = 200) -> list[dict]:
+    import json
+    con = connect()
+    if q:
+        like = f"%{q}%"
+        rows = con.execute("SELECT * FROM centers WHERE name LIKE ? OR aliases LIKE ? OR region LIKE ? OR edu LIKE ? OR type LIKE ? OR facility LIKE ? OR status LIKE ? ORDER BY center_id LIMIT ?", (like, like, like, like, like, like, like, limit)).fetchall()
+    else: rows = con.execute("SELECT * FROM centers ORDER BY center_id LIMIT ?", (limit,)).fetchall()
+    con.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try: d["aliases"] = json.loads(d.get("aliases") or "[]")
+        except ValueError: d["aliases"] = []
+        out.append(d)
+    return out
+
+def center_count() -> int:
+    con = connect(); n = con.execute("SELECT COUNT(*) FROM centers").fetchone()[0]; con.close(); return n
+
+# ---------- 참고 문서 ----------
+def add_ref_doc(title, file_name, pages, chunks: list[tuple[int, int, str]], uploaded_by, note="") -> int:
+    """chunks: [(page, seq, text)]. 같은 제목의 문서가 있으면 교체."""
+    con = connect()
+    for (old,) in con.execute("SELECT id FROM ref_docs WHERE title=?", (title,)).fetchall():
+        con.execute("DELETE FROM ref_chunks WHERE doc_id=?", (old,)); con.execute("DELETE FROM ref_docs WHERE id=?", (old,))
+    cur = con.execute("INSERT INTO ref_docs(title,file_name,pages,chars,uploaded_by,uploaded_at,note) VALUES(?,?,?,?,?,?,?)",
+                      (title, file_name, pages, sum(len(t) for _, _, t in chunks), uploaded_by, now(), note))
+    did = cur.lastrowid
+    con.executemany("INSERT INTO ref_chunks(doc_id,page,seq,text) VALUES(?,?,?,?)", [(did, p, q, t) for p, q, t in chunks])
+    con.commit(); con.close(); return did
+
+def list_ref_docs() -> list[dict]:
+    con = connect()
+    rows = con.execute("SELECT d.*, (SELECT COUNT(*) FROM ref_chunks c WHERE c.doc_id=d.id) AS n_chunks FROM ref_docs d ORDER BY d.id").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def delete_ref_doc(doc_id) -> None:
+    con = connect(); con.execute("DELETE FROM ref_chunks WHERE doc_id=?", (doc_id,)); con.execute("DELETE FROM ref_docs WHERE id=?", (doc_id,)); con.commit(); con.close()
+
+def ref_chunks(doc_id=None) -> list[dict]:
+    con = connect()
+    q = "SELECT c.id, c.doc_id, c.page, c.seq, c.text, d.title FROM ref_chunks c JOIN ref_docs d ON d.id=c.doc_id"
+    rows = con.execute(q + (" WHERE c.doc_id=?" if doc_id else "") + " ORDER BY c.doc_id, c.page, c.seq", (doc_id,) if doc_id else ()).fetchall()
+    con.close(); return [dict(r) for r in rows]

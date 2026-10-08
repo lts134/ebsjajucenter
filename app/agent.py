@@ -9,7 +9,7 @@
 from __future__ import annotations
 import datetime as dt, re
 import pandas as pd
-import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa
+import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa, refdocs
 
 VAL_COLS = ["indicator", "center", "base_date", "value", "definition", "calc_period", "extract_date", "source_version"]
 SRC_COLS = ["source_file", "source_sheet", "source_row"]
@@ -304,6 +304,7 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 담당자
 3. 자료가 없는 항목은 '지표 데이터에 없음 → 새로 산출 필요'라고 분명히 말하고 지어내지 않습니다.
 4. 사용자가 사유나 문안을 말하면 set_reason / edit_draft로 반영하고 make_hwpx를 다시 합니다.
 5. 과거 이력 질문은 이력 조회 도구(search_requests, indicator_history 등)로 조회한 결과만 근거로 답합니다.
+7. 사업 자체에 대한 질문(이용 대상·비용·운영 시간·인원 구성·절차·근거 법령 등)은 search_docs로 참고 문서(지침·운영 매뉴얼)를 찾아 그 문구만 근거로 답하고 문서 이름과 쪽을 밝힙니다. 없으면 "참고 문서에 없습니다"라고 합니다. 센터의 지역·유형·개소일·정원·주말 운영은 center_info / list_centers(센터 명부)로 답합니다.
 6. 자료가 있는지는 상태줄의 '지표 데이터 보유'와 data_coverage로 봅니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
 
 지켜야 할 것
@@ -339,7 +340,8 @@ def handlers(case: Case, template_bytes: bytes | None):
 def status_line(case: Case) -> str:
     """매 턴 모델에 주는 한 줄 상태: 오늘 날짜 · 요구서 유무 · 등록 · 이번에 낼 수치 · 초안 · 지표 데이터 보유 범위."""
     return (f"[작업 상태] 오늘 {dt.date.today()} · 요구서 {'있음(' + (case['request_name'] or '본문') + ')' if case['request_text'] else '없음(말로 알려 주면 describe_request로 적는다)'} · 등록 {('#' + str(case['request_id'])) if case['request_id'] else ('보류' if case.get('no_register') else '-')}"
-            f" · 이번에 낼 수치 {int(len(case['values'])) if case['values'] is not None else 0}건{'' if case['values'] is not None else '(아직 안 가져옴)'} · 초안 {'있음' if case['draft'] else '없음'} · {coverage_line()}")
+            f" · 이번에 낼 수치 {int(len(case['values'])) if case['values'] is not None else 0}건{'' if case['values'] is not None else '(아직 안 가져옴)'} · 초안 {'있음' if case['draft'] else '없음'} · {coverage_line()}"
+            f" · 참고 문서 {len(db.list_ref_docs())}건 · 센터 명부 {db.center_count()}개소")
 
 def chat_turn(case: Case, messages: list[dict], user_text: str, template_bytes: bytes | None, on_tool=None, notes: list[str] | None = None) -> dict:
     """Claude 경로 한 턴. messages는 이전 대화(도구 호출 포함). notes는 이번 턴 첨부 파일 처리 결과(모델도 알아야 한다). 반환: run_tools_conv 결과(text·trace·messages)."""

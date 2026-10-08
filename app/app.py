@@ -23,7 +23,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui, plan, agent
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui, plan, agent, dashboard_import, refdocs
 
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
@@ -45,7 +45,7 @@ llm.configure(st.session_state["llm_cfg"], st.session_state["llm_state"], st.ses
 HAS_API = llm.available()
 
 NAV = [("업무", [("홈", "home"), ("새 요구서 처리", "description"), ("검토·승인", "task_alt")]),
-       ("기록", [("지표 데이터", "database"), ("과거 답변 등록", "library_add"), ("이력 조회", "search"), ("현황", "monitoring"), ("이력에 묻기", "forum")]),
+       ("기록", [("지표 데이터", "database"), ("참고 문서", "menu_book"), ("과거 답변 등록", "library_add"), ("이력 조회", "search"), ("현황", "monitoring"), ("이력에 묻기", "forum")]),
        ("", [("설정", "settings")])]
 PAGE_NAMES = [n for _, items in NAV for n, _ in items]
 
@@ -263,7 +263,15 @@ STEPS = [("1단계", "요구서 읽기"), ("2단계", "수치 맞춰 보기"), (
 def req_label(r): return f"#{r['id']} {r['received_date'] or '접수일 미기재'} · {r['requester'] or '요청 주체 미기재'} — {r['title'] or '(제목 없음)'}"
 
 # ================= 홈 = 대화 =================
-REQ_EXT = (".hwp", ".hwpx", ".pdf", ".docx", ".txt"); VAL_EXT = (".xlsx", ".xls", ".xlsm", ".csv")
+REQ_EXT = (".hwp", ".hwpx", ".pdf", ".docx", ".txt"); VAL_EXT = (".xlsx", ".xls", ".xlsm", ".csv"); DASH_EXT = (".html", ".htm")
+
+def _import_dashboard(data: bytes, name: str, include_partial: bool = False) -> tuple[str, int]:
+    """대시보드 저장 파일 → 지표 데이터 묶음 + 센터 명부. (설명, 묶음 번호)"""
+    S = dashboard_import.summarize(dashboard_import.parse(data), include_partial)
+    bid, n = db.add_data_batch(S["rows"], USER, f"통합 대시보드({name})", "대시보드 저장 파일 가져오기")
+    nc = db.replace_centers(S["centers"], name) if S["centers"] else 0
+    return (f"대시보드 저장 파일 '{name}'에서 지표 데이터 {n:,}건(지표 {len(S['by_indicator'])}개, 기준일 {S['dates'][0]}~{S['dates'][-1]})" + (f"과 센터 명부 {nc}개소" if nc else "") + f"를 가져왔습니다(묶음 #{bid}). "
+            + " / ".join(S["notes"]) + " 계정·연락처 등 개인정보 영역은 읽지 않았습니다."), bid
 
 def _template_bytes() -> bytes | None:
     """대화 처리의 HWPX 서식: 설정에서 자리표시자 서식을 올렸을 때만 그 서식, 아니면 None(답변자료 양식을 처음부터 생성)."""
@@ -281,6 +289,9 @@ def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
                 st.session_state["case"] = case = agent.Case(); st.session_state["chat_msgs"] = []
             case["request_text"], case["request_name"] = text, name; case["uploads"].append(name)
             notes.append(f"의뢰서 '{name}'을 받았습니다({len(text):,}자).")
+        elif low.endswith(DASH_EXT):
+            try: note, _ = _import_dashboard(data, name); notes.append(note); case["plans"] = []; case["values"] = None
+            except Exception as e: notes.append(f"대시보드 저장 파일 '{name}'을 읽지 못했습니다: {e}")
         elif low.endswith(VAL_EXT):
             try:
                 grid = tabular.read_grid(type("U", (), {"name": name, "getvalue": lambda self, d=data: d})())
@@ -303,13 +314,13 @@ def _rule_reply(case: agent.Case, text: str, tpl: bytes | None) -> str:
     if agent.is_do_it(text) and normalize.normalize_all(text):                       # 의뢰서 없이 "센터별 등원율 요청이 들어왔어. 작성해 줘" → 말한 문장을 요구 항목으로
         agent.describe_request(case, items=[text])
         return "\n\n".join(["의뢰서 파일이 없어 말씀하신 문장을 요구 항목으로 적었습니다(요청 주체·기한은 미기재)."] + agent.autopilot(case, tpl, register=not re.search(r"등록\s*(은|는)?\s*(빼|제외|말|하지)", text)))
-    kw = history_qa.keyword_search(text)
-    if kw["requests"] or kw["reasons"]:
-        lines = [f"'{', '.join(kw['tokens'][:4])}'로 기록을 찾았습니다(키워드 검색, AI 연결 없음)."]
+    kw = history_qa.keyword_search(text); doc_lines = refdocs.answer_lines(text)
+    if kw["requests"] or kw["reasons"] or doc_lines:
+        lines = [f"'{', '.join(kw['tokens'][:4])}'로 기록을 찾았습니다(키워드 검색, AI 연결 없음)."] if (kw["requests"] or kw["reasons"]) else []
         lines += [f"- 요구서 #{r['id']} {r['received_date']} {r['requester']} — {r['title']}" for r in kw["requests"][:8]]
         lines += [f"- 사유 기록: {x['center']} {x['indicator']} {x['base_date']}: {x['reason']}" for x in kw["reasons"][:5]]
-        return "\n".join(lines)
-    return "의뢰서(hwp·hwpx·pdf·docx·txt)를 붙이고 '요구하는 것들 작성해 줘'라고 하면 끝까지 준비합니다. 기록을 찾으려면 지표나 기관 이름을 넣어 물어보세요. AI를 연결하면 자유로운 지시와 질문에 답합니다."
+        return "\n".join(lines + ([""] if lines and doc_lines else []) + doc_lines)
+    return "의뢰서(hwp·hwpx·pdf·docx·txt)를 붙이고 '요구하는 것들 작성해 줘'라고 하면 끝까지 준비합니다. 기록을 찾으려면 지표나 기관 이름을, 사업 내용을 물으려면 '운영 시간' '이용 대상'처럼 핵심어를 넣어 물어보세요(참고 문서가 등록돼 있어야 합니다). AI를 연결하면 자유로운 지시와 질문에 답합니다."
 
 def _review_panel(case: agent.Case, tpl: bytes | None):
     """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인."""
@@ -385,7 +396,7 @@ def page_chat():
     if not hist:
         with st.container(border=True):
             st.markdown("**의뢰서를 붙이고 말하면 됩니다.** 예: \"이 의뢰서에서 요구하는 것들 작성해 줘\"  \n요구 항목을 읽고 → 가진 자료(지표 데이터·과거 제출값)에서 기준일을 정해 값을 모으고 → 과거 제출값과 맞춰 보고 → 차이 사유 후보를 채우고 → 회신 초안과 HWPX를 만듭니다. 사람은 아래 검수 화면에서 확인하고 승인합니다.")
-            st.caption("집계 엑셀을 함께 붙이면 지표 데이터에 넣고 씁니다. 과거 이력은 그냥 물어보면 됩니다: \"감사실에 등원율 언제 어떤 값으로 냈지?\"" + ("" if HAS_API else "  \nAI 연결이 없어 지금은 정해진 순서로 처리하고 질문은 키워드 검색으로 답합니다."))
+            st.caption("집계 엑셀이나 통합 대시보드 저장 파일(.html)을 함께 붙이면 지표 데이터에 넣고 씁니다. 과거 이력은 그냥 물어보면 됩니다: \"감사실에 등원율 언제 어떤 값으로 냈지?\" 사업 자체 질문(\"운영 시간은?\")은 '참고 문서'에 지침·매뉴얼을 올려 두면 그 문구로 답합니다." + ("" if HAS_API else "  \nAI 연결이 없어 지금은 정해진 순서로 처리하고 질문은 키워드 검색으로 답합니다."))
             if DEMO:
                 c1, c2 = st.columns([1, 3])
                 if c1.button("시연: 의뢰서 붙여 시작", key="chat_demo", icon=":material/play_arrow:"):
@@ -397,7 +408,7 @@ def page_chat():
             st.markdown(m["text"])
             if m.get("files"): st.caption("첨부: " + ", ".join(m["files"]))
     if case["draft"]: _review_panel(case, tpl)
-    prompt = st.chat_input("의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple", file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv"], key="chat_in")
+    prompt = st.chat_input("의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple", file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv", "html", "htm"], key="chat_in")
     pending = st.session_state.pop("chat_pending", None)
     if prompt is None and pending is None: return
     if pending: text, files = pending
@@ -455,6 +466,71 @@ def page_data():
                 if d.button("지우기", key=f"data_del_{b['id']}", type="tertiary", icon=":material/delete:"):
                     db.delete_data_batch(b["id"]); st.rerun()
         st.caption("[계획] 사내 집계 시스템·DB와 직접 연결(읽기 전용 조회)하면 이 화면에 올리는 일도 없어집니다. 연결 방식은 전산 부서와 협의 필요 [확인 필요].")
+    st.divider()
+    st.markdown("### 통합 대시보드에서 한 번에 가져오기")
+    st.caption("자기주도학습센터 현황 대시보드를 브라우저에서 **페이지 저장(Ctrl+S, '웹페이지, 전체')** 한 .html 파일을 올리면, 안에 들어 있는 월간 출결(등원율·시간달성율·등원일수…)·진단검사·관리인원·상담횟수·이용현황과 센터 명부(지역·유형·개소일·정원·주말 운영)를 지표 데이터로 바로 넣습니다. 계정·연락처 등 개인정보 영역은 읽지 않습니다.")
+    dcol1, dcol2 = st.columns([1.2, 1])
+    with dcol1:
+        up = st.file_uploader("대시보드 저장 파일(.html)", type=["html", "htm"], key="dash_up")
+        inc = st.checkbox("부분 집계 중인 달(예: 이번 달 7일까지)도 넣기", value=False, key="dash_partial", help="대시보드가 '부분 집계'로 표시한 달은 기본으로 제외합니다. 넣으면 최신 기준일로 제안될 수 있습니다.")
+        if up is not None:
+            try:
+                S = dashboard_import.summarize(dashboard_import.parse(up.getvalue()), inc)
+                st.session_state["dash_preview"] = (up.name, S)
+            except Exception as e:
+                st.error(f"읽지 못했습니다: {e}"); st.session_state.pop("dash_preview", None)
+        pv = st.session_state.get("dash_preview")
+        if pv and up is not None:
+            name, S = pv
+            st.markdown("\n".join(f"- {n}" for n in S["notes"]) + f"\n- 센터 명부 {len(S['centers'])}개소(2025 운영 {sum(1 for c in S['centers'] if c['year25'])}·2026 선정 {sum(1 for c in S['centers'] if c['year26'])})")
+            if S["errors"]: st.warning("읽지 못한 자료: " + ", ".join(f"{k}({v})" for k, v in S["errors"].items()))
+            st.dataframe(pd.DataFrame([{"지표": k, "건수": v} for k, v in sorted(S["by_indicator"].items(), key=lambda x: -x[1])]), width="stretch", hide_index=True, height=min(60 + 35 * len(S["by_indicator"]), 300))
+            if st.button("지표 데이터·센터 명부에 저장", type="primary", key="dash_save", icon=":material/database:"):
+                note, bid = _import_dashboard(up.getvalue(), name, inc); st.session_state["data_last"] = (bid, len(S["rows"])); st.session_state.pop("dash_preview", None); st.toast("가져왔습니다"); st.rerun()
+    with dcol2:
+        nC = db.center_count()
+        st.markdown(f"**센터 명부: {nC}개소**" if nC else "**센터 명부: 없음** — 왼쪽에서 대시보드 저장 파일을 가져오면 채워집니다.")
+        if nC:
+            q = st.text_input("명부 찾기(이름·지역·유형)", key="center_q", placeholder="예: 경남, 학교 밖, 영월")
+            rows = db.list_centers(q.strip() or None, limit=300)
+            st.dataframe(pd.DataFrame(rows)[["center_id", "name", "edu", "region", "facility", "type", "size", "open_date", "capacity", "weekend", "year25", "year26", "status"]].rename(
+                columns={"center_id": "ID", "name": "센터", "edu": "교육청", "region": "지역", "facility": "시설", "type": "유형", "size": "규모", "open_date": "개소일", "capacity": "정원", "weekend": "주말 운영", "year25": "25운영", "year26": "26선정", "status": "상태"}),
+                width="stretch", hide_index=True, height=min(60 + 35 * len(rows), 380))
+            st.caption("센터장·담당자 이름과 연락처는 가져오지 않습니다. 대화에서 \"영월 센터 개소일이 언제지?\"처럼 물으면 이 명부로 답합니다.")
+
+# ================= 참고 문서 =================
+def page_refdocs():
+    ui.page_title("참고 문서", "사업 지침·운영 매뉴얼·FAQ를 올려 두면, 대화나 '이력에 묻기'에서 사업 자체에 대한 질문에 그 문구를 근거로(문서·쪽 표시) 답합니다.", "기록")
+    c1, c2 = st.columns([1.1, 1])
+    with c1:
+        st.markdown("### 올리기")
+        ups = st.file_uploader("지침·매뉴얼 파일(pdf·hwp·hwpx·docx·txt, 여러 개 가능)", type=["pdf", "hwp", "hwpx", "docx", "txt"], accept_multiple_files=True, key="ref_up")
+        title = st.text_input("문서 제목(선택, 파일 하나일 때) — 비우면 파일 이름", key="ref_title", placeholder="예: 관리·운영지침 v2.0(2026-09-17)")
+        note = st.text_input("메모(선택)", key="ref_note", placeholder="예: 2026.9.17 개정판")
+        if ups and st.button("등록", type="primary", key="ref_save", icon=":material/menu_book:"):
+            done, errs = [], []
+            for f in ups:
+                try: done.append(refdocs.ingest(f.name, f.getvalue(), title if len(ups) == 1 else None, USER, note.strip()))
+                except Exception as e: errs.append(f"{f.name}: {e}")
+            if done: st.success("등록했습니다: " + " / ".join(f"「{d['title']}」 {d['pages']}쪽·조각 {d['chunks']}개" for d in done) + ". 같은 제목이 있으면 새 문서로 바뀝니다.")
+            for e in errs: st.error(e)
+        st.markdown("### 찾아보기(검색 확인)")
+        q = st.text_input("질문 또는 핵심어", key="ref_q", placeholder="예: 운영 시간, 이용 대상, 코디네이터 근무")
+        if q.strip():
+            hits = refdocs.search(q, 5)
+            if not hits: st.info("맞는 문구가 없습니다. 다른 낱말로 찾아보세요.")
+            for h in hits:
+                with st.container(border=True):
+                    st.caption(f"「{h['doc']}」 {h['page']}쪽 · 점수 {h['score']}"); st.write(h["text"])
+    with c2:
+        st.markdown("### 등록된 문서")
+        docs = db.list_ref_docs()
+        if not docs: st.info("아직 없습니다. 지침·운영 매뉴얼 PDF를 올려 두세요. 문서 자체는 이 서버의 이력 DB에만 저장됩니다.")
+        for d in docs:
+            a, b = st.columns([5, 1])
+            a.markdown(f"**{d['title']}**  \n{d['file_name']} · {d['pages']}쪽 · 조각 {d['n_chunks']}개 · {d['uploaded_at'][:10]} · {d['uploaded_by']}" + (f" · {d['note']}" if d['note'] else ""))
+            if b.button("삭제", key=f"ref_del_{d['id']}", type="tertiary", icon=":material/delete:"): db.delete_ref_doc(d["id"]); st.rerun()
+        st.caption("검색은 서버 안에서 키워드로 합니다(외부 전송 없음). AI가 연결돼 있으면 모델이 이 검색 도구를 써서 찾은 문구만 근거로 답하고 쪽을 밝힙니다. 스캔 이미지 PDF는 글자 추출이 안 됩니다.")
 
 # ================= 과거 답변 등록 =================
 def page_register():
@@ -1008,7 +1084,7 @@ def page_settings():
             except FileNotFoundError:
                 st.info("서식 원본이 상위 폴더에 없어 templates/의 기존 샘플을 그대로 씁니다.")
 
-PAGES = {"홈": page_chat, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data,
+PAGES = {"홈": page_chat, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data, "참고 문서": page_refdocs,
          "이력 조회": page_history, "현황": page_status, "이력에 묻기": page_ask, "설정": page_settings}
 if not HAS_API and page != "설정": ui.ai_banner(lambda: go("설정"))
 PAGES[page]()
