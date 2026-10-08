@@ -79,7 +79,7 @@ _RAW = {
     "indicator_history": lambda indicator, base_date=None: _indicator_history(indicator, base_date)[:40],
     "diff_reasons": lambda indicator=None, center=None, base_date=None: db.all_reasons(indicator, 50, center, base_date),
     "overview": lambda: (lambda st: {"requests": sorted(db.request_overview(), key=lambda r: (r.get("confirmed_submissions") or 0, r.get("due_date") or ""))[:30], "by_requester": st[0], "by_indicator": st[1]})(db.requester_stats()),
-    "indicators": lambda: {"지표 사전": normalize.CANON, "데이터 카탈로그": {k: {"출처": v[0], "담당": v[1]} for k, v in suggest.CATALOG.items()}},
+    "indicators": lambda: {"지표 사전": normalize.CANON, "가진 자료(이름·정의·기간)": db.indicator_catalog(), "데이터 카탈로그": {k: {"출처": v[0], "담당": v[1]} for k, v in suggest.CATALOG.items()}},
     "center_info": lambda name: (db.list_centers(name, limit=5) or {"note": f"'{name}'과 맞는 센터가 명부에 없습니다. 명부는 '지표 데이터' 화면에서 대시보드 저장 파일을 가져오면 채워집니다."}),
     "list_centers": lambda query=None: _centers(query),
     **refdocs.HANDLERS,

@@ -71,6 +71,8 @@ def match_items(items: list[dict], use_llm: bool = True) -> tuple[list[dict], li
         ind = it.get("indicator")
         if ind and ind in names: out.append(it); continue
         if ind and db.past_dates_for(ind): out.append(it); continue                 # 과거 제출값으로는 낼 수 있는 지표
+        chosen = [c for c in (it.get("data_candidates") or []) if c in names]       # 요구서를 읽을 때 모델이 가진 자료 목록을 보고 고른 것이 있으면 그것이 우선
+        if chosen: _apply(out, notes, it, chosen, "모델 판단: 요구서를 읽을 때 가진 자료 목록에서 고름"); continue
         cands = rule_match(it.get("item_text", ""), names, ind)
         if cands: _apply(out, notes, it, cands, "규칙: 이름·동의어 맞춤")
         else: pending.append(it)

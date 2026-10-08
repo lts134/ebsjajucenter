@@ -42,7 +42,8 @@ def step_read():
         with st.container(border=True):
             mb = f" (인식 근거 '{it['matched_by']}')" if it.get("matched_by") else ""
             st.markdown(f"**{it['item_text']}**")
-            st.caption(f"지표 {it.get('indicator') or '사전에 없음'}{mb} · 기준일 {it.get('base_date') or '없음'} · 기간 {it.get('period') or '-'} · 단위 {it.get('unit') or '-'}")
+            hint = it.get("suggested") or it.get("indicator_hint")
+            st.caption(f"지표 {it.get('indicator') or ('없음 · 모델 판단: ' + hint if hint else '사전에 없음')}{mb} · 기준일 {it.get('base_date') or '없음'} · 기간 {it.get('period') or '-'} · 단위 {it.get('unit') or '-'}")
             sg = suggest.suggest(it)
             st.markdown(f"→ **{ui.esc(sg['판단'])}**  \n<span class='small-muted'>출처 {ui.esc(sg['데이터 출처'])} · 담당 {ui.esc(sg['담당'])} · 과거 제출 {ui.esc(sg['과거 제출'])}</span>", unsafe_allow_html=True)
             if it.get("indicator") and it.get("base_date") and (dv := db.data_values_for(it["indicator"], it["base_date"])):

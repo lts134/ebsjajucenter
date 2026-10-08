@@ -50,9 +50,11 @@ def step_read(case: Case) -> dict:
     case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = how; case["read_key"] = key
     case.note(f"요구서 읽음: 항목 {len(res['items'])}건 ({how})" + (f" · 자료 맞춤 {len(case.get('match_notes') or [])}건" if case.get("match_notes") else ""))
     return {"requester": res.get("requester"), "received_date": res.get("received_date"), "due_date": res.get("due_date"), "title": res.get("title"),
-            "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period"), **({"matched_by": it["matched_by"]} if (it.get("matched_by") or "").startswith("가진 자료 맞춤") else {})} for i, it in enumerate(res["items"])],
+            "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period"),
+                       **({"matched_by": it["matched_by"]} if (it.get("matched_by") or "").startswith("가진 자료 맞춤") else {}),
+                       **({"suggested": it.get("suggested") or it.get("indicator_hint")} if not it.get("indicator") and (it.get("suggested") or it.get("indicator_hint")) else {})} for i, it in enumerate(res["items"])],
             "matched": case.get("match_notes") or [], "how": how,
-            "note": "matched는 요구 이름과 보유 자료 이름이 달라 코드가 맞춘 것 — 답에서 그 사실을 밝힌다. indicator가 null인 항목은 설명 항목이면 참고 문서로, 아니면 새로 산출."}
+            "note": "matched는 요구 이름과 보유 자료 이름이 달라 맞춘 것 — 답에서 그 사실을 밝힌다. 맞춤이 틀렸거나 indicator가 null인데 data_coverage에 쓸 만한 자료가 있으면 set_item_indicator로 네가 정한다. 설명 항목은 참고 문서로."}
 
 def _clean_item(text: str) -> str:
     """말로 받은 항목에서 지시어를 뗀다: '센터별 등원율 요청이 들어왔어. 작성해줘' → '센터별 등원율'."""
@@ -96,6 +98,30 @@ def set_header(case: Case, requester=None, received_date=None, due_date=None, ti
         if case["draft"]: case["draft_stale"] = True
         case["hwpx_stale"] = True; case.bump(); case.note("요청 정보 수정: " + ", ".join(changed))
     return {"changed": changed, "registered": case["request_id"]}
+
+def set_item_indicator(case: Case, item_no: int, indicators: list[str]) -> dict:
+    """모델(또는 담당자)이 항목에 답할 보유 지표를 정한다. 같은 원문의 항목 묶음을 통째로 바꾸며, 여러 개면 지표마다 항목으로 펼친다. 빈 목록이면 '자료 없음'. 계획 이후 단계는 다시 한다."""
+    if not case["items"]: step_read(case)
+    i = int(item_no) - 1
+    if i < 0 or i >= len(case["items"]): raise ValueError(f"항목 번호 {item_no}가 없습니다(1~{len(case['items'])}).")
+    names = {c["indicator"] for c in db.indicator_catalog()} | set(normalize.CANON)
+    inds = list(dict.fromkeys(str(x).strip() for x in (indicators or []) if str(x).strip()))
+    bad = [x for x in inds if x not in names]
+    if bad: raise ValueError(f"가진 자료에 없는 지표: {bad}. data_coverage에 있는 이름을 쓰세요.")
+    text = case["items"][i]["item_text"]; base = {k: v for k, v in case["items"][i].items() if k not in ("id", "request_id", "seq")}
+    rebuilt, done = [], False
+    for it in case["items"]:
+        if it.get("item_text") != text: rebuilt.append(it); continue
+        if done: continue
+        done = True
+        rebuilt += [{**base, "indicator": x, "matched_by": "모델·담당자 지정"} for x in inds] or [{**base, "indicator": None, "matched_by": None}]
+    case["items"] = rebuilt
+    if case["request_id"]: db.replace_items(case["request_id"], case["items"]); case["items"] = db.get_items(case["request_id"])
+    if case["extracted"]: case["extracted"]["items"] = list(case["items"])                 # step_read가 추출 결과를 다시 쓰므로 거기에도 반영
+    case.update(plans=[], choices={}, values=None, compare=None, draft=None, hwpx=None, coverage=None, foresee=None, doc_hits={}); case.bump()
+    case["match_notes"] = [n for n in (case.get("match_notes") or []) if not n.startswith(f"'{text}'")] + [f"'{text}' → {'·'.join(inds) or '자료 없음'} (지정)"]
+    case.note(f"항목 지표 지정: {text} → {inds or '없음'}")
+    return {"item_text": text, "indicators": inds, "n_items": len(case["items"]), "note": "계획부터 다시 하세요(run_all 또는 plan_data→pull_values→compare_with_past→write_draft→make_hwpx)."}
 
 def _req_items(case: Case) -> tuple[dict, list[dict]]:
     """초안·HWPX가 쓰는 요구 머리 정보와 항목: 등록돼 있으면 기록에서, 아니면(등록 보류) 작업 상태에서."""
@@ -357,7 +383,9 @@ TOOLS = [
     {"name": "describe_request", "description": "요구서 파일 없이 사용자가 말로 알려 준 요구를 작업의 요구서로 만든다(또는 고친다). 사용자가 '○○ 요청이 들어왔어' 하면 즉시 이것으로 적고 run_all을 이어서 한다. 모르는 칸은 비워 둔다(묻기 전에 먼저 처리). items는 요구 항목을 한 줄씩, 기간·기준일·단위를 그대로 담아(예: '2025년 12월 ~ 2026년 8월 센터별 월별 등원율'). 날짜는 YYYY-MM-DD(오늘·내일 같은 말은 상태줄의 오늘 날짜로 계산).",
      "input_schema": {"type": "object", "properties": {"requester": {"type": "string"}, "received_date": {"type": "string"}, "due_date": {"type": "string"}, "title": {"type": "string"},
                                                        "items": {"type": "array", "items": {"type": "string"}}}, "required": ["items"]}},
-    {"name": "data_coverage", "description": "지표 데이터(담당자가 미리 넣어 둔 집계값 — 과거 제출 이력과 별개)의 보유 범위: 지표별 기준일 범위·센터 수·적재일. indicator를 주면 그 지표의 기준일 목록까지. '그 기간 자료가 있나' 판단은 이것으로.",
+    {"name": "set_item_indicator", "description": "요구 항목에 답할 보유 지표를 네가 정한다(코드의 자동 맞춤이 틀렸거나 비어 있을 때). indicators는 data_coverage에 있는 이름만, 포괄 요구면 여러 개(항목이 지표마다 펼쳐진다). 빈 배열이면 '자료 없음'. 바꾼 뒤에는 run_all(또는 plan_data→pull_values→compare_with_past→write_draft→make_hwpx)을 다시 한다.",
+     "input_schema": {"type": "object", "properties": {"item_no": {"type": "integer", "description": "read_request·describe_request 결과의 no"}, "indicators": {"type": "array", "items": {"type": "string"}}}, "required": ["item_no", "indicators"]}},
+    {"name": "data_coverage", "description": "가진 자료의 보유 범위: 지표별 정의·기준일 범위·센터 수·적재일(지표 데이터) + 과거 제출값에만 있는 지표. indicator를 주면 그 지표의 기준일 목록까지. 요구 항목이 어떤 자료로 답해지는지, 이름이 달라도 뜻이 같은 자료가 있는지는 이것을 보고 네가 판단한다.",
      "input_schema": {"type": "object", "properties": {"indicator": {"type": "string", "description": "선택. 지표 이름(일부 가능)"}}}},
     {"name": "case_status", "description": "지금 작업 상태(어디까지 됐는지, 이번에 낼 수치 건수, 차이 수, 초안 유무, 지표 데이터 보유 범위)를 본다.", "input_schema": {"type": "object", "properties": {}}},
 ] + history_qa.TOOLS
@@ -368,7 +396,7 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 담당자
 1. '작성해 줘' '처리해 줘' 같은 지시에는 run_all 하나로 시작합니다(읽기부터 한글 파일까지 포함하므로 read_request를 따로 먼저 부르지 않습니다). 끝나면 단계별로 짧게 설명합니다: 무엇을 읽었고, 어떤 자료를 어느 기준일로 넣었고, 과거 제출값과 어디가 다른지, 초안과 한글 파일을 만들었는지.
 2. 요구서 파일이 없어도 사용자가 말로 요구를 알려 주면("센터별 등원율 요청이 들어왔어", "25년 12월부터 26년 8월까지") 되묻지 말고 describe_request로 적은 뒤 바로 run_all을 합니다. 요청 기관·기한처럼 모르는 칸은 비워 두고, 결과 끝에 "알려 주시면 반영합니다"라고 한 줄만 덧붙입니다. 나중에 그 칸을 말하면 describe_request로 고치고 필요한 단계를 다시 합니다. 사용자가 "등록은 빼고 파일만" 하면 run_all(register=false)로 합니다(확정할 때 기록됩니다).
 3. 자료 계획에서 판단이 갈리는 항목(기준일이 없거나 요구 기준일 자료가 없음)은 제안 이유를 그대로 전하고, 다른 기준일을 원하면 set_dates → pull_values → compare_with_past → write_draft → make_hwpx 순으로 다시 합니다.
-4. 요구 이름과 보유 자료 이름이 달라도 뜻이 같거나 포괄하면 코드가 가진 자료에 맞춥니다(read_request·run_all 결과의 matched: '관리인원'↔'현원', '투입 인력 현황'→코디네이터·행정지원인력). 맞춘 사실을 답에 밝힙니다. 수치가 아닌 설명 항목(사업 필요성 등)은 참고 문서 발췌로 초안을 씁니다. 그래도 맞는 자료가 없는 항목만 '새로 산출 필요'라고 말하고, 그때도 data_coverage로 비슷한 지표가 없는지 먼저 확인해 제안합니다. 지어내지 않습니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
+4. 요구 항목이 어떤 보유 자료로 답해지는지는 **당신이 판단**합니다. 요구서를 읽을 때 가진 자료 목록(이름·정의·기간)을 보고 이름이 달라도 뜻이 같으면 그 자료를 고르고('관리인원'↔'현원'), 포괄 요구는 관련 자료 여러 개로 펼칩니다('투입 인력 현황'→코디네이터·행정지원인력). 코드의 자동 맞춤(matched)이 틀렸거나 비어 있는데 data_coverage(정의 포함)에 쓸 만한 자료가 있으면 set_item_indicator로 정한 뒤 다시 처리합니다. 맞춘 사실은 답에 밝힙니다. 수치가 아닌 설명 항목(사업 필요성 등)은 참고 문서 발췌로 초안을 씁니다. 그래도 맞는 자료가 없는 항목만 '새로 산출 필요'라고 말합니다. 코드는 당신이 정한 지표의 값만 가져오고 계산하지 않으며, 값을 지어내는 것만 막습니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
 5. 사용자가 사유나 문안을 말하면 set_reason / edit_draft로 반영한 뒤 write_draft(사유를 바꾼 경우) → make_hwpx를 다시 합니다.
 6. 과거 기록 질문은 기록 조회 도구로 조회한 결과만 근거로 답합니다. 조회되지 않은 것은 '기록에 없음'. 같은 지표·기준일의 제출값이 서로 다른 센터가 보이면 diff_reasons(center 지정)로 기록된 사유를 찾아 그대로 인용하고, 없으면 '사유 기록 없음'. 답에는 요구번호(#id)·제출본번호·제출일·요청 기관을 적습니다.
 7. 사업 자체에 대한 질문(이용 대상·비용·운영 시간·인원 구성·절차·근거 법령 등)은 search_docs로 참고 문서(지침·운영 매뉴얼)를 찾아 그 문구만 근거로 답하고 문서 이름과 쪽을 밝힙니다. 없으면 "참고 문서에 없습니다". 센터의 지역·유형·개소일·정원·주말 운영은 center_info / list_centers(센터 명부)로 답합니다.
@@ -397,8 +425,10 @@ def handlers(case: Case, template_bytes: bytes | None):
            "write_draft": lambda: step_draft(case), "edit_draft": lambda field, text: edit_draft(case, field, text),
            "foresee_questions": lambda: step_foresee(case), "make_hwpx": hwpx, "run_all": run_all, "case_status": status,
            "describe_request": lambda items, requester=None, received_date=None, due_date=None, title=None: describe_request(case, requester, received_date, due_date, title, items),
-           "data_coverage": lambda indicator=None: {"indicators": [({**g, "dates": g["dates"]} if indicator else {k: v for k, v in g.items() if k != "dates"}) for g in coverage_summary() if not indicator or indicator in g["indicator"]],
-                                                    "note": "값은 pull_values로 가져온다. 여기 없는 지표·기간은 새로 산출해야 한다."}}
+           "set_item_indicator": lambda item_no, indicators: set_item_indicator(case, item_no, indicators),
+           "data_coverage": lambda indicator=None: (lambda cat: {"indicators": [({**g, "definition": cat.get(g["indicator"]), "dates": g["dates"]} if indicator else {**{k: v for k, v in g.items() if k != "dates"}, "definition": cat.get(g["indicator"])}) for g in coverage_summary() if not indicator or indicator in g["indicator"]],
+                                                                 "past_only": [c["indicator"] for c in db.indicator_catalog() if c.get("source") == "과거 제출값" and (not indicator or indicator in c["indicator"])],
+                                                                 "note": "값은 pull_values로 가져온다. 요구 이름과 달라도 정의가 같은 뜻이면 그 자료로 답할 수 있다(set_item_indicator). 여기 없는 지표·기간은 새로 산출해야 한다."})({c["indicator"]: c.get("definition") for c in db.indicator_catalog()})}
     def wrap(fn):
         def h(*a, **kw): return pii.redact_obj(history_qa._strip(fn(*a, **kw)))
         return h
@@ -442,4 +472,4 @@ def is_do_it(text: str) -> bool:
 llm.TOOL_LABELS.update({"read_request": "요구서 읽기", "register_request": "요구서 기록", "plan_data": "자료 계획 세우기", "set_dates": "기준일 바꾸기", "pull_values": "값 가져오기",
                         "compare_with_past": "지난 제출값과 맞춰 보기", "suggest_reasons": "차이 사유 추천", "set_reason": "사유 적기", "write_draft": "회신 초안 쓰기", "edit_draft": "초안 고치기",
                         "foresee_questions": "예상 질문 뽑기", "make_hwpx": "한글 파일 만들기", "run_all": "전체 처리(읽기→한글 파일)", "case_status": "작업 상태 보기",
-                        "describe_request": "말로 받은 요구 적기", "data_coverage": "지표 데이터 범위 보기"})
+                        "describe_request": "말로 받은 요구 적기", "data_coverage": "지표 데이터 범위 보기", "set_item_indicator": "항목 지표 정하기"})

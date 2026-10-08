@@ -3,6 +3,7 @@ ANTHROPIC_API_KEY가 있으면 Claude API, 없으면 규칙 기반(정규식)으
 항목 필드: item_text(원문) / indicator(사전 지표명 또는 null) / base_date(YYYY-MM-DD 또는 null) / period(기간 표현 또는 null) / unit(센터별·전체·연도별·월별 또는 null)"""
 import os, re, datetime as dt
 from normalize import normalize_all, CANON
+import db
 import llm
 
 INDICATORS = list(CANON)
@@ -13,6 +14,20 @@ def today() -> dt.date:
     try: return dt.date.fromisoformat(v) if v else dt.date.today()
     except ValueError: return dt.date.today()
 ITEM_FIELDS = ["item_text", "indicator", "base_date", "period", "unit"]
+EXTRA_FIELDS = ["data_candidates", "suggested"]          # 모델의 판단: 이 항목에 쓸 수 있는 보유 자료 이름들 · 목록에 없을 때 무엇을 묻는지
+
+def stored_catalog() -> list[dict]:
+    """가진 자료(지표 데이터·과거 제출값) 목록 — 모델이 요구 항목을 실제 보유 자료에 맞출 때 본다."""
+    try: return db.indicator_catalog()
+    except Exception: return []
+
+def catalog_names(catalog: list[dict] | None = None) -> list[str]:
+    cat = stored_catalog() if catalog is None else catalog
+    return list(dict.fromkeys(list(CANON) + [c["indicator"] for c in cat if c.get("indicator")]))
+
+def catalog_text(catalog: list[dict]) -> str:
+    if not catalog: return "(아직 넣어 둔 자료가 없음)"
+    return "\n".join(f"- {c['indicator']}: {c.get('definition') or '정의 없음'} ({c.get('first')}~{c.get('last')}, 센터 {c.get('n_centers')}곳, {c.get('source')})" for c in catalog[:80])
 
 # 항목 줄머리: 1. 1) (1) ① 가. 가) ○ - · • □ ■
 BULLET = r"^(?:\(?\d{1,2}[.)]|[①-⑳]|[가-힣][.)]|[○●◦◎□■\-·•▪])\s*"
@@ -92,10 +107,15 @@ PROMPT = """다음 요구서에서 정보를 추출해 JSON으로만 출력하�
  "due_date": 제출 기한 "YYYY-MM-DD" 또는 null,
  "title": 요구 제목·자료명 또는 null,
  "items": [{"item_text": 항목 원문 그대로,
-            "indicator": 지표명(다음 목록 중 하나만: %s. 목록에 없으면 null. 목록 지표의 정의·산출 방식·차이 사유를 묻는 항목도 그 지표),
+            "indicator": 이 항목에 답할 지표명. 아래 '가진 자료 목록'의 이름을 우선하고(이름이 달라도 뜻이 같으면 그 이름 — '관리인원'을 요구했는데 보유 자료가 '현원'이면 "현원"), 거기 없으면 지표 사전 이름(%s), 어느 것도 아니면 null. 지표의 정의·산출 방식·차이 사유를 묻는 항목도 그 지표,
+            "data_candidates": 가진 자료 목록 중 이 항목에 쓸 수 있는 이름들(포괄 요구면 여러 개: '투입 인력 현황' → ["학습코디네이터 수", "행정지원인력 수"]. 없으면 []),
+            "suggested": indicator가 null일 때 이 항목이 무엇을 묻는지 한 줄(예: "사업 추진 배경·필요성 설명 요구") 또는 null,
             "base_date": 항목에 '기준'·'현재'로 명시된 날짜 "YYYY-MM-DD" 또는 null,
             "period": 기간 표현 원문("2024~2026", "2026년 1~6월", "최근 3년", "2026년 상반기") 또는 null,
             "unit": "센터별" | "전체" | "연도별" | "월별" | "지역별" | null}]}
+
+가진 자료 목록(지표 데이터·과거 제출값 — 이름·정의·기간·센터 수):
+%s
 
 규칙:
 1. 항목은 실제 자료 요구만. 관련 근거·안내·인사말·'아래와 같이 요청합니다' 같은 문장은 항목이 아님.
@@ -103,33 +123,42 @@ PROMPT = """다음 요구서에서 정보를 추출해 JSON으로만 출력하�
 3. 한 항목에 기준일이 여러 개면(예: "3. 31. 및 6. 30. 기준") 기준일마다 별도 원소.
 4. 날짜 표기 '26. 6. 30. / 2026.6.30 / 6월 30일 현재 / 9/19 는 모두 YYYY-MM-DD로. 연도가 없으면 접수일 → 제출기한 → 문서의 다른 날짜 → 오늘(%s) 순서로 연도를 채운다(null로 두지 말 것).
 5. 접수일·제출기한을 항목의 base_date로 쓰지 말 것. 연도별·기간 요구는 base_date가 아니라 period.
-6. 요구서에 없는 지표·날짜를 만들지 말 것.
+6. 요구서에 없는 지표·날짜를 만들지 말 것. 가진 자료 목록의 이름을 쓸 때는 정의를 보고 같은 뜻인지 판단하고, 확실하지 않으면 data_candidates에만 넣고 indicator는 null로 둔다.
+7. 수치 지표가 아닌 설명 요구(사업 필요성·추진 배경 등)는 indicator null, suggested에 무엇을 묻는지 적는다.
 
 요구서:
 %s"""
 
 def _nullable(t: str) -> dict: return {"type": [t, "null"]}
 
-def schema() -> dict:
-    """구조화 출력용 JSON 스키마. indicator는 사전 지표명 또는 null만 허용 → 지어낸 지표가 형식 단계에서 차단된다."""
+def schema(catalog: list[dict] | None = None) -> dict:
+    """구조화 출력용 JSON 스키마. indicator는 지표 사전 + 가진 자료의 이름 또는 null → 값이 없는 이름을 지어내는 것은 막되, 보유 자료는 이름이 달라도 고를 수 있다.
+    data_candidates는 가진 자료 이름만, suggested는 자유 문장(사람이 보는 힌트)."""
+    cat = stored_catalog() if catalog is None else catalog
+    names = catalog_names(cat); stored = [c["indicator"] for c in cat if c.get("indicator")]
     item = {"type": "object", "additionalProperties": False,
             "properties": {"item_text": {"type": "string"},
-                           "indicator": {"anyOf": [{"type": "string", "enum": INDICATORS}, {"type": "null"}]},
+                           "indicator": {"anyOf": [{"type": "string", "enum": names}, {"type": "null"}]},
+                           "data_candidates": {"type": "array", "items": ({"type": "string", "enum": stored} if stored else {"type": "string"})},
+                           "suggested": _nullable("string"),
                            "base_date": _nullable("string"), "period": _nullable("string"),
                            "unit": {"anyOf": [{"type": "string", "enum": ["센터별", "전체", "연도별", "월별", "지역별"]}, {"type": "null"}]}},
-            "required": ITEM_FIELDS}
+            "required": ITEM_FIELDS + EXTRA_FIELDS}
     return {"type": "object", "additionalProperties": False,
             "properties": {"requester": _nullable("string"), "received_date": _nullable("string"), "due_date": _nullable("string"),
                            "title": _nullable("string"), "items": {"type": "array", "items": item}},
             "required": ["requester", "received_date", "due_date", "title", "items"]}
 
 def llm_based(text: str) -> dict:
-    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), today().isoformat(), text), SYSTEM, 12000, purpose="요구서 추출", schema=schema())
-    items = []
+    cat = stored_catalog()
+    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), catalog_text(cat), today().isoformat(), text), SYSTEM, 12000, purpose="요구서 추출", schema=schema(cat))
+    items = []; stored = {c["indicator"] for c in cat}
     for it in res.get("items") or []:
         if not isinstance(it, dict) or not it.get("item_text"): continue
         d = {k: it.get(k) for k in ITEM_FIELDS}
         d["base_date"] = _norm_date(str(d["base_date"])) if d.get("base_date") else None   # 형식 강제
+        d["data_candidates"] = [x for x in (it.get("data_candidates") or []) if isinstance(x, str) and (x in stored or not stored)]
+        d["suggested"] = (str(it.get("suggested")).strip() or None) if it.get("suggested") else None
         items.append(d)
     res["items"] = items
     for k in ("received_date", "due_date"):

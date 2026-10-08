@@ -82,16 +82,25 @@ def normalize_all(text: str) -> list[tuple[str, str]]:
         if canon not in seen: seen.add(canon); out.append((canon, alias))
     return out
 
-def normalize_items(items: list[dict]) -> list[dict]:
-    """indicator가 비면 사전으로 채우고, 있으면 사전 표기로 통일."""
+def stored_names() -> set[str]:
+    """가진 자료(지표 데이터·과거 제출값)의 지표 이름 — 사전에 없어도 값이 있으면 쓸 수 있는 이름."""
+    try:
+        import db
+        return {c["indicator"] for c in db.indicator_catalog() if c.get("indicator")}
+    except Exception: return set()
+
+def normalize_items(items: list[dict], extra_ok: set | None = None) -> list[dict]:
+    """indicator가 비면 사전으로 채우고, 있으면 사전 표기로 통일. 가진 자료의 이름은 그대로 두고, 둘 다 아닌 이름은 버리지 않고 indicator_hint로 남긴다(사람·모델이 본다)."""
+    ok = stored_names() if extra_ok is None else set(extra_ok)
     for it in items:
         if not it.get("indicator"):
             canon, alias = normalize(it.get("item_text", ""))
             it["indicator"] = canon; it["matched_by"] = alias
         else:
+            if it["indicator"] in ok: continue                               # 보유 자료의 이름(사전 동의어로 바꾸면 값이 없는 이름이 될 수 있다)
             canon, alias = normalize(it["indicator"])
             if canon: it["indicator"] = canon
-            elif it["indicator"] not in CANON: it["indicator"] = None   # 사전에 없는 이름은 버린다(AI가 지어낸 지표 방지)
+            elif it["indicator"] not in CANON: it["indicator_hint"] = it["indicator"]; it["indicator"] = None   # 값이 없는 이름으로는 값을 못 가져오니 힌트로만
     return items
 
 SYSTEM = "당신은 공공기관 요구자료 담당자를 돕는 분류기입니다. 목록에 있는 지표명만 쓰고, 애매하면 null로 둡니다."
@@ -101,19 +110,20 @@ def normalize_llm(items: list[dict]) -> list[dict]:
     todo = [it for it in items if not it.get("indicator")]
     if not todo or not llm.available(): return items
     try:
-        prompt = ("다음 요구 항목을 지표명으로 분류하세요. 지표 목록: %s.\n"
-                  "규칙: 목록의 지표를 설명·정의·산출 방식·차이 사유 형태로 묻는 항목도 그 지표로 분류. 두 지표가 섞인 문장은 앞에 나온 지표.\n"
+        names = list(dict.fromkeys(list(CANON) + sorted(stored_names())))
+        prompt = ("다음 요구 항목을 지표명으로 분류하세요. 지표 목록(사전 + 가진 자료의 이름): %s.\n"
+                  "규칙: 이름이 달라도 뜻이 같으면 그 지표(관리인원 요구 → 보유 '현원'). 목록의 지표를 설명·정의·산출 방식·차이 사유 형태로 묻는 항목도 그 지표로 분류. 두 지표가 섞인 문장은 앞에 나온 지표.\n"
                   "JSON만 출력: {\"items\": [{\"item_text\": ..., \"indicator\": ...}]}\n%s"
-                  % (", ".join(CANON), "\n".join(f"- {it['item_text']}" for it in todo)))
+                  % (", ".join(names), "\n".join(f"- {it['item_text']}" for it in todo)))
         schema = {"type": "object", "additionalProperties": False, "required": ["items"],
                   "properties": {"items": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["item_text", "indicator"],
                                                                         "properties": {"item_text": {"type": "string"},
-                                                                                       "indicator": {"anyOf": [{"type": "string", "enum": list(CANON)}, {"type": "null"}]}}}}}}
+                                                                                       "indicator": {"anyOf": [{"type": "string", "enum": names}, {"type": "null"}]}}}}}}
         res = llm.ask_json(prompt, SYSTEM, 8000, purpose="지표 분류", schema=schema)
         got = {d.get("item_text"): d.get("indicator") for d in (res.get("items") if isinstance(res, dict) else res) or []}
         for it in todo:
             g = got.get(it["item_text"])
-            if g in CANON: it["indicator"] = g; it["matched_by"] = "Claude"
+            if g in names: it["indicator"] = g; it["matched_by"] = "Claude"
     except Exception as e:
         for it in todo: it["_norm_error"] = str(e)
     return items

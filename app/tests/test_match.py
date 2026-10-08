@@ -65,3 +65,43 @@ def test_llm_match_applies_model_choice(fresh_db, monkeypatch):
     monkeypatch.setattr(match.llm, "ask_json", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     out2, notes2 = match.match_items([{"item_text": "센터 이용 학생 변동", "indicator": None}])
     assert out2[0].get("indicator") is None and notes2 and "모델 맞춤 실패" in notes2[0]
+
+
+def test_extraction_sees_catalog_and_keeps_model_judgement(fresh_db, monkeypatch):
+    """추출 모델은 가진 자료 목록(이름·정의·기간)을 보고 보유 이름을 직접 고르며, 목록에 없으면 힌트(suggested)를 남긴다. 사전은 더 이상 '드롭다운'이 아니다."""
+    import extract
+    db = fresh_db; _seed(db)
+    cat = extract.stored_catalog(); names = extract.catalog_names(cat)
+    assert {"현원", "퇴소자", "학습코디네이터 수"} <= set(names) and "등원율" in names and "현원" in extract.catalog_text(cat) and "센터 3곳" in extract.catalog_text(cat)
+    sch = extract.schema(cat)["properties"]["items"]["items"]
+    assert "현원" in sch["properties"]["indicator"]["anyOf"][0]["enum"] and sch["properties"]["data_candidates"]["items"]["enum"] == [c["indicator"] for c in cat]
+    assert "가진 자료 목록" in (extract.PROMPT % ("a", extract.catalog_text(cat), "2026-10-08", "원문"))
+    monkeypatch.setattr(extract.llm, "available", lambda: True)
+    monkeypatch.setattr(extract.llm, "ask_json", lambda *a, **k: {"requester": "감사실", "received_date": None, "due_date": None, "title": "t", "items": [
+        {"item_text": "센터별 월별 관리인원", "indicator": "현원", "base_date": None, "period": "월별", "unit": "센터별", "data_candidates": ["현원"], "suggested": None},
+        {"item_text": "센터별 투입 인력 현황", "indicator": None, "base_date": None, "period": None, "unit": "센터별", "data_candidates": ["학습코디네이터 수", "행정지원인력 수", "없는 이름"], "suggested": None},
+        {"item_text": "사업 필요성", "indicator": None, "base_date": None, "period": None, "unit": None, "data_candidates": [], "suggested": "사업 추진 배경·필요성 설명 요구"}]})
+    res, how = extract.extract("요구서 본문")
+    assert how.startswith("Claude") and res["items"][0]["indicator"] == "현원" and res["items"][1]["data_candidates"] == ["학습코디네이터 수", "행정지원인력 수"] and res["items"][2]["suggested"].startswith("사업 추진")
+    items = normalize.normalize_items(res["items"]); assert items[0]["indicator"] == "현원"                      # 보유 이름은 사전 동의어('관리인원')로 바꾸지 않는다(값이 없는 이름이 됨)
+    out, notes = match.match_items(items, use_llm=False)
+    assert [(it["item_text"], it["indicator"]) for it in out][:3] == [("센터별 월별 관리인원", "현원"), ("센터별 투입 인력 현황", "학습코디네이터 수"), ("센터별 투입 인력 현황", "행정지원인력 수")]
+    assert notes == ["'센터별 투입 인력 현황' → 학습코디네이터 수·행정지원인력 수 (모델 판단: 요구서를 읽을 때 가진 자료 목록에서 고름)"] and out[3]["indicator"] is None and out[3]["suggested"]
+    kept = normalize.normalize_items([{"item_text": "x", "indicator": "모델이 지은 이름"}]); assert kept[0]["indicator"] is None and kept[0]["indicator_hint"] == "모델이 지은 이름"
+
+
+def test_agent_can_decide_item_indicator(fresh_db):
+    """모델이 자동 맞춤을 고치는 도구: 지표 지정 → 항목 펼침·되돌림 → 다시 처리하면 그 자료로 값이 들어온다."""
+    db = fresh_db; _seed(db)
+    case = agent.Case(); agent.describe_request(case, requester="감사실", items=["센터 운영 관련 기타 사항", "센터별 월별 등원율"])
+    assert case["items"][0]["indicator"] is None and len(case["items"]) == 2
+    r = agent.set_item_indicator(case, 1, ["현원", "퇴소자"])
+    assert r["n_items"] == 3 and [it["indicator"] for it in case["items"]] == ["현원", "퇴소자", "등원율"] and case["values"] is None and case["match_notes"][-1].endswith("(지정)")
+    import pytest
+    with pytest.raises(ValueError): agent.set_item_indicator(case, 1, ["없는 지표"])
+    with pytest.raises(ValueError): agent.set_item_indicator(case, 9, ["현원"])
+    agent.autopilot(case, None, register=False)
+    assert set(case["values"]["indicator"]) == {"현원", "퇴소자", "등원율"} and "□ 현원" in docread.read("x.hwpx", case["hwpx"])
+    agent.set_item_indicator(case, 1, []); assert [it["indicator"] for it in case["items"]] == [None, "등원율"] and case["draft"] is None
+    hs = agent.handlers(agent.Case(), None); assert "set_item_indicator" in hs and {t["name"] for t in agent.TOOLS} == set(hs)
+    assert "당신이 판단" in agent.SYSTEM and "set_item_indicator" in agent.SYSTEM
