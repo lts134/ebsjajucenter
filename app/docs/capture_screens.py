@@ -33,6 +33,12 @@ def pick(page, label_text, option_text):
     box.locator("input").first.click(); page.wait_for_timeout(500)
     page.get_by_role("option").filter(has_text=option_text).first.click(); settle(page, 2500)
 
+def pick_multi(page, label_text, option_text):
+    """multiselect: 라벨 글자로 찾아 열고 옵션 선택"""
+    box = page.locator('[data-testid="stMultiSelect"]').filter(has_text=label_text).first
+    box.locator("input").first.click(); page.wait_for_timeout(500)
+    page.get_by_role("option").filter(has_text=option_text).first.click(); page.keyboard.press("Escape"); settle(page, 2500)
+
 def shot(page, fname, crop_h=None):
     page.set_viewport_size({"width": 1440, "height": 900}); page.wait_for_timeout(600)
     h, stable = 900, 0
@@ -66,7 +72,7 @@ def main():
             # 과거 답변 등록: 요구서 샘플 + 가로형 실적표(열 확인)
             nav(page, "과거 답변 등록")
             pick(page, "시연 요구서", "요구서_02"); click(page, "요구 항목 읽기", 3000)
-            pick(page, "시연 파일", "실적표_가로형"); shot(page, "01_과거자료등록.png")
+            pick_multi(page, "시연 파일", "실적표_가로형"); shot(page, "01_과거자료등록.png")
             im = Image.open(OUT / "01_과거자료등록.png"); w, hh = im.size
             im.crop((int(w * 0.52), 420, w - 24, min(hh, 420 + 980))).save(IMG / "01b_열매핑.png")
             # 새 요구서 처리 1단계

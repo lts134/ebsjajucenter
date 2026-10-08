@@ -7,7 +7,7 @@
 import os, sys, subprocess, time, shutil
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from capture_screens import settle, nav, click, pick, APP, EXE   # 앱 띄우기·화면 조작 도우미 재사용
+from capture_screens import settle, nav, click, pick, pick_multi, APP, EXE   # 앱 띄우기·화면 조작 도우미 재사용
 from playwright.sync_api import sync_playwright
 
 PORT = os.environ.get("RECORD_PORT", "8523"); DBF = APP / "storage" / "record.db"
@@ -68,9 +68,9 @@ def main():
             cap(page, "홈 — 담당자가 하는 일은 셋입니다. 새 요구서 처리, 과거 답변 등록, 기록에 묻기. 지난 7월 의원실에 낸 답변 1건이 이미 기억에 있습니다.", 5000)
             # 과거 답변 등록
             nav(page, "과거 답변 등록")
-            cap(page, "과거 답변 등록 — 집계 엑셀이 없어도 됩니다. 그때 낸 실적표나 회신 공문(HWP·HWPX·DOCX·PDF)의 표를 그대로 읽습니다.", 2500)
+            cap(page, "과거 답변 등록 — 집계 엑셀이 없어도 됩니다. 실적표·회신 공문(HWP·HWPX·DOCX·PDF)을 종류 구분 없이 한 번에 올리면 표를 그대로 읽어 합칩니다.", 2500)
             pick(page, "시연 요구서", "요구서_02"); click(page, "요구 항목 읽기", 2000)
-            pick(page, "시연 파일", "실적표_가로형")
+            pick_multi(page, "시연 파일", "실적표_가로형")
             cap(page, "제목 행·병합 머리글·합계 행이 있는 실적표도 센터 열·값 열·기준일만 확인하면 48건의 값으로 저장됩니다. 값은 옮기기만 하고 계산하지 않습니다.", 1000)
             scroll(page, 700); page.wait_for_timeout(4500)
             # 1단계

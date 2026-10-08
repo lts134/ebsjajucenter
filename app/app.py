@@ -122,82 +122,68 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None, b
     except ValueError as e:
         st.warning(str(e)); return None
 
-def value_table_input(key: str, what: str = "값", base_date_default: str | None = None, demo_files: list[Path] | None = None):
-    """값 입력 공통: 집계 엑셀/CSV · 회신 문서의 표 · 직접 입력. (df | None, 출처 이름) 반환. 시연 모드면 샘플 파일 선택칸이 먼저 나온다."""
-    options = ["엑셀/CSV 파일", "회신 문서의 표 (hwp·hwpx·docx·pdf)", "직접 입력"] + (["시연 파일"] if DEMO and demo_files else [])
-    mode = st.radio("어디에 있나요?", options, horizontal=True, key=f"{key}_mode", index=len(options) - 1 if DEMO and demo_files else 0,
-                    help="엑셀은 제목 행·병합 머리글·가로 펼침 서식도 읽습니다. 한글 HWP(5.0)는 자동 변환해 읽습니다(암호·배포용 문서 제외).")
-    if mode == "시연 파일":
-        pick = st.selectbox("시연 파일", demo_files, format_func=lambda p: p.name, key=f"{key}_demo")
-        if pick.name.startswith("실적표_"): return _grid_to_values(tabular.read_grid(pick), f"{key}_demo_{pick.name}", base_date_default=base_date_default), pick.name
-        return compare.load_values(pick), pick.name
-    if mode == "엑셀/CSV 파일":
-        up = st.file_uploader(f"{what} 엑셀/CSV — 긴 형식(지표명·센터명·기준일·값) 또는 실적표 그대로", type=["xlsx", "xlsm", "csv"], key=f"{key}_xl")
-        if not up: return None, ""
+def _file_values(up, key: str, base_date_default: str | None):
+    """올린 파일 하나 → 제출값 표 목록. 엑셀/CSV는 시트 하나, 문서는 고른 표마다 하나. (df 목록) 반환."""
+    name = up.name.lower()
+    if name.endswith((".xlsx", ".xlsm", ".xls", ".csv")):
         try:
             sheets = compare.list_sheets(up)
             sheet = st.selectbox("시트", sheets, key=f"{key}_sheet") if len(sheets) > 1 else None
             grid = tabular.read_grid(up, sheet)
         except Exception as e:
-            st.error(f"파일을 읽지 못했습니다: {e}"); return None, ""
-        return _grid_to_values(grid, f"{key}_{sheet}", base_date_default=base_date_default), up.name
-    if mode.startswith("회신 문서"):
-        up = st.file_uploader(f"{what}이 들어 있는 회신 문서 (hwp / hwpx / docx / pdf)", type=["hwp", "hwpx", "docx", "pdf"], key=f"{key}_doc")
-        if not up: return None, ""
-        try: grids, text = tabular.grids_from_document(up.name, up.getvalue())
-        except Exception as e:
-            st.error(f"문서를 읽지 못했습니다: {e}"); return None, up.name
-        if not grids:
-            st.error("문서에서 표를 찾지 못했습니다. hwp·hwpx·docx는 표 개체여야 하고(탭·공백으로 맞춘 글은 표가 아님), PDF는 글자가 추출되는 파일이어야 합니다(스캔본 불가). 표가 없으면 '직접 입력'을 쓰세요.")
-            with st.expander(f"진단: 추출된 본문 {len(text)}자 — 앞부분 보기"):
-                st.text("\n".join(text.splitlines()[:40]) or "(본문이 비어 있음 — 배포용 문서이거나 그림으로 된 문서일 수 있음)")
-            return None, up.name
-        best = max(range(len(grids)), key=lambda i: tabular.numeric_cells(grids[i]))
-        g = st.selectbox("문서 안의 표 (숫자가 많은 표가 기본 선택)", grids, index=best, key=f"{key}_tbl",
-                         format_func=lambda g: f"{g.source_sheet} — {len(g.rows)}행 × {g.width()}열" + (f" (문서 {g.row_offset}번째 줄부터)" if g.row_offset > 1 else ""))
-        return _grid_to_values(g, f"{key}_{g.source_sheet}", f"회신 문서({up.name}) 표에서 추출", base_date_default), up.name
-    st.caption("표 파일이 없을 때. 행을 추가해 지표명·센터명·기준일·값을 채우세요. 뒤의 네 칸(근거)은 선택입니다.")
-    man = st.data_editor(pd.DataFrame(columns=tabular.MANUAL_COLS), num_rows="dynamic", width="stretch", key=f"{key}_man")
-    if man.dropna(how="all").empty: return None, ""
-    try: return tabular.from_records(man), "직접 입력"
-    except ValueError as e: st.error(str(e)); return None, ""
-
-def _src_key(df: pd.DataFrame) -> str:
-    return f"{df['source_file'].iloc[0]}/{df['source_sheet'].iloc[0]}"
+            st.error(f"파일을 읽지 못했습니다: {e}"); return []
+        df = _grid_to_values(grid, f"{key}_{sheet}", base_date_default=base_date_default)
+        return [df] if df is not None else []
+    try: grids, text = tabular.grids_from_document(up.name, up.getvalue())
+    except Exception as e:
+        st.error(f"문서를 읽지 못했습니다: {e}"); return []
+    if not grids:
+        st.error("문서에서 표를 찾지 못했습니다. hwp·hwpx·docx는 표 개체여야 하고(탭·공백으로 맞춘 글은 표가 아님), PDF는 글자가 추출되는 파일이어야 합니다(스캔본 불가). 표가 없으면 아래 '직접 입력'을 쓰세요.")
+        with st.expander(f"진단: 추출된 본문 {len(text)}자 — 앞부분 보기"):
+            st.text("\n".join(text.splitlines()[:40]) or "(본문이 비어 있음 — 배포용 문서이거나 그림으로 된 문서일 수 있음)")
+        return []
+    best = max(range(len(grids)), key=lambda i: tabular.numeric_cells(grids[i]))
+    label = lambda g: f"{g.source_sheet} — {len(g.rows)}행 × {g.width()}열" + (f" (문서 {g.row_offset}번째 줄부터)" if g.row_offset > 1 else "")
+    picks = st.multiselect("문서 안의 표 (숫자가 많은 표가 기본 선택 · 여러 개 고를 수 있음)", grids, default=[grids[best]], format_func=label, key=f"{key}_tbl") if len(grids) > 1 else grids
+    out = []
+    for g in picks:
+        if len(picks) > 1: st.markdown(f"**{g.source_sheet}**")
+        df = _grid_to_values(g, f"{key}_{g.source_sheet}", f"회신 문서({up.name}) 표에서 추출", base_date_default)
+        if df is not None: out.append(df)
+    return out
 
 def value_sources(key: str, what: str = "값", base_date_default: str | None = None, demo_files: list[Path] | None = None):
-    """여러 출처(엑셀 + 회신 문서의 표 여러 개 + 직접 입력)를 하나로 모은다.
-    지금 읽은 표는 '담기' 없이도 포함되고, 다른 파일을 이어서 넣으려면 '담기'로 묶어 둔다. (df | None, 출처 이름) 반환."""
-    pile: list[dict] = st.session_state.setdefault(f"{key}_pile", [])
-    cur_df, cur_name = value_table_input(key, what, base_date_default, demo_files)
-    cur_key = _src_key(cur_df) if cur_df is not None and len(cur_df) else None
-    in_pile = cur_key is not None and any(p["key"] == cur_key for p in pile)
-    if cur_df is not None and len(cur_df):
-        a, b = st.columns([3, 1.2])
-        a.caption(f"지금 읽은 표: {len(cur_df)}건 · {cur_key}" + (" · 담겨 있음" if in_pile else ""))
-        label = "다시 담기" if in_pile else "담고 다른 파일 추가"
-        if b.button(label, key=f"{key}_add", icon=":material/add:", type="tertiary",
-                    help="이 표를 묶음에 넣어 두고, 위에서 다른 파일이나 다른 표를 이어서 읽습니다. 엑셀과 한글 문서를 함께 넣을 때 씁니다."):
-            pile[:] = [p for p in pile if p["key"] != cur_key] + [{"key": cur_key, "name": cur_name, "df": cur_df}]
-            st.rerun()
-    if pile:
+    """값 입력 한 곳: 엑셀·CSV·회신 문서(hwp·hwpx·docx·pdf)를 종류 구분 없이 여러 개 올리면 파일마다 읽어 하나로 모은다. 파일이 없으면 직접 입력.
+    (df | None, 출처 이름) 반환. 시연 모드면 시연 파일 선택칸이 추가된다."""
+    parts, names = [], []
+    ups = st.file_uploader(f"{what} 파일 — 엑셀·CSV, 회신 공문(hwp·hwpx·docx·pdf). 여러 개를 한 번에 올려도 됩니다",
+                           type=["xlsx", "xlsm", "csv", "hwp", "hwpx", "docx", "pdf"], accept_multiple_files=True, key=f"{key}_files",
+                           help="긴 형식(지표명·센터명·기준일·값)은 그대로, 실적표 서식(제목 행·병합 머리글·합계 행)은 열 확인을 거쳐 읽습니다. 한글 HWP(5.0)는 자동 변환(암호·배포용 문서 제외). 올린 파일마다 결과가 아래에 쌓이고, 전부 합쳐 저장됩니다.")
+    if DEMO and demo_files:
+        for pick in st.multiselect("시연 파일", demo_files, default=demo_files if len(demo_files) == 1 else None, format_func=lambda p: p.name, key=f"{key}_demo"):
+            with st.container(border=True):
+                st.markdown(f"**{pick.name}**")
+                df = _grid_to_values(tabular.read_grid(pick), f"{key}_demo_{pick.name}", base_date_default=base_date_default) if pick.name.startswith("실적표_") else compare.load_values(pick)
+                if df is not None: parts.append(df); names.append(pick.name); st.caption(f"읽음: {len(df)}건")
+    for up in ups or []:
         with st.container(border=True):
-            st.markdown(f"**담아 둔 표 {len(pile)}개 · {sum(len(p['df']) for p in pile)}건**  \n<span class='small-muted'>다른 파일이나 표를 더 넣으려면 위 '어디에 있나요?'에서 고르면 됩니다. 담은 것은 그대로 남습니다.</span>", unsafe_allow_html=True)
-            for i, p in enumerate(pile):
-                a, b = st.columns([5, 1])
-                a.caption(f"{p['key']} · {len(p['df'])}건 · 지표 {', '.join(sorted(p['df']['indicator'].unique())[:4])}")
-                if b.button("빼기", key=f"{key}_rm_{i}", type="tertiary", icon=":material/close:"):
-                    pile.pop(i); st.rerun()
-    parts = [p["df"] for p in pile] + ([cur_df] if cur_df is not None and len(cur_df) and not in_pile else [])
+            st.markdown(f"**{up.name}**  \n<span class='small-muted'>{up.size / 1024:.0f} KB</span>", unsafe_allow_html=True)
+            dfs = _file_values(up, f"{key}_{up.file_id}", base_date_default)
+            if dfs: parts += dfs; names.append(up.name); st.caption(f"읽음: {sum(len(d) for d in dfs)}건" + (f" · 표 {len(dfs)}개" if len(dfs) > 1 else ""))
+    with st.expander("파일 없이 직접 입력", expanded=not ups and not parts):
+        st.caption("행을 추가해 지표명·센터명·기준일·값을 채우세요. 뒤의 네 칸(근거)은 선택입니다. 파일과 함께 써도 됩니다.")
+        man = st.data_editor(pd.DataFrame(columns=tabular.MANUAL_COLS), num_rows="dynamic", width="stretch", key=f"{key}_man")
+        if not man.dropna(how="all").empty:
+            try: parts.append(tabular.from_records(man)); names.append("직접 입력")
+            except ValueError as e: st.error(str(e))
     if not parts: return None, ""
     df = pd.concat(parts, ignore_index=True)
     dup = df.duplicated(subset=["indicator", "center", "base_date"], keep=False)
     if dup.any():
-        st.warning(f"같은 지표·센터·기준일 값이 두 출처에 있습니다({int(dup.sum())}행). 나중에 넣은 출처의 값만 남깁니다. "
+        st.warning(f"같은 지표·센터·기준일 값이 두 곳에 있습니다({int(dup.sum())}행). 나중에 올린 파일의 값만 남깁니다. "
                    "둘 다 두려면 한쪽 지표명을 바꾸세요. 예: " + " / ".join(f"{r.indicator}·{r.center}·{r.base_date}" for r in df[dup].head(3).itertuples()))
         df = df.drop_duplicates(subset=["indicator", "center", "base_date"], keep="last").reset_index(drop=True)
-    names = list(dict.fromkeys([p["name"] for p in pile] + ([cur_name] if cur_df is not None and not in_pile else [])))
-    return df, " + ".join(n for n in names if n)
+    return df, " + ".join(dict.fromkeys(names))
 
 def analyze_with_status(text: str):
     """추출을 돌리면서 단계(모델·출력 한도·응답 시간·잘림 재시도)를 보여 준다. 긴 요구서는 수십 초~수 분."""
@@ -278,7 +264,7 @@ def page_register():
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
         st.markdown("### 2. 그때 보낸 값")
-        st.caption("집계 엑셀, 회신 공문(hwp·hwpx·docx·pdf)의 표, 직접 입력 중 무엇이든 됩니다. 여러 파일·여러 표를 함께 넣으려면 하나 읽을 때마다 '담고 다른 파일 추가'.")
+        st.caption("집계 엑셀, 그때 보낸 회신 공문(hwp·hwpx·docx·pdf), 직접 입력 중 무엇이든 됩니다. 파일 종류를 가리지 않고 여러 개를 한 번에 올리면 전부 합쳐 저장됩니다.")
         vdf, vname = value_sources("reg_val", "그때 보낸 값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
         if vdf is not None:
             st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=200, width="stretch")
@@ -305,7 +291,7 @@ def page_register():
             vals = vdf.to_dict("records") if vdf is not None else []
             sid = db.add_submission(rid, submitted_date, USER, vname, "confirmed", "과거 제출본 등록", vals)
             st.success(f"저장했습니다. 요구서 #{rid}, 제출본 #{sid}, 값 {len(vals)}건. 다음에 같은 지표·기준일을 물으면 자동으로 찾아 줍니다.")
-            del st.session_state["reg_extract"]; st.session_state.pop("reg_val_pile", None)
+            del st.session_state["reg_extract"]
 
 # ================= 새 요구서 처리 (1→2→3) =================
 def page_process():
@@ -439,7 +425,6 @@ def step_compare():
             if reason.strip() and m is not None:
                 row = m[(m["indicator"] == key[0]) & (m["center"] == key[1]) & (m["base_date"] == key[2])].iloc[0]
                 db.add_reason(sid, *key, row["old_value"], row["new_value"], reason, USER)
-        st.session_state.pop("cmp_new_pile", None)
         st.session_state.update(last_submission=sid, last_request=target["id"], target_request=target["id"],
                                 last_checklist=ck.to_dict("records") if ck is not None else None, last_reasons={" | ".join(k): v for k, v in reasons.items() if v.strip()})
         go("새 요구서 처리", 3)

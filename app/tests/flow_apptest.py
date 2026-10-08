@@ -21,6 +21,10 @@ def button(at, text):
     b[0].click().run(); assert not at.exception, at.exception
 
 def sb(at, key): return next(s for s in at.selectbox if s.key == key)
+def ms_pick(at, key, *texts):
+    """multiselect에서 글자가 포함된 옵션들을 고른다"""
+    m = next(m for m in at.multiselect if m.key == key)
+    m.set_value([o for o in m.options if any(t in str(o) for t in texts)]).run(); assert not at.exception, at.exception
 
 # 홈(빈 상태)
 at = app("홈"); assert any("기록이 없습니다" in i.value for i in at.info); print("홈(빈 상태) OK")
@@ -28,28 +32,25 @@ at = app("홈"); assert any("기록이 없습니다" in i.value for i in at.info
 # 과거 답변 등록: 시연 요구서 + 시연 제출본(7월) → 저장
 at = app("과거 답변 등록")
 s = sb(at, "reg_demo"); s.select(next(o for o in s.options if "요구서_01" in str(o))).run(); assert not at.exception
-button(at, "요구 항목 읽기")
+button(at, "요구 항목 읽기"); ms_pick(at, "reg_val_demo", "7월")
 button(at, "기억에 저장"); print("등록:", [x.value[:60] for x in at.success])
+assert any("값 12건" in x.value for x in at.success)
 
 # 과거 답변 등록 — 가로형 실적표: 표 읽는 법 확인 UI
 at = app("과거 답변 등록")
-s = sb(at, "reg_val_demo"); s.select(next(o for o in s.options if "실적표_" in str(o))).run(); assert not at.exception
+ms_pick(at, "reg_val_demo", "실적표_")
 assert next(t for t in at.text_input if t.label.startswith("3. 기준일")).value == "2026-06-30"
 assert next(m for m in at.multiselect if m.label.startswith("2. 값 열")).value == [1, 2, 3, 4]
 assert any("48건" in c.value for c in at.caption), [c.value for c in at.caption]; print("가로형 실적표 → 열 확인 OK")
 
-# 과거 답변 등록 — 여러 출처 묶기: 실적표(가로형) 담기 → 등원율(긴 형식) 추가 → 둘 다 저장 대상
+# 과거 답변 등록 — 여러 출처 한 번에: 실적표(가로형) + 등원율(긴 형식) → 둘 다 저장 대상, 겹침 경고
 at = app("과거 답변 등록")
-s = sb(at, "reg_val_demo"); s.select(next(o for o in s.options if "실적표_" in str(o))).run(); assert not at.exception
-button(at, "담고 다른 파일 추가")
-assert len(at.session_state["reg_val_pile"]) == 1 and any("담아 둔 표 1개" in m.value for m in at.markdown)
-s = sb(at, "reg_val_demo"); s.select(next(o for o in s.options if "등원율_" in str(o) and "7월" in str(o))).run(); assert not at.exception
-cap = next(c.value for c in at.caption if c.value.startswith("저장될 값")); assert "출처 2개" in cap, cap
-# 두 시연 파일은 같은 값(가로형 ↔ 긴 형식)이라 겹침 경고가 뜨고, 나중 출처만 남아 건수는 그대로다
-n_pile = len(at.session_state["reg_val_pile"][0]["df"]); n_total = int(cap.split("건")[0].split()[-1]); assert n_total == n_pile, cap
-assert any("두 출처에" in w.value for w in at.warning), [w.value for w in at.warning]
-rm = [b for b in at.button if b.label == "빼기"]; rm[0].click().run(); assert not at.exception
-assert not at.session_state["reg_val_pile"]; print("여러 출처 묶기 OK:", cap)
+ms_pick(at, "reg_val_demo", "실적표_", "7월")
+assert [c.value for c in at.caption if c.value.startswith("읽음")] == ["읽음: 12건", "읽음: 48건"], [c.value for c in at.caption]
+cap = next(c.value for c in at.caption if c.value.startswith("저장될 값"))
+# 두 시연 파일은 같은 값(가로형 ↔ 긴 형식)이라 겹침 경고가 뜨고, 나중에 올린 실적표 값만 남아 48건
+assert cap.startswith("저장될 값 48건"), cap
+assert any("두 곳에" in w.value for w in at.warning), [w.value for w in at.warning]; print("여러 출처 한 번에 OK:", cap)
 
 # 새 요구서 처리 1단계: 시연 새 요구서 → 읽기 → 등록(2단계로)
 at = app("새 요구서 처리", 1)
