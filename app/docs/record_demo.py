@@ -107,14 +107,14 @@ def main():
             cap(page, "검토·승인 — 팀장이 수치·사유·초안을 보고 승인하거나 반려합니다. 누가 언제 승인했는지 기록에 남습니다.", 2500)
             page.get_by_label("검토 의견").first.fill("수치·사유 확인함. 제출 승인"); page.keyboard.press("Enter"); settle(page, 500); click(page, "승인", 3000)
             # 기록 조회
-            nav(page, "기록 조회"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page)
+            nav(page, "기록"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page)
             cap(page, "기록 조회 — 요구 → 항목 → 제출값 → 차이 사유 → 초안 → 승인이 한 줄로 이어집니다.", 1000)
             scroll(page, 500); page.wait_for_timeout(5000)
             # 현황
             nav(page, "현황")
             cap(page, "현황 — 기한(D-day)과 상태, 요청 주체별 건수, 반복해서 요구된 지표. 반복 지표는 미리 산출해 두는 표준 답변 후보입니다.", 5000)
             # 기록에 묻기
-            nav(page, "기록에 묻기")
+            nav(page, "기록"); page.get_by_text("물어보기", exact=True).first.click(); settle(page)
             cap(page, "기록에 묻기 — \"감사실에 등원율 어떻게 냈지?\" 화면을 돌아다니지 않아도 기록에서 찾아 요구번호·제출일·값을 근거와 함께 답합니다.", 1500)
             page.get_by_role("textbox", name="질문").fill("감사실에 등원율 어떻게 냈지?"); page.keyboard.press("Enter"); settle(page, 500)
             click(page, "물어보기", 3000); page.wait_for_timeout(4500)

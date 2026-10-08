@@ -88,6 +88,13 @@ div[data-testid="stExpander"] summary p {{font-weight: 600;}}
 [data-testid="stFileUploaderDropzone"] {{border-radius: 10px; border: 1.5px dashed #C9D0D8; background: #FAFBFC;}}
 div[data-testid="stAlert"] {{border-radius: 10px;}}
 .small-muted {{color: {MUTED}; font-size: .84rem;}}
+/* ---- 진행 체크 칩 ---- */
+.pcs {{display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 10px;}}
+.pc {{display: inline-flex; align-items: center; gap: 5px; border: 1px solid {LINE}; border-radius: 999px; padding: 2px 10px; font-size: .8rem; color: {MUTED}; background: #fff;}}
+.pc i {{font-style: normal; font-weight: 700;}}
+.pc.on {{color: {TEXT}; border-color: #BBD0F7; background: #EEF4FE;}}
+.pc.on i {{color: {PRIMARY};}}
+.pc small {{color: #99A2AC; font-size: .72rem; margin-left: 2px;}}
 hr {{margin: 1.4rem 0 1.1rem; border-color: {LINE};}}
 </style>
 """
@@ -155,3 +162,10 @@ def safe_md(text: str) -> str:
     t = "" if text is None else str(text)
     t = _re.sub(r"!\[", "[", t)
     return t.replace("<", "&lt;").replace(">", "&gt;")
+
+def progress_chips(items) -> None:
+    """진행 체크 줄: [(이름, 끝남 여부, 보조글)] → ✓/○ 칩 한 줄."""
+    parts = []
+    for name, done, detail in items:
+        parts.append(f'<span class="pc{" on" if done else ""}"><i>{"✓" if done else "○"}</i>{esc(name)}' + (f"<small>{esc(detail)}</small>" if detail else "") + "</span>")
+    st.markdown('<div class="pcs">' + "".join(parts) + "</div>", unsafe_allow_html=True)

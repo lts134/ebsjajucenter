@@ -44,6 +44,7 @@ def step_read(case: Case) -> dict:
         res, how = extract.extract(case["request_text"])
         items = normalize.normalize_items(res.get("items") or [])
         res["items"] = items if how.startswith("Claude") else normalize.normalize_llm(items)                # 모델이 이미 지표를 분류했으면 다시 묻지 않는다(규칙 경로일 때만 보조 분류)
+    if res.get("requester"): res["requester"] = db.canonical_requester(res["requester"])                 # 요청 주체 사전 표기로
     case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = how; case["read_key"] = key
     case.note(f"요구서 읽음: 항목 {len(res['items'])}건 ({how})")
     return {"requester": res.get("requester"), "received_date": res.get("received_date"), "due_date": res.get("due_date"), "title": res.get("title"),
@@ -129,6 +130,7 @@ def step_register(case: Case) -> dict:
     if not case["extracted"]: step_read(case)
     r = case["extracted"]
     rid = db.add_request(r.get("requester"), r.get("received_date"), r.get("due_date"), r.get("title"), case["request_text"], case["request_name"], case["items"])
+    db.advance_request_status(rid, "처리 중")                       # 대화에서 등록되는 건은 이미 처리가 시작된 것
     case["request_id"] = rid; case["items"] = db.get_items(rid)
     case.note(f"요구서 #{rid} 등록"); return {"request_id": rid}
 

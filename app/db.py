@@ -130,6 +130,13 @@ CREATE TABLE IF NOT EXISTS dispatches (        -- 발송 기록: 확정한 회�
     submission_id INTEGER, draft_id INTEGER,
     sent_at TEXT, sent_to TEXT, method TEXT, sent_by TEXT, note TEXT, created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS requesters (        -- 요청 주체 사전: 표준 이름·별칭·유형(의원실·감사·교육부·언론·기타). 표기 통일과 자동완성에 쓴다
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE, aliases TEXT, kind TEXT, note TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS indicator_dict (    -- 지표 사전·데이터 카탈로그(화면에서 편집). 비어 있으면 코드의 기본값(normalize.CANON·suggest.CATALOG)을 쓴다
+    canon TEXT PRIMARY KEY, aliases TEXT, source TEXT, owner TEXT, note TEXT, updated_at TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (          -- 조직 설정(부서장·내선·발신 표기): 접속 세션이 아니라 기록에 남는다
     key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT
 );
@@ -176,6 +183,14 @@ def _migrate(con):
     icols = {r[1] for r in con.execute("PRAGMA table_info(items)")}
     if "period" not in icols:
         con.execute("ALTER TABLE items ADD COLUMN period TEXT")
+    rcols = {r[1] for r in con.execute("PRAGMA table_info(requests)")}
+    fresh_status = "status" not in rcols
+    for c in ("status", "assignee", "memo", "updated_at"):
+        if c not in rcols: con.execute(f"ALTER TABLE requests ADD COLUMN {c} TEXT")
+    if fresh_status:                                              # 기존 기록의 상태를 제출본·발송 기록에서 한 번 채운다
+        con.execute("UPDATE requests SET status='접수' WHERE status IS NULL")
+        con.execute("UPDATE requests SET status='확정' WHERE id IN (SELECT request_id FROM submissions WHERE status='confirmed')")
+        con.execute("UPDATE requests SET status='발송' WHERE id IN (SELECT s.request_id FROM dispatches d JOIN submissions s ON s.id=d.submission_id)")
     dcols = {r[1] for r in con.execute("PRAGMA table_info(indicator_data)")}
     if "active" not in dcols: con.execute("ALTER TABLE indicator_data ADD COLUMN active INTEGER DEFAULT 1")
     if "superseded_by" not in dcols: con.execute("ALTER TABLE indicator_data ADD COLUMN superseded_by INTEGER")
@@ -285,8 +300,8 @@ def now():
 def add_request(requester, received_date, due_date, title, raw_text, source_file, items):
     con = connect()
     cur = con.execute(
-        "INSERT INTO requests(requester,received_date,due_date,title,raw_text,source_file,created_at) VALUES(?,?,?,?,?,?,?)",
-        (requester, received_date, due_date, title, raw_text, source_file, now()))
+        "INSERT INTO requests(requester,received_date,due_date,title,raw_text,source_file,created_at,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+        (canonical_requester(requester), received_date, due_date, title, raw_text, source_file, now(), "접수", now()))
     rid = cur.lastrowid
     def _s(v):                                   # NaN·None → None, 그 외 문자열
         return None if v is None or (isinstance(v, float) and v != v) else str(v).strip() or None
@@ -307,8 +322,8 @@ def _s(v):
 def update_request(request_id, requester, received_date, due_date, title):
     """요구서 머리 정보 수정(원문·항목은 그대로)."""
     con = connect()
-    con.execute("UPDATE requests SET requester=?, received_date=?, due_date=?, title=? WHERE id=?",
-                (_s(requester), _s(received_date), _s(due_date), _s(title), request_id))
+    con.execute("UPDATE requests SET requester=?, received_date=?, due_date=?, title=?, updated_at=? WHERE id=?",
+                (canonical_requester(_s(requester)), _s(received_date), _s(due_date), _s(title), now(), request_id))
     con.commit(); con.close()
 
 def replace_items(request_id, items):
@@ -396,6 +411,7 @@ def add_submission(request_id, submitted_date, submitted_by, file_name, status, 
         "INSERT INTO submission_values(submission_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
         [(sid, v["indicator"], v["center"], v["base_date"], v["value"], _s(v.get("definition")), _s(v.get("calc_period")),
           _s(v.get("extract_date")), _s(v.get("source_version")), _s(v.get("source_file")), _s(v.get("source_sheet")), _int_or_none(v.get("source_row"))) for v in rows])
+    if status == "confirmed": _advance(con, request_id, "확정")
     con.commit(); con.close()
     return sid
 
@@ -547,7 +563,7 @@ def request_overview():
     """요구별 현황: 항목 수, 제출본 수, 확정 여부"""
     con = connect()
     rows = con.execute("""
-        SELECT r.id, r.requester, r.received_date, r.due_date, r.title,
+        SELECT r.id, r.requester, r.received_date, r.due_date, r.title, r.status, r.assignee, r.memo, r.updated_at,
                (SELECT COUNT(*) FROM items i WHERE i.request_id=r.id) AS n_items,
                (SELECT COUNT(*) FROM submissions s WHERE s.request_id=r.id AND s.status='confirmed') AS n_confirmed,
                (SELECT MAX(submitted_date) FROM submissions s WHERE s.request_id=r.id AND s.status='confirmed') AS last_submitted
@@ -693,6 +709,8 @@ def add_dispatch(submission_id, draft_id, sent_at, sent_to, method, sent_by, not
     con = connect()
     cur = con.execute("INSERT INTO dispatches(submission_id,draft_id,sent_at,sent_to,method,sent_by,note,created_at) VALUES(?,?,?,?,?,?,?,?)",
                       (submission_id, draft_id, norm_date(sent_at, keep_unparsed=True), _s(sent_to), _s(method), _s(sent_by), _s(note), now()))
+    rid = con.execute("SELECT request_id FROM submissions WHERE id=?", (submission_id,)).fetchone()
+    if rid: _advance(con, rid[0], "발송")
     con.commit(); did = cur.lastrowid; con.close(); return did
 
 def dispatches_for(submission_id) -> list[dict]:
@@ -800,3 +818,151 @@ def db_info() -> dict:
     st_ = DB_PATH.stat() if DB_PATH.exists() else None
     return {"path": str(DB_PATH), "size_kb": (st_.st_size // 1024) if st_ else 0, "modified": dt.datetime.fromtimestamp(st_.st_mtime).strftime("%Y-%m-%d %H:%M") if st_ else "-",
             "tables": t, "replica": os.environ.get("LITESTREAM_REPLICA_URL", "")}
+
+# ---------- 요구 건 상태 흐름 ----------
+REQUEST_STATUSES = ["접수", "처리 중", "확정", "발송", "종결", "보류"]
+_RANK = {"보류": -1, "접수": 0, "처리 중": 1, "확정": 2, "발송": 3, "종결": 4}
+
+def _advance(con, request_id, to: str) -> None:
+    """자동 전이: 뒤로 가지 않는다(종결된 건은 그대로, 보류 건은 일이 다시 움직이면 앞으로)."""
+    cur = con.execute("SELECT status FROM requests WHERE id=?", (request_id,)).fetchone()
+    if cur is None: return
+    if _RANK.get(cur[0] or "접수", 0) < _RANK[to]:
+        con.execute("UPDATE requests SET status=?, updated_at=? WHERE id=?", (to, now(), request_id))
+
+def advance_request_status(request_id, to: str) -> None:
+    con = connect(); _advance(con, request_id, to); con.commit(); con.close()
+
+def set_request_status(request_id, status=None, assignee=None, memo=None) -> None:
+    """담당자가 직접 바꾸는 상태·담당자·메모(None은 그대로)."""
+    sets, args = [], []
+    if status is not None:
+        if status not in REQUEST_STATUSES: raise ValueError(f"상태는 {', '.join(REQUEST_STATUSES)} 중 하나")
+        sets.append("status=?"); args.append(status)
+    if assignee is not None: sets.append("assignee=?"); args.append(_s(assignee))
+    if memo is not None: sets.append("memo=?"); args.append(_s(memo))
+    if not sets: return
+    sets.append("updated_at=?"); args += [now(), request_id]
+    con = connect(); con.execute(f"UPDATE requests SET {', '.join(sets)} WHERE id=?", args); con.commit(); con.close()
+
+# ---------- 요청 주체 사전 ----------
+def requester_key(name) -> str:
+    """비교 키: 괄호 안(위원회 등)·공백·기호·대소문자를 무시('○○○ 의원실(교육위원회)' == '○○○의원실')."""
+    s = re.sub(r"\([^)]*\)|（[^）]*）", "", str(name or ""))
+    return re.sub(r"[\s·,.\-_/]", "", s).lower()
+
+_req_cache: dict = {"ver": None, "map": {}}
+def _requester_map() -> dict:
+    import json
+    con = connect(); ver = con.execute("SELECT COUNT(*), MAX(id), MAX(created_at) FROM requesters").fetchone()
+    if tuple(ver) != _req_cache["ver"]:
+        mp = {}
+        for r in con.execute("SELECT name, aliases FROM requesters").fetchall():
+            mp[requester_key(r[0])] = r[0]
+            try:
+                for a in json.loads(r[1] or "[]"): mp[requester_key(a)] = r[0]
+            except ValueError: pass
+        _req_cache.update(ver=tuple(ver), map=mp)
+    con.close(); return _req_cache["map"]
+
+def canonical_requester(name):
+    """사전에 있는 표기(이름·별칭)면 표준 이름으로, 없으면 공백만 정리한 원래 이름."""
+    if name is None: return None
+    s = re.sub(r"\s+", " ", str(name)).strip()
+    if not s: return s
+    try: return _requester_map().get(requester_key(s), s)
+    except sqlite3.DatabaseError: return s
+
+def list_requesters() -> list[dict]:
+    import json
+    con = connect(); rows = con.execute("SELECT * FROM requesters ORDER BY name").fetchall(); con.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try: d["aliases"] = json.loads(d.get("aliases") or "[]")
+        except ValueError: d["aliases"] = []
+        out.append(d)
+    return out
+
+def upsert_requester(name, aliases=None, kind=None, note=None) -> int | None:
+    import json
+    n = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not n: return None
+    al = list(dict.fromkeys(re.sub(r"\s+", " ", str(a)).strip() for a in (aliases or []) if str(a).strip() and requester_key(a) != requester_key(n)))
+    con = connect()
+    with con:
+        con.execute("INSERT INTO requesters(name,aliases,kind,note,created_at) VALUES(?,?,?,?,?) ON CONFLICT(name) DO UPDATE SET aliases=excluded.aliases, kind=COALESCE(excluded.kind, kind), note=COALESCE(excluded.note, note)",
+                    (n, json.dumps(al, ensure_ascii=False), _s(kind), _s(note), now()))
+        rid = con.execute("SELECT id FROM requesters WHERE name=?", (n,)).fetchone()[0]
+    con.close(); _req_cache.update(ver=None, map={}); return rid
+
+def delete_requester(rid) -> None:
+    con = connect(); con.execute("DELETE FROM requesters WHERE id=?", (rid,)); con.commit(); con.close(); _req_cache.update(ver=None, map={})
+
+def requester_names() -> list[str]:
+    """자동완성 후보: 사전 이름 + 기록에 있는 요청 주체(사전 표준명 우선, 중복 제거)."""
+    con = connect(); rows = con.execute("SELECT DISTINCT requester FROM requests WHERE requester IS NOT NULL AND TRIM(requester) <> '' ORDER BY requester").fetchall(); con.close()
+    out = [r["name"] for r in list_requesters()]
+    for (n,) in rows:
+        c = canonical_requester(n)
+        if c and c not in out: out.append(c)
+    return out
+
+def apply_requester_canon() -> int:
+    """기존 기록의 요청 주체 표기를 사전 기준으로 통일. 바뀐 요구서 수 반환."""
+    con = connect(); n = 0
+    for rid, name in con.execute("SELECT id, requester FROM requests").fetchall():
+        c = canonical_requester(name)
+        if c and c != name: con.execute("UPDATE requests SET requester=?, updated_at=? WHERE id=?", (c, now(), rid)); n += 1
+    con.commit(); con.close(); return n
+
+# ---------- 지표 사전·카탈로그(화면 편집) ----------
+def get_indicator_dict() -> list[dict]:
+    import json
+    con = connect(); rows = con.execute("SELECT * FROM indicator_dict ORDER BY rowid").fetchall(); con.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try: d["aliases"] = json.loads(d.get("aliases") or "[]")
+        except ValueError: d["aliases"] = []
+        out.append(d)
+    return out
+
+def save_indicator_dict(rows: list[dict], user: str = "") -> int:
+    """사전 전체를 교체(빈 지표명은 버림, 동의어는 중복 제거). 저장한 지표 수 반환. 빈 목록이면 전부 지워 코드 기본값으로 돌아간다."""
+    import json
+    con = connect()
+    with con:
+        con.execute("DELETE FROM indicator_dict")
+        n = 0
+        for r in rows:
+            canon = re.sub(r"\s+", " ", str(r.get("canon") or "")).strip()
+            if not canon: continue
+            al = r.get("aliases") or []
+            if isinstance(al, str): al = [a.strip() for a in re.split(r"[,，;/\n]", al)]
+            al = list(dict.fromkeys(a for a in (str(x).strip() for x in al) if a and a != canon))
+            con.execute("INSERT OR REPLACE INTO indicator_dict(canon,aliases,source,owner,note,updated_at) VALUES(?,?,?,?,?,?)",
+                        (canon, json.dumps(al, ensure_ascii=False), _s(r.get("source")), _s(r.get("owner")), _s(r.get("note")), now())); n += 1
+    con.close(); return n
+
+# ---------- 화면 캐시용 변경 신호 · 보유 현황 ----------
+def signature() -> tuple:
+    """기록 DB가 바뀌었는지 알리는 값(파일·WAL의 수정 시각·크기). 화면 캐시 키로 써서, 쓰기가 있으면 다음 실행에서 다시 읽는다."""
+    out = []
+    for suf in ("", "-wal"):
+        try: st_ = Path(str(DB_PATH) + suf).stat(); out.append((st_.st_mtime_ns, st_.st_size))
+        except OSError: out.append(None)
+    return tuple(out)
+
+def data_matrix() -> list[dict]:
+    """지표 × 기준일 센터 수(활성 행). 보유 현황 히트맵용."""
+    con = connect()
+    rows = con.execute("SELECT indicator, base_date, COUNT(*) AS n FROM indicator_data WHERE active=1 GROUP BY indicator, base_date ORDER BY indicator, base_date").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def missing_centers(indicator: str, base_date: str) -> list[str]:
+    """명부(취소된 곳 제외)에는 있는데 그 지표·기준일 값이 없는 센터 이름."""
+    con = connect()
+    have = {center_key(r[0]) for r in con.execute("SELECT center FROM indicator_data WHERE active=1 AND indicator=? AND base_date=?", (indicator, base_date)).fetchall()}
+    names = [r[0] for r in con.execute("SELECT name FROM centers WHERE COALESCE(status,'') NOT LIKE '%취소%' ORDER BY center_id").fetchall()]
+    con.close(); return [n for n in names if center_key(n) not in have]

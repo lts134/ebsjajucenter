@@ -22,6 +22,8 @@ CATALOG = {
     "이용시간": ("통합 대시보드 · 이용현황(출결시스템 연동)", "지역교육협력부 담당자"),
 }
 
+DEFAULT_CATALOG = dict(CATALOG)                                   # 코드 기본값 사본(화면 편집 전·되돌리기용)
+
 def suggest(item: dict) -> dict:
     ind, bd = item.get("indicator"), item.get("base_date")
     out = {"지표": ind, "기준일": bd, "데이터 출처": None, "담당": None, "과거 제출": "없음", "판단": ""}

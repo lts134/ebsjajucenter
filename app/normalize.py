@@ -23,7 +23,35 @@ CANON = {
     "정원": ["정원", "모집 정원", "수용 인원"],
     "이용시간": ["이용시간", "이용 시간", "학습 시간", "누적 학습시간"],
 }
+DEFAULT_CANON = {k: list(v) for k, v in CANON.items()}          # 코드 기본값 사본('기본값으로 되돌리기')
 _ORDER = sorted(((alias, canon) for canon, al in CANON.items() for alias in al), key=lambda x: -len(x[0]))
+
+def _rebuild(canon: dict) -> None:
+    """사전을 통째로 바꾼다(같은 dict 객체를 비우고 채워, 다른 모듈이 가진 참조도 함께 바뀐다)."""
+    global _ORDER
+    CANON.clear(); CANON.update({k: list(dict.fromkeys([k] + [a for a in v if a])) for k, v in canon.items() if k})
+    _ORDER = sorted(((alias, c) for c, al in CANON.items() for alias in al), key=lambda x: -len(x[0]))
+    try:
+        import extract; extract.INDICATORS[:] = list(CANON)        # 추출 스키마의 enum도 같은 목록을 본다
+    except Exception: pass
+
+def load_from_db() -> int:
+    """기록 DB에 화면에서 편집한 지표 사전이 있으면 그것을 쓴다(없으면 코드 기본값 유지). 카탈로그(출처·담당)도 함께. 적용한 지표 수 반환."""
+    try:
+        import db, suggest
+        rows = db.get_indicator_dict()
+    except Exception: return 0
+    if not rows: return 0
+    _rebuild({r["canon"]: r.get("aliases") or [] for r in rows})
+    suggest.CATALOG.clear(); suggest.CATALOG.update(suggest.DEFAULT_CATALOG)
+    for r in rows:
+        if r.get("source") or r.get("owner"): suggest.CATALOG[r["canon"]] = (r.get("source") or "[확인 필요]", r.get("owner") or "[확인 필요]")
+    return len(rows)
+
+def reset_defaults() -> None:
+    """코드 기본값으로 되돌린다(DB 사전을 비운 뒤 호출)."""
+    import suggest
+    _rebuild({k: list(v) for k, v in DEFAULT_CANON.items()}); suggest.CATALOG.clear(); suggest.CATALOG.update(suggest.DEFAULT_CATALOG)
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text or "")

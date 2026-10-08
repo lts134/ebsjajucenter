@@ -23,7 +23,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui, plan, agent, dashboard_import, refdocs
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, hwpx_build, llm, assist, history_qa, tabular, ui, plan, agent, dashboard_import, refdocs
 
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
@@ -57,11 +57,21 @@ def _build_info() -> str:
     return ""
 BUILD = _build_info()
 ORG = db.get_settings()                                            # 조직 설정(부서장·내선·발신 표기): 기록 DB, 환경변수는 보조
+if not getattr(normalize, "_loaded", False): normalize.load_from_db(); normalize._loaded = True      # 화면에서 편집한 지표 사전이 있으면 프로세스당 1회 적용
 
-NAV = [("업무", [("홈", "home"), ("새 요구서 처리", "description"), ("검토·승인", "task_alt")]),
-       ("기록", [("지표 데이터", "database"), ("참고 문서", "menu_book"), ("과거 답변 등록", "library_add"), ("기록 조회", "search"), ("현황", "monitoring"), ("기록에 묻기", "forum")]),
-       ("", [("설정", "settings")])]
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached(name: str, sig: tuple, *args):
+    return getattr(db, name)(*args)
+def _q(name: str, *args):
+    """자주 읽는 기록 조회를 캐시한다. 키에 DB 변경 신호(파일·WAL 수정 시각)를 넣어 쓰기가 있으면 다음 실행에서 다시 읽는다."""
+    return _cached(name, db.signature(), *args)
+
+NAV = [("업무", [("홈", "home"), ("현황", "monitoring"), ("검토·승인", "task_alt")]),
+       ("자료", [("지표 데이터", "database"), ("참고 문서", "menu_book"), ("과거 답변 등록", "library_add")]),
+       ("", [("기록", "search"), ("설정", "settings")])]
 PAGE_NAMES = [n for _, items in NAV for n, _ in items]
+HIDDEN_PAGES = ["새 요구서 처리"]                                   # 메뉴에는 없고 홈 검수의 '자세히 고치기'로만 들어오는 단계 화면
+ALIASES = {"기록 조회": ("기록", "찾기·고치기"), "기록에 묻기": ("기록", "물어보기")}   # 옛 이름·바로가기 → 기록 화면의 보기
 
 def go(page: str, step: int | None = None):
     """다음 실행에서 메뉴·단계를 바꾼다."""
@@ -71,7 +81,9 @@ if "_goto" in st.session_state:
     _p, _s = st.session_state.pop("_goto")
     st.session_state["nav"] = _p
     if _s is not None: st.session_state["step"] = _s
-page = st.session_state.get("nav") if st.session_state.get("nav") in PAGE_NAMES else "홈"
+if st.session_state.get("nav") in ALIASES:
+    _pg, _view = ALIASES[st.session_state["nav"]]; st.session_state["nav"] = _pg; st.session_state["rec_view"] = _view
+page = st.session_state.get("nav") if st.session_state.get("nav") in PAGE_NAMES + HIDDEN_PAGES else "홈"
 
 with st.sidebar:
     ui.brand("대외 요구자료 대응", "국정감사·감사·교육부 요구자료")
@@ -413,56 +425,67 @@ def _send_card(case: agent.Case, req: dict):
     if st.button("새 요구 시작", key=f"rv_new_{sid}", icon=":material/add:"): _new_case(); st.rerun()
 
 def _review_panel(case: agent.Case, tpl: bytes | None):
-    """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인. 입력칸 키에 판 번호(rev)를 넣어 모델·코드가 초안을 새로 쓰면 칸도 새 내용으로 바뀐다."""
+    """검수: 위에서 아래로 ① 수치·대조(한 표) → ② 차이 사유 → ③ 회신 초안 → ④ 예상 질문 → 확정. 입력칸 키에 판 번호(rev)를 넣어 모델·코드가 초안을 새로 쓰면 칸도 새 내용으로 바뀐다."""
     rev = int(case.get("rev") or 0); locked = bool(case.get("approved"))
     with st.container(border=True):
         st.markdown("### 확정된 작업" if locked else "### 검수 — 확인하고 승인하면 확정됩니다")
         req = db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})
         st.caption(f"{('요구서 #' + str(case['request_id'])) if case['request_id'] else '요구서 미등록(승인하면 등록)'} · {req.get('requester') or '요청 주체 미기재'} · {req.get('title') or ''} · 기한 {req.get('due_date') or '미기재'}")
+        v = case["values"]; n_vals = len(v) if v is not None else 0
+        m = case["compare"]; diff = m[m["판정"] == "차이"] if m is not None else None; n_diff = len(diff) if diff is not None else 0
+        n_reason = sum(1 for _, r in (diff.iterrows() if diff is not None else []) if str(case["reasons"].get((r["indicator"], r["center"], r["base_date"]), "") or "").strip())
+        ui.progress_chips([("읽기", bool(case["items"]), f"{len(case['items'])}항목"), ("등록", bool(case["request_id"]), f"#{case['request_id']}" if case["request_id"] else ("보류" if case.get("no_register") else "")),
+                           ("값", n_vals > 0, f"{n_vals}건"), ("대조", m is not None, f"차이 {n_diff}" if m is not None else "첫 제출"), ("사유", n_diff == 0 or n_reason == n_diff, f"{n_reason}/{n_diff}" if n_diff else ""),
+                           ("초안", bool(case["draft"]) and not case.get("draft_stale"), "다시 쓰기 필요" if case.get("draft_stale") else ""), ("HWPX", bool(case["hwpx"]) and not case.get("hwpx_stale"), "반영 전" if case.get("hwpx_stale") else ""),
+                           ("확정", locked, "")])
         missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
         if missing and not locked: st.warning("자료가 없어 새로 산출해야 하는 항목: " + " / ".join(missing) + ". 초안에는 [확인 필요]로 들어가 있습니다. 집계 파일을 대화에 붙이면 지표 데이터에 넣고 다시 처리합니다.")
-        t1, t2, t3, t4 = st.tabs(["이번에 낼 수치", "대조·차이 사유", "회신 초안", "예상 질문"])
-        with t1:
-            if case["values"] is not None and len(case["values"]):
-                v = case["values"]; st.caption(f"{len(v)}건 · 지표 {', '.join(sorted(v['indicator'].unique())[:5])} · 기준일 {', '.join(sorted(v['base_date'].unique())[:6])}" + (" …" if v["base_date"].nunique() > 6 else ""))
-                st.dataframe(v[VAL_COLS + ["source_file"]].rename(columns=VAL_KO), width="stretch", height=min(60 + 35 * len(v), 360), hide_index=True)
-            else: st.info("가져온 수치가 없습니다.")
-        with t2:
-            m = case["compare"]
-            if m is None: st.info("같은 지표·기준일의 과거 제출값이 없어 대조할 짝이 없습니다(첫 제출).")
+        st.markdown("**① 이번에 낼 수치와 대조**")
+        if n_vals:
+            if m is not None:
+                t = v[["indicator", "center", "base_date", "value"]].merge(m[["indicator", "center", "base_date", "old_value", "diff", "판정", "단서"]], on=["indicator", "center", "base_date"], how="left")
+                t["판정"] = t["판정"].fillna("짝 없음"); t["단서"] = t["단서"].fillna("")
+                t["사유"] = [case["reasons"].get((r.indicator, r.center, r.base_date), "") or "" for r in t.itertuples()]
+                show = t.rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "value": "이번", "old_value": "지난번", "diff": "차이"})[["지표", "센터", "기준일", "이번", "지난번", "차이", "판정", "단서", "사유"]]
+                def _rs(r):
+                    if r["판정"] == "차이": return (["background-color: #FFF4D6"] if str(r["사유"]).strip() else ["background-color: #FDE8E8"]) * len(r)
+                    return [""] * len(r)
+                k1, k2, k3, k4 = st.columns(4); k1.metric("이번 수치", n_vals); k2.metric("짝이 맞는 행", int(m["판정"].isin(["차이", "일치", "값 누락"]).sum())); k3.metric("차이", n_diff); k4.metric("일치", int((m["판정"] == "일치").sum()))
+                st.dataframe(show.style.apply(_rs, axis=1), width="stretch", hide_index=True, height=min(60 + 35 * len(show), 380))
+                st.caption(f"지난번: 제출본 #{case.get('old_sid')} · 노랑: 지난번과 다름(사유 있음) · 빨강: 다른데 사유가 비어 있음 · 짝 없음: 지난번 제출에 없던 행")
             else:
-                diff = m[m["판정"] == "차이"]
-                k1, k2, k3 = st.columns(3); k1.metric("짝이 맞는 행", int(m["판정"].isin(["차이", "일치", "값 누락"]).sum())); k2.metric("차이", len(diff)); k3.metric("일치", int((m["판정"] == "일치").sum()))
-                st.dataframe(m[["indicator", "center", "base_date", "old_value", "new_value", "diff", "판정", "단서"]].rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "지난번", "new_value": "이번", "diff": "차이"}), width="stretch", hide_index=True, height=min(60 + 35 * len(m), 320))
-                if len(diff):
-                    st.markdown("**차이 사유** (제안이 채워져 있음 · 고치면 '초안 다시 쓰기'로 반영)")
-                    cands = db.phrase_candidates("사유") if not locked else []
-                    for _, r in diff.iterrows():
-                        k = (r["indicator"], r["center"], r["base_date"]); cur = case["reasons"].get(k, "") or ""
-                        a, b = st.columns([6, 1], vertical_alignment="bottom")
-                        new = a.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=cur, key=f"rv_reason_{k}_{rev}", disabled=locked)
-                        if new != cur: case["reasons"][k] = new; case["draft_stale"] = True; cur = new
-                        if not locked:
-                            with b.popover("문구", icon=":material/library_books:", width="stretch"):           # 자주 쓰는 사유 문구 서랍
-                                if cur.strip() and st.button("지금 문구를 서랍에 저장", key=f"rv_ph_save_{k}_{rev}", type="tertiary", icon=":material/bookmark_add:"): db.add_phrase("사유", cur, USER); st.toast("저장했습니다"); st.rerun()
-                                if not cands: st.caption("저장된 문구가 없습니다. 확정하면 쓴 사유가 자동으로 쌓이고, 설정 → 서식·사전에서 직접 넣을 수도 있습니다.")
-                                for j, t in enumerate(cands):
-                                    if st.button(t, key=f"rv_ph_{k}_{j}_{rev}", type="tertiary", width="stretch"): case["reasons"][k] = t; case["draft_stale"] = True; case.bump(); st.rerun()
-                    if not locked:
-                        c1, c2 = st.columns([1.6, 3], vertical_alignment="center")
-                        if c1.button("사유 반영해 초안 다시 쓰기", key=f"rv_redraft_{rev}", type="primary" if case.get("draft_stale") else "secondary", icon=":material/edit_note:"):
-                            run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
-                        if case.get("draft_stale"): c2.warning("사유가 바뀌었습니다. 초안을 다시 써야 회신 본문에 반영됩니다(확정 때는 사유 칸만 자동 반영).", icon=":material/sync_problem:")
-        with t3:
+                st.caption(f"{n_vals}건 · 지표 {', '.join(sorted(v['indicator'].unique())[:5])} · 기준일 {', '.join(sorted(v['base_date'].unique())[:6])}" + (" …" if v["base_date"].nunique() > 6 else "") + " · 같은 지표·기준일의 과거 제출값이 없어 대조할 짝이 없습니다(첫 제출).")
+                st.dataframe(v[VAL_COLS + ["source_file"]].rename(columns=VAL_KO), width="stretch", height=min(60 + 35 * len(v), 360), hide_index=True)
+        else: st.info("가져온 수치가 없습니다.")
+        if n_diff:
+            st.markdown("**② 차이 사유** (제안이 채워져 있음 · 고치면 '초안 다시 쓰기'로 반영)")
+            cands = db.phrase_candidates("사유") if not locked else []
+            for _, r in diff.iterrows():
+                k = (r["indicator"], r["center"], r["base_date"]); cur = case["reasons"].get(k, "") or ""
+                a, b = st.columns([6, 1], vertical_alignment="bottom")
+                new = a.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=cur, key=f"rv_reason_{k}_{rev}", disabled=locked)
+                if new != cur: case["reasons"][k] = new; case["draft_stale"] = True; cur = new
+                if not locked:
+                    with b.popover("문구", icon=":material/library_books:", width="stretch"):           # 자주 쓰는 사유 문구 서랍
+                        if cur.strip() and st.button("지금 문구를 서랍에 저장", key=f"rv_ph_save_{k}_{rev}", type="tertiary", icon=":material/bookmark_add:"): db.add_phrase("사유", cur, USER); st.toast("저장했습니다"); st.rerun()
+                        if not cands: st.caption("저장된 문구가 없습니다. 확정하면 쓴 사유가 자동으로 쌓이고, 설정 → 서식·사전에서 직접 넣을 수도 있습니다.")
+                        for j, t_ in enumerate(cands):
+                            if st.button(t_, key=f"rv_ph_{k}_{j}_{rev}", type="tertiary", width="stretch"): case["reasons"][k] = t_; case["draft_stale"] = True; case.bump(); st.rerun()
+            if not locked:
+                c1, c2 = st.columns([1.6, 3], vertical_alignment="center")
+                if c1.button("사유 반영해 초안 다시 쓰기", key=f"rv_redraft_{rev}", type="primary" if case.get("draft_stale") else "secondary", icon=":material/edit_note:"):
+                    run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
+                if case.get("draft_stale"): c2.warning("사유가 바뀌었습니다. 초안을 다시 써야 회신 본문에 반영됩니다(확정 때는 사유 칸만 자동 반영).", icon=":material/sync_problem:")
+        with st.expander("③ 회신 초안" + (" — 다시 쓰기 필요" if case.get("draft_stale") else ""), expanded=True):
             d = case["draft"] or {}
             st.caption(f"생성 방식: {case.get('draft_how', '')} · 고치면 'HWPX 다시 만들기'로 반영됩니다(확정할 때는 자동으로 다시 만듭니다).")
             def field(label, key, widget, **kw):
                 new = widget(label, d.get(key, "") or "", key=f"rv_{key}_{rev}", disabled=locked, **kw)
                 if new != (d.get(key, "") or ""): d[key] = new; case["hwpx_stale"] = True
-            field("제목", "제목", st.text_input); field("본문", "본문", st.text_area, height=260)
+            field("제목", "제목", st.text_input); field("본문", "본문", st.text_area, height=240)
             c1, c2 = st.columns(2)
-            with c1: field("차이 사유", "차이사유", st.text_area, height=120)
-            with c2: field("산출 근거", "산출근거", st.text_area, height=120)
+            with c1: field("차이 사유", "차이사유", st.text_area, height=110)
+            with c2: field("산출 근거", "산출근거", st.text_area, height=110)
             cov = case.get("coverage")
             if cov is not None and len(cov):
                 n_ok = int((cov["판정"] == "충족").sum())
@@ -470,7 +493,7 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                 with st.expander("항목별 판정"): st.dataframe(cov, width="stretch", hide_index=True)
             hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(str(d.get(k, "")), f"초안 {k}")]
             if hits: st.error(f"초안에 개인정보로 보이는 패턴 {len(hits)}건 — 승인 전 삭제·가명 처리"); st.dataframe(pd.DataFrame(hits), width="stretch", hide_index=True)
-        with t4:
+        with st.expander("④ 예상 질문" + (f" — {len(case['foresee'][0])}건" if case.get("foresee") else ""), expanded=bool(case.get("foresee"))):
             if st.button("예상 질문 보기", key=f"rv_foresee_{rev}"):
                 run_ai("예상 후속 질문 뽑는 중", lambda: agent.step_foresee(case), "보통 20~30초", "예측 중… (규칙 기반)"); st.rerun()
             if case.get("foresee"):
@@ -479,15 +502,13 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
         st.divider()
         if locked: _send_card(case, req); return
         checks = _approve_checks(case, req, case["draft"] or {})
-        n_vals = len(case["values"]) if case["values"] is not None else 0
         b1, b2, b3, b4 = st.columns([1.6, 1.5, 1.7, 1.6])
         with b1.popover("승인하고 확정", icon=":material/task_alt:", disabled=not n_vals, width="stretch", type="primary"):     # help 말풍선은 열린 팝오버를 가려 넣지 않는다
-            st.markdown("**확정 전 확인**"); st.caption("이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 기록 조회에서 제출본을 지웁니다.")
-            for tone, t in checks: {"bad": st.error, "warn": st.warning, "info": st.info}[tone](t)
+            st.markdown("**확정 전 확인**"); st.caption("이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 기록에서 제출본을 지웁니다.")
+            for tone, t_ in checks: {"bad": st.error, "warn": st.warning, "info": st.info}[tone](t_)
             if not checks: st.success("걸리는 것이 없습니다.")
-            n_reason = sum(1 for v in case["reasons"].values() if str(v or "").strip())
             st.caption(f"확정하면 이번 수치 {n_vals}건을 확정 제출본으로, 차이 사유 {n_reason}건을 기록으로, 초안을 승인 상태로 저장하고 한글 파일을 보관합니다.")
-            ok = st.checkbox("개인정보로 보이는 부분을 확인했고 그대로 확정합니다", key=f"rv_pii_ok_{rev}") if any(t == "bad" for t, _ in checks) else True
+            ok = st.checkbox("개인정보로 보이는 부분을 확인했고 그대로 확정합니다", key=f"rv_pii_ok_{rev}") if any(t_ == "bad" for t_, _ in checks) else True
             if st.button("확정", type="primary", key="rv_approve_go", icon=":material/task_alt:", disabled=not ok):
                 with st.spinner("확정하는 중…"): _approve_now(case, tpl)
                 st.toast("승인·확정했습니다"); st.rerun()
@@ -499,15 +520,16 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
             st.session_state["target_request"] = case["request_id"]; go("새 요구서 처리", 2)
 
 def _todo_strip():
-    """홈 상단 '오늘 할 일': 기한 3일 이내(진행 중) · 확정(미발송) · 검토 대기 · 지난달 기준 지표 데이터. 기록이 하나도 없으면 그리지 않는다."""
-    ov = db.request_overview(); review = len(db.list_drafts("review_requested")); today = dt.date.today()
+    """홈 상단 '오늘 할 일': 기한 3일 이내(접수·처리 중) · 확정(미발송) · 검토 대기 · 지난달 기준 지표 데이터. 기록이 하나도 없으면 그리지 않는다."""
+    ov = _q("request_overview"); review = len(_q("list_drafts", "review_requested")); today = dt.date.today()
     last_me = (today.replace(day=1) - dt.timedelta(days=1)).isoformat()
-    n_last = len({c["indicator"] for c in db.data_coverage() if c["base_date"] == last_me})
+    n_last = len({c["indicator"] for c in _q("data_coverage") if c["base_date"] == last_me})
     if not ov and not review and not n_last: return
-    dispatched = db.dispatched_request_ids(); soon = unsent = 0
+    soon = unsent = 0
     for r in ov:
-        if r["n_confirmed"] > 0: unsent += r["id"] not in dispatched
-        else:
+        stt = r.get("status") or "접수"
+        if stt == "확정": unsent += 1
+        elif stt in ("접수", "처리 중"):
             try: soon += 0 <= (dt.date.fromisoformat(str(r["due_date"])) - today).days <= 3
             except ValueError: pass
     c1, c2, c3, c4 = st.columns(4)
@@ -519,13 +541,19 @@ def _todo_strip():
     if b3.button("검토·승인 열기", key="todo_review", type="tertiary", icon=":material/task_alt:"): go("검토·승인")
     if b4.button("지표 데이터 넣기" if not n_last else "지표 데이터 보기", key="todo_data", type="tertiary", icon=":material/database:"): go("지표 데이터")
 
+def _requester_input(label: str, value: str, key: str) -> str:
+    """요청 주체 입력: 사전·기록의 이름을 고르거나 새로 입력(자동완성)."""
+    names = _q("requester_names"); opts = list(dict.fromkeys(([value] if value else []) + names))
+    if not opts: return (st.text_input(label, value or "", key=key) or "").strip()
+    return (st.selectbox(label, opts, index=0 if value else None, accept_new_options=True, key=key, placeholder="고르거나 새로 입력") or "").strip()
+
 def _head_form(case: agent.Case, tpl: bytes | None, hist: list):
     """칩 '요청 주체·기한 적기': 아는 칸만 적어 반영하면 머리 정보만 고치고 초안·한글 파일을 다시 만든다(모델 호출 없음)."""
     req = db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})
     with st.container(border=True):
         st.markdown("**요청 주체·접수일·기한** — 아는 것만 적고 반영을 누르세요. 항목과 원문은 그대로 둡니다.")
         c1, c2, c3, c4 = st.columns(4)
-        r_ = c1.text_input("요청 주체", (req or {}).get("requester") or "", key="chip_req", placeholder="예: ○○○ 의원실")
+        r_ = _requester_input("요청 주체", (req or {}).get("requester") or "", "chip_req")
         rd = c2.text_input("접수일", (req or {}).get("received_date") or "", key="chip_rd", placeholder="YYYY-MM-DD")
         dd = c3.text_input("제출 기한", (req or {}).get("due_date") or "", key="chip_dd", placeholder="YYYY-MM-DD")
         tt = c4.text_input("제목", (req or {}).get("title") or "", key="chip_tt")
@@ -555,8 +583,8 @@ def _chips(case: agent.Case, hist: list, tpl: bytes | None, job) -> None:
     elif case["request_text"]: opts.append(("요구하는 것들 전부 작성", ("chat", "이 요구서에서 요구하는 것들 작성해 줘")))
     else:
         opts.append(("지표 데이터에 뭐가 있나", ("chat", "지표 데이터에 어떤 지표가 어느 기간까지 들어 있어?")))
-        if db.list_requests(): opts.append(("최근 요구서 보기", ("go", "기록 조회")))
-        if db.list_ref_docs(): opts.append(("운영 시간 찾기", ("chat", "센터 운영 시간은 어떻게 되지?")))
+        if _q("list_requests"): opts.append(("최근 요구서 보기", ("go", "기록 조회")))
+        if _q("list_ref_docs"): opts.append(("운영 시간 찾기", ("chat", "센터 운영 시간은 어떻게 되지?")))
     if not opts: return
     key = f"chips_{case.get('rev', 0)}_{len(hist)}_{st.session_state.get('chips_n', 0)}"
     pick = st.pills("다음 행동", [l for l, _ in opts], key=key, label_visibility="collapsed")
@@ -661,10 +689,24 @@ def page_data():
     with c2:
         st.markdown("### 들어 있는 것")
         if not cov:
-            st.info("아직 없습니다. 왼쪽에서 집계 파일을 올려 저장하면 지표 × 기준일 표가 여기 나타납니다.")
+            st.info("아직 없습니다. 왼쪽에서 집계 파일을 올려 저장하면 지표 × 월 표가 여기 나타납니다.")
         else:
-            st.dataframe(pd.DataFrame(cov).rename(columns={"indicator": "지표", "base_date": "기준일", "n_centers": "건수(센터)", "loaded_at": "최근 적재", "source": "출처"}), width="stretch", hide_index=True, height=min(60 + 35 * len(cov), 420))
-            st.caption(f"지표 {len({c['indicator'] for c in cov})}개 · 기준일 {len({c['base_date'] for c in cov})}개 · 값 {db.data_count()}건")
+            last_me = (dt.date.today().replace(day=1) - dt.timedelta(days=1)).isoformat()
+            if not any(c["base_date"] == last_me for c in cov): st.warning(f"지난달({last_me[:7]}) 기준 자료가 아직 없습니다. 월 집계가 나오면 올려 두세요.", icon=":material/event_busy:")
+            mat = pd.DataFrame(_q("data_matrix")); mat["월"] = mat["base_date"].map(lambda d: d[:7] if hwpx_build._is_month_end(str(d)) else str(d))
+            piv = mat.pivot_table(index="indicator", columns="월", values="n", aggfunc="max").fillna(0).astype(int); piv = piv[sorted(piv.columns)]; piv.index.name = "지표"
+            mx = int(piv.values.max()) if piv.size else 1
+            def _heat(v):
+                if not v: return "background-color: #FDE8E8; color: #B42318"
+                return f"background-color: rgba(37,110,244,{0.12 + 0.55 * v / max(mx, 1):.2f})"
+            styled = piv.style.map(_heat) if hasattr(piv.style, "map") else piv.style.applymap(_heat)
+            st.dataframe(styled, width="stretch", height=min(60 + 35 * len(piv), 460))
+            st.caption(f"칸의 숫자는 센터 수(진할수록 많음, 빨강은 없음) · 지표 {len(piv)}개 · 기준일 {len({c['base_date'] for c in cov})}개 · 값 {db.data_count()}건")
+            if _q("center_count"):
+                ind_pick = st.selectbox("명부 대비 빠진 센터 보기", list(piv.index), key="miss_ind")
+                last_bd = max(c["base_date"] for c in cov if c["indicator"] == ind_pick)
+                miss = db.missing_centers(ind_pick, last_bd)
+                (st.caption if not miss else st.warning)(f"{ind_pick} · {last_bd} 기준: 명부의 센터 중 값이 없는 곳 {len(miss)}곳" + (" — " + ", ".join(miss[:15]) + (" …" if len(miss) > 15 else "") if miss else ""))
         with st.expander("적재 묶음 (지우기)"):
             for b in db.list_data_batches():
                 a, d = st.columns([5, 1])
@@ -734,7 +776,7 @@ def page_refdocs():
                     st.caption(f"「{h['doc']}」 {h['page']}쪽 · 점수 {h['score']}"); st.write(h["text"])
     with c2:
         st.markdown("### 등록된 문서")
-        docs = db.list_ref_docs()
+        docs = _q("list_ref_docs")
         if not docs: st.info("아직 없습니다. 지침·운영 매뉴얼 PDF를 올려 두세요. 문서 자체는 이 서버의 기록 DB에만 저장됩니다.")
         for d in docs:
             a, b = st.columns([5, 1])
@@ -767,7 +809,7 @@ def page_register():
         st.markdown("### 3. 확인하고 저장")
         st.caption(f"읽은 방식: {st.session_state['reg_how']} · 틀린 곳은 바로 고치면 됩니다.")
         c1, c2, c3, c4 = st.columns(4)
-        requester = c1.text_input("요청 주체", res.get("requester") or "")
+        with c1: requester = _requester_input("요청 주체", res.get("requester") or "", "reg_requester")
         received = c2.text_input("접수일", res.get("received_date") or "")
         due = c3.text_input("제출기한", res.get("due_date") or "")
         title = c4.text_input("제목", res.get("title") or "")
@@ -796,6 +838,9 @@ def page_process():
     step = st.session_state.setdefault("step", 1)
     done = 2 if st.session_state.get("last_submission") else (1 if st.session_state.get("new_registered") else 0)
     ui.page_title("새 요구서 처리", "", "업무")
+    c1, c2 = st.columns([6, 1.2], vertical_alignment="center")
+    c1.caption("홈 검수 화면의 '단계 화면에서 자세히 고치기'로 들어오는 세부 화면입니다. 보통은 홈 대화에서 한 번에 처리합니다.")
+    if c2.button("홈으로", key="proc_home", type="tertiary", icon=":material/home:"): go("홈")
     ui.stepper([n for _, n in STEPS], step, done)
     {1: step_read, 2: step_compare, 3: step_draft}[step]()
     st.divider()
@@ -1093,7 +1138,7 @@ def request_editor(r: dict):
     with st.container(border=True):
         st.markdown("**요구서 수정** — 원문은 그대로 두고 머리 정보와 항목만 바꿉니다.")
         c1, c2, c3, c4 = st.columns(4)
-        requester = c1.text_input("요청 주체", r["requester"] or "", key=f"ed_rq_{r['id']}")
+        with c1: requester = _requester_input("요청 주체", r["requester"] or "", f"ed_rq_{r['id']}")
         received = c2.text_input("접수일", r["received_date"] or "", key=f"ed_rc_{r['id']}")
         due = c3.text_input("제출기한", r["due_date"] or "", key=f"ed_du_{r['id']}")
         title = c4.text_input("제목", r["title"] or "", key=f"ed_ti_{r['id']}")
@@ -1101,16 +1146,28 @@ def request_editor(r: dict):
         its = st.data_editor(its, num_rows="dynamic", width="stretch", key=f"ed_items_{r['id']}",
                              column_config={"item_text": "항목 원문", "indicator": st.column_config.SelectboxColumn("지표명(정규화)", options=list(normalize.CANON), required=False),
                                             "base_date": "기준일", "period": "기간", "unit": "단위"})
+        s1, s2, s3 = st.columns([1, 1, 3])
+        cur_st = r.get("status") or "접수"
+        new_st = s1.selectbox("상태", db.REQUEST_STATUSES, index=db.REQUEST_STATUSES.index(cur_st) if cur_st in db.REQUEST_STATUSES else 0, key=f"ed_st_{r['id']}")
+        assignee = s2.text_input("담당자", r.get("assignee") or "", key=f"ed_as_{r['id']}")
+        memo = s3.text_input("메모(전화 내용·특이사항)", r.get("memo") or "", key=f"ed_me_{r['id']}")
         b1, b2, _ = st.columns([1, 1, 4])
         if b1.button("저장", key=f"ed_save_{r['id']}", type="primary"):
             db.update_request(r["id"], requester, received, due, title); n = db.replace_items(r["id"], its.to_dict("records"))
+            db.set_request_status(r["id"], new_st, assignee, memo)
             st.session_state.pop(f"editing_{r['id']}", None); st.toast(f"요구서 #{r['id']} 저장 — 항목 {n}건"); st.rerun()
         if b2.button("취소", key=f"ed_cancel_{r['id']}"):
             st.session_state.pop(f"editing_{r['id']}", None); st.rerun()
 
-def page_history():
-    ui.page_title("기록 조회", "요구서마다 항목 → 제출값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다. 잘못 넣은 것은 여기서 고치거나 지웁니다.", "기록")
-    reqs = db.list_requests()
+def page_records():
+    ui.page_title("기록", "요구서·제출값·사유·초안·승인을 찾아 고치거나, 말로 물어봅니다.", "기록")
+    view = st.radio("보기", ["찾기·고치기", "물어보기"], horizontal=True, label_visibility="collapsed", key="rec_view")
+    if view == "물어보기": _records_ask()
+    else: _records_find()
+
+def _records_find():
+    st.caption("요구서마다 항목 → 제출값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다. 잘못 넣은 것은 여기서 고치거나 지웁니다.")
+    reqs = _q("list_requests")
     kw = st.text_input("찾기 (요청 주체·제목·항목·본문)", placeholder="예: 등원율, 의원실, 2026-06-30")
     if kw.strip():
         ids = {r["id"] for r in db.search_requests(kw.strip(), limit=200)}
@@ -1120,7 +1177,7 @@ def page_history():
     inv = {v: k for k, v in VAL_KO.items()}
     for r in reqs:
         rid = r["id"]
-        with st.expander(f"#{rid} {r['received_date'] or '접수일 미기재'} · {r['requester'] or '요청 주체 미기재'} · {r['title'] or '(제목 없음)'} (기한 {r['due_date'] or '미기재'})"):
+        with st.expander(f"#{rid} {r['received_date'] or '접수일 미기재'} · {r['requester'] or '요청 주체 미기재'} · {r['title'] or '(제목 없음)'} (기한 {r['due_date'] or '미기재'}) · {r.get('status') or '접수'}" + (f" · {r['assignee']}" if r.get("assignee") else "")):
             h1, h2 = st.columns([5, 1])
             h1.caption(f"원문 {len(r['raw_text'] or '')}자 · 파일 {r['source_file'] or '-'} · 등록 {r['created_at'][:16] if r.get('created_at') else '-'}")
             if h2.button("수정", key=f"edit_btn_{rid}", type="tertiary", icon=":material/edit:"):
@@ -1155,39 +1212,53 @@ def page_history():
 
 # ================= 현황 =================
 def page_status():
-    ui.page_title("현황", "기한이 가까운 요구, 반복해서 들어오는 지표, 관리대장.", "기록")
-    ov = db.request_overview()
+    ui.page_title("현황", "요구 건의 상태 흐름(접수 → 처리 중 → 확정 → 발송 → 종결), 기한, 반복 지표, 관리대장.", "업무")
+    ov = _q("request_overview")
     if not ov: st.info("등록된 요구서가 없습니다."); return
-    df = pd.DataFrame(ov); today = pd.Timestamp(dt.date.today())
-    df["D-day"] = (pd.to_datetime(df["due_date"], errors="coerce") - today).dt.days
-    dispatched = db.dispatched_request_ids()                   # 확정 ≠ 발송: 발송 기록이 있어야 '발송 완료'
-    df["상태"] = df.apply(lambda r: ("발송 완료" if r["id"] in dispatched else "확정(미발송)") if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
-    df["D-day"] = df.apply(lambda r: "" if r["상태"] != "진행 중" or pd.isna(r["D-day"]) else int(r["D-day"]), axis=1)      # 끝난 건은 D-day를 비운다(-92 같은 숫자가 미제출처럼 보이지 않게)
-    show = df.rename(columns={"id": "번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_items": "항목 수", "n_confirmed": "확정 제출본", "last_submitted": "최근 제출일"})
-    soon = df["D-day"].map(lambda d: isinstance(d, int) and 0 <= d <= 3)
-    n_unsent = int((df["상태"] == "확정(미발송)").sum())
-    c1, c2, c3, c4, c5 = st.columns(5)
-    ui.kpi(c1, len(df), "요구서"); ui.kpi(c2, int((df["상태"] == "진행 중").sum()), "진행 중"); ui.kpi(c3, int(soon.sum()), "기한 3일 이내", "warn" if soon.sum() else ""); ui.kpi(c4, int((df["상태"] == "기한 경과").sum()), "기한 경과(미제출)", "bad" if (df["상태"] == "기한 경과").sum() else ""); ui.kpi(c5, n_unsent, "확정(미발송)", "warn" if n_unsent else "")
-    view = show[["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일"]].fillna({"요청 주체": "미기재", "접수일": "미기재", "제출기한": "미기재", "제목": "(제목 없음)"})
+    df = pd.DataFrame(ov); today = dt.date.today(); df["status"] = df["status"].fillna("접수")
+    def _dday(r):
+        if r["status"] not in ("접수", "처리 중"): return ""
+        try: return (dt.date.fromisoformat(str(r["due_date"])) - today).days
+        except (ValueError, TypeError): return ""
+    df["D-day"] = df.apply(_dday, axis=1)
+    overdue = df["D-day"].map(lambda d: isinstance(d, int) and d < 0); soon = df["D-day"].map(lambda d: isinstance(d, int) and 0 <= d <= 3)
+    n_prog = int(df["status"].isin(["접수", "처리 중"]).sum()); n_unsent = int((df["status"] == "확정").sum()); n_sent = int((df["status"] == "발송").sum())
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    ui.kpi(c1, len(df), "요구서"); ui.kpi(c2, n_prog, "접수·처리 중"); ui.kpi(c3, int(soon.sum()), "기한 3일 이내", "warn" if soon.sum() else ""); ui.kpi(c4, int(overdue.sum()), "기한 경과(미확정)", "bad" if overdue.sum() else "")
+    ui.kpi(c5, n_unsent, "확정(미발송)", "warn" if n_unsent else ""); ui.kpi(c6, n_sent, "발송", "ok" if n_sent else "")
+    picked = st.pills("상태", db.REQUEST_STATUSES, selection_mode="multi", default=[x for x in db.REQUEST_STATUSES if x != "종결"], key="status_filter") or db.REQUEST_STATUSES
+    sel = df[df["status"].isin(picked)]
+    show = sel.rename(columns={"id": "번호", "status": "상태", "assignee": "담당자", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_items": "항목 수", "n_confirmed": "확정 제출본", "last_submitted": "최근 제출일", "memo": "메모"})
+    view = show[["번호", "상태", "D-day", "담당자", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일", "메모"]].fillna({"담당자": "", "요청 주체": "미기재", "접수일": "미기재", "제출기한": "미기재", "제목": "(제목 없음)", "메모": "", "최근 제출일": ""})
     def _row_style(r):
-        if r["상태"] == "기한 경과": return ["background-color: #FDE8E8"] * len(r)
-        if r["상태"] == "진행 중" and isinstance(r["D-day"], int) and r["D-day"] <= 3: return ["background-color: #FFF4D6"] * len(r)
-        if r["상태"] == "확정(미발송)": return ["background-color: #E8F1FD"] * len(r)
+        if r["상태"] in ("접수", "처리 중") and isinstance(r["D-day"], int) and r["D-day"] < 0: return ["background-color: #FDE8E8"] * len(r)
+        if r["상태"] in ("접수", "처리 중") and isinstance(r["D-day"], int) and r["D-day"] <= 3: return ["background-color: #FFF4D6"] * len(r)
+        if r["상태"] == "확정": return ["background-color: #E8F1FD"] * len(r)
+        if r["상태"] in ("종결", "보류"): return ["color: #99A2AC"] * len(r)
         return [""] * len(r)
-    st.dataframe(view.style.apply(_row_style, axis=1), width="stretch", hide_index=True)
-    st.caption("노랑: 진행 중이며 기한 3일 이내 · 빨강: 기한 경과(미제출) · 파랑: 확정했지만 발송 기록이 없음(홈 검수 화면의 '발송 기록 저장'으로 남깁니다)")
-    rows = [{"요구번호": r["id"], "요청 주체": r["requester"], "접수일": r["received_date"], "제출기한": r["due_date"], "제목": r["title"], "항목": it["item_text"], "지표": it["indicator"], "기준일": it["base_date"], "단위": it["unit"], "확정 제출본 수": r["n_confirmed"], "최근 제출일": r["last_submitted"]} for r in ov for it in db.get_items(r["id"])]
+    st.dataframe(view.style.apply(_row_style, axis=1), width="stretch", hide_index=True, height=min(60 + 35 * len(view), 480))
+    st.caption("빨강: 기한이 지났는데 확정 전 · 노랑: 기한 3일 이내 · 파랑: 확정했지만 발송 기록 없음 · 회색: 종결·보류. 상태는 등록·확정·발송 때 자동으로 넘어가고, 종결·보류는 아래에서 직접 바꿉니다.")
+    with st.expander("건 관리 — 상태·담당자·메모 바꾸기"):
+        tgt = st.selectbox("요구서", ov, format_func=lambda r: f"#{r['id']} · {r.get('status') or '접수'} · {r['requester'] or '요청 주체 미기재'} — {r['title'] or '(제목 없음)'}", key="mg_req")
+        if tgt:
+            cur_st = tgt.get("status") or "접수"
+            a, b, c = st.columns([1, 1, 3])
+            new_st = a.selectbox("상태", db.REQUEST_STATUSES, index=db.REQUEST_STATUSES.index(cur_st) if cur_st in db.REQUEST_STATUSES else 0, key=f"mg_st_{tgt['id']}")
+            asg = b.text_input("담당자", tgt.get("assignee") or "", key=f"mg_as_{tgt['id']}", placeholder=USER)
+            memo = c.text_input("메모", tgt.get("memo") or "", key=f"mg_me_{tgt['id']}", placeholder="예: 10/8 보좌관 통화 — 센터별 표만 원함")
+            if st.button("저장", key=f"mg_save_{tgt['id']}", type="primary", icon=":material/save:"):
+                db.set_request_status(tgt["id"], new_st, asg, memo); st.toast(f"요구서 #{tgt['id']} 저장"); st.rerun()
+    rows = [{"요구번호": r["id"], "상태": r.get("status") or "접수", "담당자": r.get("assignee") or "", "요청 주체": r["requester"], "접수일": r["received_date"], "제출기한": r["due_date"], "제목": r["title"], "항목": it["item_text"], "지표": it["indicator"], "기준일": it["base_date"], "단위": it["unit"], "확정 제출본 수": r["n_confirmed"], "최근 제출일": r["last_submitted"], "메모": r.get("memo") or ""} for r in ov for it in db.get_items(r["id"])]
     lb = io.BytesIO(); pii.excel_safe(pd.DataFrame(rows)).to_excel(lb, index=False)
     st.download_button("관리대장 엑셀 내보내기", lb.getvalue(), file_name=f"요구자료_관리대장_{dt.date.today()}.xlsx")
-    by_req, by_ind = db.requester_stats()
+    by_req, by_ind = _q("requester_stats")
     c1, c2 = st.columns(2)
-    with c1: st.markdown("### 요청 주체별"); st.dataframe(pd.DataFrame(by_req).rename(columns={"requester": "요청 주체", "n_requests": "요구 건수", "n_items": "항목 수", "first_date": "최초", "last_date": "최근"}), width="stretch", hide_index=True)
+    with c1: st.markdown("### 요청 주체별"); st.dataframe(pd.DataFrame(by_req).rename(columns={"requester": "요청 주체", "n_requests": "요구 건수", "n_items": "항목 수", "first_date": "최초", "last_date": "최근"}), width="stretch", hide_index=True); st.caption("표기가 갈라져 보이면 설정 → 서식·사전의 요청 주체 사전에 별칭을 넣고 '기록에 표기 통일 적용'.")
     with c2: st.markdown("### 반복 요구 지표"); st.dataframe(pd.DataFrame(by_ind).rename(columns={"indicator": "지표", "n_times": "요구 횟수", "n_requesters": "요청 주체 수", "base_dates": "기준일들"}).fillna("-"), width="stretch", hide_index=True); st.caption("여러 번 요구된 지표는 미리 산출해 두면 좋습니다.")
 
 # ================= 기록에 묻기 =================
-def page_ask():
-    ui.page_title("기록에 묻기", "말로 물으면 기록을 찾아 근거(요구번호·제출일·기관)와 함께 답합니다. 평균·증감 같은 계산은 하지 않습니다."
-                  + ("" if HAS_API else " 지금은 AI 연결이 없어 키워드 검색으로 동작합니다."), "기록")
+def _records_ask():
+    st.caption("말로 물으면 기록을 찾아 근거(요구번호·제출일·기관)와 함께 답합니다. 평균·증감 같은 계산은 하지 않습니다." + ("" if HAS_API else " 지금은 AI 연결이 없어 키워드 검색으로 동작합니다."))
     examples = ["감사실에 등원율을 언제 어떤 값으로 냈지?", "2026-06-30 기준 등원율을 제출한 기관과 날짜를 전부 보여줘", "센터C 등원율이 달라진 사유로 뭐라고 적었나", "기한이 가장 가까운 요구서는?"]
     q = st.text_input("질문", placeholder=examples[0], key="qa_q")
     c1, c2 = st.columns([1, 4])
@@ -1291,12 +1362,32 @@ def page_settings():
             x, y = st.columns([6, 1], vertical_alignment="center"); x.caption(f"{ph['text']} · {ph['use_count']}회" + (f" · {str(ph['last_used'])[:10]}" if ph.get("last_used") else ""))
             if y.button("지우기", key=f"ph_del_{ph['id']}", type="tertiary", icon=":material/delete:"): db.delete_phrase(ph["id"]); st.rerun()
         st.divider()
+        st.markdown("**요청 주체 사전** — 표준 이름과 별칭을 두면 요구서를 읽을 때 같은 기관으로 통일되고, 입력칸에서 자동완성됩니다.")
+        q1, q2, q3, q4 = st.columns([2, 3, 1.2, 0.8], vertical_alignment="bottom")
+        rq_name = q1.text_input("표준 이름", key="rq_name", placeholder="예: ○○○ 의원실"); rq_al = q2.text_input("별칭(쉼표로 구분)", key="rq_al", placeholder="예: ○○○의원실(교육위원회), ○○○ 의원")
+        rq_kind = q3.selectbox("유형", ["의원실", "감사", "교육부", "언론", "기타"], key="rq_kind")
+        if q4.button("추가", key="rq_add", disabled=not rq_name.strip(), icon=":material/add:"): db.upsert_requester(rq_name, [a for a in re.split(r"[,，;/]", rq_al) if a.strip()], rq_kind); st.rerun()
+        for rq in db.list_requesters():
+            x, y = st.columns([6, 1], vertical_alignment="center"); x.caption(f"**{rq['name']}** · {rq.get('kind') or '-'}" + (f" · 별칭: {', '.join(rq['aliases'])}" if rq["aliases"] else ""))
+            if y.button("지우기", key=f"rq_del_{rq['id']}", type="tertiary", icon=":material/delete:"): db.delete_requester(rq["id"]); st.rerun()
+        if db.list_requesters() and st.button("기록에 표기 통일 적용", key="rq_apply", help="기존 요구서의 요청 주체를 사전 표기로 바꿉니다"): st.toast(f"요구서 {db.apply_requester_canon()}건의 표기를 통일했습니다"); st.rerun()
+        st.divider()
+        st.markdown("**지표 사전·데이터 카탈로그** — 요구서 표현을 같은 지표로 묶는 동의어와, 지표별 자료 출처·담당. 저장하면 바로 적용됩니다(코드 수정·재배포 불필요).")
+        drows = db.get_indicator_dict() or [{"canon": k, "aliases": [a for a in v if a != k], "source": suggest.CATALOG.get(k, ("", ""))[0], "owner": suggest.CATALOG.get(k, ("", ""))[1], "note": ""} for k, v in normalize.CANON.items()]
+        dfd = pd.DataFrame([{"지표": r["canon"], "동의어(쉼표로 구분)": ", ".join(r.get("aliases") or []), "자료 출처": r.get("source") or "", "담당": r.get("owner") or "", "비고": r.get("note") or ""} for r in drows])
+        ed = st.data_editor(dfd, num_rows="dynamic", width="stretch", key="dict_editor", height=min(60 + 35 * len(dfd), 420))
+        d1, d2, d3 = st.columns([1.2, 1.6, 4])
+        if d1.button("지표 사전 저장", key="dict_save", type="primary", icon=":material/save:"):
+            n = db.save_indicator_dict([{"canon": r["지표"], "aliases": r["동의어(쉼표로 구분)"], "source": r["자료 출처"], "owner": r["담당"], "note": r["비고"]} for r in ed.to_dict("records")], USER)
+            normalize.load_from_db(); st.toast(f"지표 {n}개를 저장했습니다"); st.rerun()
+        if d2.button("코드 기본값으로 되돌리기", key="dict_reset"): db.save_indicator_dict([]); normalize.reset_defaults(); st.rerun()
+        d3.caption(f"지금 적용 중: 지표 {len(normalize.CANON)}개" + (" (화면에서 편집한 사전)" if db.get_indicator_dict() else " (코드 기본값)") + ". 지표를 지우면 그 지표로 분류되던 항목은 '사전에 없음'이 됩니다.")
+        st.divider()
         st.markdown("**회신 문서(답변자료) 양식** — 대화 처리의 HWPX는 '○○ 의원실 답변자료 / 날짜 / 번호 항목 / 【확인 : 부서장 ☎ 내선】 / 본문 / 수치표 / ※ 산출 근거' 틀로 만들어집니다.")
         up_tpl2 = st.file_uploader("대신 쓸 자리표시자 서식(HWPX, {{수신}} {{본문}} {{row.center}} …)", type=["hwpx"], key="tpl_custom_up", help="올리면 답변자료 양식 대신 이 서식에 채웁니다. 비우면 기본 양식.")
         if up_tpl2: st.session_state["tpl_custom"] = up_tpl2.getvalue(); st.caption("자리표시자: " + ", ".join(hwpx_out.placeholders(up_tpl2.getvalue())))
         elif st.session_state.get("tpl_custom") and st.button("자리표시자 서식 쓰지 않기(기본 양식으로)", key="tpl_custom_clear"): st.session_state.pop("tpl_custom"); st.rerun()
         st.divider()
-        st.markdown("**지표 동의어 사전**: `normalize.py`의 CANON. 요구서의 표현이 달라도 같은 지표로 묶는 기준입니다. **데이터 카탈로그**: `suggest.py`의 CATALOG.")
         st.markdown("**추출 품질 점검**: 터미널에서 `python check_llm.py` → `storage/llm_check_날짜.md`.")
     with tab_demo:
         st.markdown("### 백업·복원")
@@ -1349,7 +1440,7 @@ def page_settings():
                 st.info("서식 원본이 상위 폴더에 없어 templates/의 기존 샘플을 그대로 씁니다.")
 
 PAGES = {"홈": page_chat, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data, "참고 문서": page_refdocs,
-         "기록 조회": page_history, "현황": page_status, "기록에 묻기": page_ask, "설정": page_settings}
+         "기록": page_records, "현황": page_status, "설정": page_settings}
 if not HAS_API and page != "설정" and not st.session_state.get("ai_banner_seen"):      # 큰 배너는 세션에서 한 번만, 이후는 사이드바 표시와 홈의 한 줄
     ui.ai_banner(lambda: go("설정")); st.session_state["ai_banner_seen"] = True
 PAGES[page]()

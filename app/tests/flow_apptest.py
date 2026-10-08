@@ -73,7 +73,7 @@ assert _db.get_request(tmp) is None and _db.get_request(1) is not None; print("�
 at = app("지표 데이터")
 ms_pick(at, "data_in_demo", "9월")
 button(at, "지표 데이터에 저장"); assert any("묶음 #1, 12건" in x.value for x in at.success), [x.value for x in at.success]
-assert any("등원율" in str(v) for v in at.dataframe[-1].value["지표"].tolist()) if len(at.dataframe) else True; print("지표 데이터 저장 OK")
+assert any("등원율" in " ".join(map(str, list(d.value.index) + list(d.value.columns))) for d in at.dataframe), "보유 히트맵(지표 × 월)에 등원율이 보여야 함"; print("지표 데이터 저장·히트맵 OK")
 
 # 새 요구서 처리 1단계: 시연 새 요구서 → 읽기 → 등록(2단계로)
 at = app("새 요구서 처리", 1)
@@ -142,7 +142,7 @@ assert len(_db.list_phrases("사유")) >= 1, "확정 때 쓴 사유가 문구 �
 _db.add_dispatch(*at.session_state["case"]["approved"], "2026-10-08", "○○○ 의원실", "메일", "담당자", "")      # 발송 기록 → 현황 '발송 완료'
 nb = next(b for b in at.button if b.key and str(b.key).startswith("rv_new_")); nb.click().run(); assert not at.exception, at.exception
 assert not at.session_state["case"]["draft"] and at.session_state.get("chat_carry") and any("새 요구 시작" in m.value for m in at.markdown); print("대화 홈 → 검수 → 확정 → 보내기 → 새 요구 시작 OK")
-at = app("현황"); assert "발송 완료" in str(at.dataframe[0].value["상태"].tolist()), at.dataframe[0].value["상태"].tolist(); print("현황 — 발송 상태 OK")
+at = app("현황"); assert "발송" in at.dataframe[0].value["상태"].tolist(), at.dataframe[0].value["상태"].tolist(); print("현황 — 발송 상태 OK")
 # 대화 홈 — 요구서 없이 집계 파일 + 말로 받은 요구(규칙 경로): 파일은 지표 데이터로, 문장은 요구 항목으로 → 검수 패널
 import io as _io, calendar as _cal, pandas as _pd
 _months = [f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 10)]]
