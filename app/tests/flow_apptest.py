@@ -21,6 +21,7 @@ def button(at, text):
     b[0].click().run(); assert not at.exception, at.exception
 
 def sb(at, key): return next(s for s in at.selectbox if s.key == key)
+def st_text(at): return "\n".join([m.value for m in at.markdown] + [c.value for c in at.caption] + [x.value for x in at.success] + [x.value for x in at.info] + [x.value for x in at.warning])
 def ms_pick(at, key, *texts):
     """multiselect에서 글자가 포함된 옵션들을 고른다"""
     m = next(m for m in at.multiselect if m.key == key)
@@ -125,9 +126,14 @@ at.session_state["chat_pending"] = ("이 의뢰서에서 요구하는 것들 작
 at.run(); assert not at.exception, at.exception
 reply = [m.value for m in at.markdown if "회신 초안을 썼습니다" in m.value]
 assert reply and "HWPX" in reply[0], [m.value[:80] for m in at.markdown][-6:]
-assert any(b.label == "승인하고 확정" for b in at.button), [b.label for b in at.button][:20]
 case = at.session_state["case"]; assert case["values"] is not None and case["draft"] and case["hwpx"]
-button(at, "승인하고 확정"); assert at.session_state["case"].get("approved"); print("대화 홈 → 검수 → 승인 OK")
+assert any(b.key == "rv_approve_go" for b in at.button), [b.key for b in at.button][:30]                     # '승인하고 확정' 팝오버 안의 확인 목록 + 확정 버튼
+next(b for b in at.button if b.key == "rv_approve_go").click().run(); assert not at.exception, at.exception
+assert at.session_state["case"].get("approved") and st_text(at).count("발송 기록") >= 1 and at.session_state["chat_msgs"] == [], "확정 뒤 보내기 카드·모델 기록 비움"
+_db.add_dispatch(*at.session_state["case"]["approved"], "2026-10-08", "○○○ 의원실", "메일", "담당자", "")      # 발송 기록 → 현황 '발송 완료'
+nb = next(b for b in at.button if b.key and str(b.key).startswith("rv_new_")); nb.click().run(); assert not at.exception, at.exception
+assert not at.session_state["case"]["draft"] and at.session_state.get("chat_carry") and any("새 요구 시작" in m.value for m in at.markdown); print("대화 홈 → 검수 → 확정 → 보내기 → 새 요구 시작 OK")
+at = app("현황"); assert "발송 완료" in str(at.dataframe[0].value["상태"].tolist()), at.dataframe[0].value["상태"].tolist(); print("현황 — 발송 상태 OK")
 # 대화 홈 — 의뢰서 없이 집계 파일 + 말로 받은 요구(규칙 경로): 파일은 지표 데이터로, 문장은 요구 항목으로 → 검수 패널
 import io as _io, calendar as _cal, pandas as _pd
 _months = [f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 10)]]

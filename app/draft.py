@@ -46,7 +46,7 @@ def provenance_by_indicator(values: pd.DataFrame) -> dict:
     if values is None or not len(values): return out
     for ind, g in values.groupby("indicator"):
         def vals(col):
-            return sorted({str(x) for x in g[col].dropna().tolist() if str(x).strip() and str(x) != "None"}) if col in g.columns else []
+            return sorted({str(x).strip() for x in g[col].dropna().tolist() if str(x).strip().lower() not in ("", "none", "nan", "nat")}) if col in g.columns else []
         d = {}
         if vals("definition"): d["정의"] = " / ".join(vals("definition")[:2]) + (" 외" if len(vals("definition")) > 2 else "")
         cp = vals("calc_period")
@@ -55,6 +55,15 @@ def provenance_by_indicator(values: pd.DataFrame) -> dict:
         if vals("source_version"): d["원자료 버전"] = ", ".join(vals("source_version")[:2])
         out[str(ind)] = d
     return out
+
+def mail_text(req: dict, d: dict, hwpx_name: str | None, user: str) -> dict:
+    """확정 뒤 담당자가 메일 프로그램에 붙여 쓰는 문안(코드 생성, 수치 없음). {"subject", "body"}"""
+    title = d.get("제목") or req.get("title") or "요구자료"
+    who = req.get("requester") or "[확인 필요: 요청 주체]"
+    body = (f"{who} 담당자님께\n\n요청하신 「{title}」 관련 자료를 붙임과 같이 보내드립니다.\n"
+            f"수치의 기준일·정의·산출 근거는 붙임 문서의 각 항목 아래에 적었습니다. 확인 후 추가로 필요한 자료가 있으면 알려 주시기 바랍니다.\n\n"
+            f"붙임: {hwpx_name or '회신 자료'} 1부.\n\nEBS 지역교육협력부 {user} 드림")
+    return {"subject": f"[회신] {title}", "body": body}
 
 def reasons_text(reasons: dict) -> str:
     return "\n".join(f"- {k[1]} {k[0]}({k[2]}): {v}" for k, v in (reasons or {}).items() if v and str(v).strip()) or "- 과거 제출값과 차이 없음"

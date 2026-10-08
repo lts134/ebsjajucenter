@@ -13,6 +13,7 @@ import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_buil
 
 VAL_COLS = ["indicator", "center", "base_date", "value", "definition", "calc_period", "extract_date", "source_version"]
 SRC_COLS = ["source_file", "source_sheet", "source_row"]
+HISTORY_MAX_BLOCKS = 30      # 모델 대화 기록이 이보다 길면 다음 턴은 요약 한 줄로 새로 시작한다(도구 턴마다 2블록씩 늘어 30이면 도구 호출 12~15회분). 중간을 자르면 모델의 이어지는 사고 블록이 깨지므로 통째로 접는다
 
 class Case(dict):
     """한 건의 작업 상태. dict라 세션에 그대로 들어간다."""
@@ -247,7 +248,7 @@ def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = 
         out, kind = hwpx_build.build_reply(req, items, values, d, dict(case["reasons"]), case["compare"], dept_head=dept_head or case.get("dept_head", ""), phone=phone or case.get("phone", "")), "답변자료 양식"
         rows = values
     name = safe_filename(f"답변자료_{req.get('requester') or '요구'}_{dt.date.today()}" + (f"_요구{case['request_id']}" if case["request_id"] else "") + ".hwpx")
-    case["hwpx"], case["hwpx_name"] = out, name; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB, {kind})")
+    case["hwpx"], case["hwpx_name"], case["hwpx_stale"] = out, name, False; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB, {kind})")
     return {"file_name": name, "bytes": len(out), "rows": len(rows), "kind": kind}
 
 def safe_filename(name: str) -> str:
@@ -383,9 +384,17 @@ def status_line(case: Case) -> str:
     parts += [coverage_line(), f"참고 문서 {len(db.list_ref_docs())}건", f"센터 명부 {db.center_count()}개소"]
     return "[작업 상태] " + " · ".join(parts)
 
-def chat_turn(case: Case, messages: list[dict], user_text: str, template_bytes: bytes | None, on_tool=None, notes: list[str] | None = None) -> dict:
-    """Claude 경로 한 턴. messages는 이전 대화(도구 호출 포함). notes는 이번 턴 첨부 파일 처리 결과(모델도 알아야 한다). 반환: run_tools_conv 결과(text·trace·messages)."""
-    ctx = status_line(case) + ("".join(f"\n[첨부 처리] {n}" for n in notes) if notes else "")
+def carry_note(case: Case, hist: list[dict] | None = None, extra: str | None = None) -> str:
+    """대화 기록을 통째로 접을 때 다음 턴에 넘기는 한 줄: 접은 이유(extra)·마지막 답 요약·작업 기록 꼬리. 작업 상태 자체는 상태줄이 매 턴 주므로 되풀이하지 않는다."""
+    parts = [extra] if extra else []
+    last = next((m.get("text") or "" for m in reversed(hist or []) if m.get("role") == "assistant"), "")
+    if last: parts.append("마지막 답: " + re.sub(r"\s+", " ", last)[:300])
+    if case["log"]: parts.append("작업 기록: " + " / ".join(case["log"][-5:]))
+    return " · ".join(parts) or "이전 대화 기록은 접었습니다."
+
+def chat_turn(case: Case, messages: list[dict], user_text: str, template_bytes: bytes | None, on_tool=None, notes: list[str] | None = None, carry: str | None = None) -> dict:
+    """Claude 경로 한 턴. messages는 이전 대화(도구 호출 포함). notes는 이번 턴 첨부 파일 처리 결과(모델도 알아야 한다). carry는 접은 이전 대화의 요약 한 줄. 반환: run_tools_conv 결과(text·trace·messages)."""
+    ctx = status_line(case) + (f"\n[이전 대화 요약] {carry}" if carry else "") + ("".join(f"\n[첨부 처리] {n}" for n in notes) if notes else "")
     msgs = list(messages) + [{"role": "user", "content": f"{ctx}\n\n{user_text}"}]
     return llm.run_tools_conv(msgs, SYSTEM, TOOLS, handlers(case, template_bytes), max_turns=12, max_tokens=12000, purpose="대화 처리", on_tool=on_tool)
 

@@ -70,7 +70,7 @@ def normalize_llm(items: list[dict]) -> list[dict]:
     if not todo or not llm.available(): return items
     try:
         prompt = ("다음 요구 항목을 지표명으로 분류하세요. 지표 목록: %s.\n"
-                  "규칙: 목록에 없는 지표는 null. 목록의 지표를 설명·정의·사유 형태로 묻는 항목도 그 지표로 분류. 새 지표명을 만들지 말 것.\n"
+                  "규칙: 목록의 지표를 설명·정의·산출 방식·차이 사유 형태로 묻는 항목도 그 지표로 분류. 두 지표가 섞인 문장은 앞에 나온 지표.\n"
                   "JSON만 출력: {\"items\": [{\"item_text\": ..., \"indicator\": ...}]}\n%s"
                   % (", ".join(CANON), "\n".join(f"- {it['item_text']}" for it in todo)))
         schema = {"type": "object", "additionalProperties": False, "required": ["items"],

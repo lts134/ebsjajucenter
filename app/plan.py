@@ -10,9 +10,11 @@ import db
 
 MONTHLY = re.compile(r"월\s*별|매\s*월|월\s*단위|월간|월\s*현황")
 YEARLY = re.compile(r"연\s*도\s*별|년\s*도\s*별|연\s*별|매\s*년|연간")
-QUARTERLY = re.compile(r"분기\s*별|분기")
+QUARTERLY = re.compile(r"분기\s*별|매\s*분기|분기\s*단위|분기\s*현황")                    # '2분기'(특정 분기)는 기간으로 따로 읽는다
 RECENT = re.compile(r"최근\s*(\d+)\s*(년|개년|개월|월)")
-RANGE = re.compile(r"(20\d{2})(?:\s*[.\-/년]\s*(\d{1,2})\s*월?)?\s*[~\-–∼]\s*(20\d{2})(?:\s*[.\-/년]\s*(\d{1,2})\s*월?)?")
+RANGE = re.compile(r"(20\d{2})(?:\s*[.\-/년]\s*(\d{1,2})\s*(?:월|\.)?)?\s*[~\-–∼]\s*(20\d{2})(?:\s*[.\-/년]\s*(\d{1,2})\s*(?:월|\.)?)?")   # 2025.12 ~ 2026.8 · 2025. 12. ~ 2026. 8. · 2025년 12월 ~ 2026년 8월
+HALF = re.compile(r"(20\d{2})\s*년?\s*(상|하)\s*반기")                                           # 2026년 상반기
+QUARTER_N = re.compile(r"(20\d{2})\s*년?\s*([1-4])\s*/?\s*분기")                               # 2026년 2분기
 MONTH_RANGE = re.compile(r"(20\d{2})\s*년?\s*(\d{1,2})\s*월?\s*[~\-–∼]\s*(\d{1,2})\s*월")   # 2026년 1~3월
 YEAR_ONLY = re.compile(r"(?<!\d)(20\d{2})\s*년(?!\s*[~\-–∼])")
 TWO_DIGIT_YEAR = re.compile(r"(?<![\d.])'?(\d{2})\s*년")                                   # 25년 → 2025년 ('26년 포함)
@@ -39,6 +41,14 @@ def _window(text: str, anchor: str | None) -> tuple[str | None, str | None, str]
     if m:
         y, m1, m2 = int(m.group(1)), int(m.group(2)), int(m.group(3))
         return f"{y:04d}-{m1:02d}-01", _month_end(y, m2), f"기간 {m.group(0).strip()}"
+    m = HALF.search(text)
+    if m:
+        y = int(m.group(1)); lo, hi = (1, 6) if m.group(2) == "상" else (7, 12)
+        return f"{y:04d}-{lo:02d}-01", _month_end(y, hi), f"기간 {y}년 {m.group(2)}반기"
+    m = QUARTER_N.search(text)
+    if m:
+        y, q = int(m.group(1)), int(m.group(2))
+        return f"{y:04d}-{3 * q - 2:02d}-01", _month_end(y, 3 * q), f"기간 {y}년 {q}분기"
     m = RECENT.search(text)
     if m:
         n, unit = int(m.group(1)), m.group(2)

@@ -17,7 +17,7 @@ import datetime as dt, re
 import pandas as pd
 from hwpx.document import HwpxDocument
 
-ITEM_RE = re.compile(r"^\s*(\d+)\s*[.)]\s*(.*)$")
+ITEM_RE = re.compile(r"^\s*(\d{1,2})\s*[.)](?=\s|[가-힣\[【(])\s*(.*)$")       # '1. …' '2) …' '1.등원율'. '2025. 12. 31. 기준…' '6.30 기준'(날짜)은 번호가 아니다
 DROP_RE = re.compile(r"^\s*(붙임|첨부)\s*[:：]?\s*.*|^\s*끝\.?\s*$")
 BIG_TABLE_ROWS = 20     # 이보다 긴 표는 새 쪽에서 시작(한글이 표를 통째로 다음 쪽에 보내 앞 쪽이 비는 것을 피함)
 
@@ -47,17 +47,37 @@ def _index_of(doc, p) -> int:
         if q is p or getattr(q, "element", None) is getattr(p, "element", object()): return i
     raise ValueError("문단을 찾지 못했습니다.")
 
-def _fmt(v, as_int: bool | None = None) -> str:
-    """값 표기: 표 전체가 정수면 정수로(학생 수 188), 소수가 섞여 있으면 소수 1자리 유지(등원율 61.0). 계산은 하지 않는다."""
+def _decimals(series) -> int:
+    """표 전체에서 가장 긴 소수 자릿수(최대 3): 받은 값을 반올림해 바꾸지 않고, 한 표 안에서는 자릿수를 맞춘다(188 / 61.0 / 61.25)."""
+    n = 0
+    for x in (series.tolist() if hasattr(series, "tolist") else list(series)):
+        if isinstance(x, (int, float)) and not isinstance(x, bool) and not (isinstance(x, float) and pd.isna(x)):
+            s = f"{float(x):.6f}".rstrip("0"); n = max(n, len(s.split(".")[1]) if "." in s else 0)
+    return min(n, 3)
+
+def _fmt(v, dec: int | None = None) -> str:
+    """값 표기: dec 자릿수(없으면 그 값에 필요한 만큼). 계산은 하지 않는다."""
     if v is None or (isinstance(v, float) and pd.isna(v)): return "-"
-    if isinstance(v, (int, float)):
-        if as_int is None: as_int = float(v) == int(v)
-        return f"{int(v):,}" if as_int and float(v) == int(v) else f"{v:,.1f}"
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if dec is None: dec = _decimals([v])
+        return f"{v:,.{dec}f}"
     return str(v)
 
-def _all_int(series) -> bool:
-    vs = [x for x in series.tolist() if x is not None and not (isinstance(x, float) and pd.isna(x))]
-    return all(isinstance(x, (int, float)) and float(x) == int(x) for x in vs) if vs else True
+def _is_month_end(d: str) -> bool:
+    try:
+        import calendar
+        return int(d[8:10]) == calendar.monthrange(int(d[:4]), int(d[5:7]))[1]
+    except (ValueError, TypeError): return False
+
+def item_groups(items: list[dict]) -> list[tuple[str, list[dict]]]:
+    """같은 원문의 항목(지표·기준일 분리로 여러 개)을 한 번호로 묶는다 — 초안의 번호 매김(draft.unique_texts)과 같은 순서라 본문 번호와 표가 어긋나지 않는다."""
+    out: list[tuple[str, list[dict]]] = []
+    for it in items:
+        t = it.get("item_text") or ""
+        g = next((g for g in out if g[0] == t), None)
+        if g: g[1].append(it)
+        else: out.append((t, [it]))
+    return out
 
 def _short_date(d: str) -> str:
     """표 머리글용 짧은 날짜: 월말이면 '25.12 (연.월), 아니면 '26.9.15. 열이 좁아도 한 줄에 들어가게."""
@@ -70,11 +90,11 @@ def _short_date(d: str) -> str:
 def _table_for(df: pd.DataFrame) -> tuple[list[str], list[list[str]]]:
     """한 지표의 값 → (머리글, 행들). 기준일이 둘 이상이면 센터 × 기준일로 펼친다(머리글은 짧은 날짜)."""
     dates = sorted(df["base_date"].dropna().unique().tolist())
-    centers = list(dict.fromkeys(df["center"].tolist())); as_int = _all_int(df["value"])
+    centers = list(dict.fromkeys(df["center"].tolist())); dec = _decimals(df["value"])
     if len(dates) <= 1:
-        return ["구분", f"값({dates[0]} 기준)" if dates else "값"], [[c, _fmt(df[df["center"] == c]["value"].iloc[0], as_int)] for c in centers]
+        return ["구분", f"값({dates[0]} 기준)" if dates else "값"], [[c, _fmt(df[df["center"] == c]["value"].iloc[0], dec)] for c in centers]
     piv = {(r["center"], r["base_date"]): r["value"] for _, r in df.iterrows()}
-    return ["구분"] + [_short_date(d) for d in dates], [[c] + [_fmt(piv.get((c, d)), as_int) for d in dates] for c in centers]
+    return ["구분"] + [_short_date(d) for d in dates], [[c] + [_fmt(piv.get((c, d)), dec) for d in dates] for c in centers]
 
 # ---- 표 치수(HWPUNIT = 1/7200인치, 1pt = 100) ----
 TEXT_W = 42520          # A4 본문 폭(210mm - 좌우 30mm씩)
@@ -167,22 +187,27 @@ def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft
     fmt(first, align="CENTER", after=6)
     para(f"{today.year}. {today.month}.", body10, align="RIGHT", after=10)
     if draft.get("제목"): para(draft["제목"], bold12, after=6)
-    pre, by = split_body(draft.get("본문", ""), len(items), [it["item_text"] for it in items])
+    groups = item_groups(items)
+    pre, by = split_body(draft.get("본문", ""), len(groups), [t for t, _ in groups])
     for line in pre: para(line, body10, after=2)
     confirm = f"【확인 : {org}장 {dept_head or '[확인 필요]'} ☎ {phone or '[확인 필요]'}】"
     vals = values if values is not None else pd.DataFrame(columns=["indicator", "center", "base_date", "value"])
     reasons = reasons or {}
-    for i, it in enumerate(items, 1):
-        para(f"{i}. {it['item_text']}", bold12, before=10, after=2)
+    for i, (text, its) in enumerate(groups, 1):
+        para(f"{i}. {text}", bold12, before=10, after=2)
         para(confirm, small9, align="RIGHT", after=4)
         for line in by.get(i, []): para(line, body10, align="LEFT", indent=3, after=2)      # 양쪽 정렬은 긴 낱말에서 글자 사이가 벌어져 왼쪽 정렬
-        ind = it.get("indicator")
-        sub = vals[vals["indicator"] == ind] if ind else vals.iloc[0:0]
-        if ind and it.get("base_date") and len(sub) and it["base_date"] in set(sub["base_date"]): sub = sub[sub["base_date"] == it["base_date"]]
-        if len(sub):
-            hdr, rows = _table_for(sub)
+        shown = 0
+        for ind in list(dict.fromkeys(it.get("indicator") for it in its if it.get("indicator"))):      # 한 원문에 지표가 여럿이면 지표마다 표 하나
+            bds = [it.get("base_date") for it in its if it.get("indicator") == ind]
+            sub = vals[vals["indicator"] == ind]
+            if len(sub) and all(bds) and set(bds) & set(sub["base_date"]): sub = sub[sub["base_date"].isin(bds)]   # 요구 기준일이 있고 그 값이 있으면 그 기준일만
+            if not len(sub): continue
+            shown += 1
+            hdr, rows = _table_for(sub); dec = _decimals(sub["value"])
             unit = _unit_for(ind); dates = sorted(sub["base_date"].dropna().unique().tolist())
-            cap = para(f"□ {ind}" + (f" (단위: {unit})" if unit else "") + (f" — 기준일 {dates[0]} ~ {dates[-1]}, 각 월 말일" if len(dates) > 1 else ""), bold10, before=4, after=2)
+            tail = (f" — 기준일 {dates[0]} ~ {dates[-1]}" + (", 각 월 말일" if all(_is_month_end(d) for d in dates) else f" ({len(dates)}개 기준일)")) if len(dates) > 1 else ""
+            cap = para(f"□ {ind}" + (f" (단위: {unit})" if unit else "") + tail, bold10, before=4, after=2)
             if len(rows) > BIG_TABLE_ROWS: doc.styles.apply_paragraph_format(paragraphs=[cap], page_break_before=True)   # 긴 표는 새 쪽에서(별지처럼)
             pt = _fit_pt(hdr, rows); ws = _col_widths(hdr, rows, pt)
             per_page = max(1, 60000 // _line_h(pt) - 1)                            # 한 쪽에 들어가는 자료 행 수(본문 높이 약 60000 HWPUNIT ≈ 212mm 기준)
@@ -196,11 +221,11 @@ def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft
             if compare_df is not None and len(compare_df):
                 d_rows = compare_df[(compare_df["indicator"] == ind) & (compare_df["판정"] == "차이")]
                 if len(d_rows):
-                    lines = [f"{r['center']} {_fmt(r['old_value'], False)}→{_fmt(r['new_value'], False)}" + (f"({reasons.get((r['indicator'], r['center'], r['base_date']))})" if reasons.get((r["indicator"], r["center"], r["base_date"])) else "") for _, r in d_rows.iterrows()]
+                    lines = [f"{r['center']} {_fmt(r['old_value'], dec)}→{_fmt(r['new_value'], dec)}" + (f"({reasons.get((r['indicator'], r['center'], r['base_date']))})" if reasons.get((r["indicator"], r["center"], r["base_date"])) else "") for _, r in d_rows.iterrows()]
                     para("※ 지난 제출값과 차이: " + ", ".join(lines), note9, after=2)
             elif diffs:
                 para("※ 차이 사유: " + ", ".join(f"{k[1]} {v}" for k, v in diffs), note9, after=2)
-        else:
+        if not shown:
             para("[확인 필요] 보유 자료 없음 — 별도 산출 필요", note9, indent=3, after=2)
     if draft.get("산출근거"):
         para("붙임. 산출 근거", bold10, before=10, after=2)

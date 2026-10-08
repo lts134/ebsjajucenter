@@ -64,6 +64,14 @@ def _date(s: str) -> str | None:
     m = re.search(r"(\d{4})\s*[.\-/]\s*(\d{1,2})\s*[.\-/]\s*(\d{1,2})", str(s or ""))
     return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else None
 
+def _num(x):
+    """숫자로 읽을 수 있으면 float, 아니면 None('-'·''·'N/A'·'1,234'·'61.3%'). 계산하지 않는다."""
+    if x is None or isinstance(x, bool): return None
+    if isinstance(x, (int, float)): return None if x != x else float(x)
+    s = str(x).strip().replace(",", "").rstrip("%").strip()
+    try: return float(s)
+    except ValueError: return None
+
 def _norm(name: str) -> str: return re.sub(r"[\s·!()（）\-]", "", str(name or "")).lower().replace("ebs", "")
 
 def name_map(data: dict) -> dict[str, str]:
@@ -89,8 +97,8 @@ def _rows_monthly(block: dict, cols: list[str | None], nm: dict, defs: dict[str,
             if vals is None: continue
             bd = month_end(label)
             for j, ind in enumerate(cols):
-                if ind is None or j >= len(vals) or vals[j] is None: continue
-                rows.append({"indicator": ind, "center": center, "base_date": bd, "value": float(vals[j]), "definition": defs.get(ind) or defs.get("*"),
+                if ind is None or j >= len(vals) or (num := _num(vals[j])) is None: continue
+                rows.append({"indicator": ind, "center": center, "base_date": bd, "value": num, "definition": defs.get(ind) or defs.get("*"),
                              "calc_period": str(label), "extract_date": asof, "source_version": src, "source_file": "통합 대시보드", "source_sheet": ind, "source_row": None})
     return rows
 
@@ -115,9 +123,10 @@ def indicator_rows(data: dict, include_partial: bool = False) -> tuple[list[dict
             for i, label in enumerate(months):
                 vals = (c.get("m") or [])[i] if i < len(c.get("m") or []) else None
                 if not vals: continue
-                bd = month_end(label); per = [v for v in vals[:len(kinds)] if v is not None]
-                recs = [("진단검사 건수", float(sum(per)), base["진단검사 건수"])] + ([("진단검사 학생 수", float(vals[len(kinds)]), base["진단검사 학생 수"])] if len(vals) > len(kinds) and vals[len(kinds)] is not None else [])
-                recs += [(f"진단검사 건수({k.get('k')} {k.get('label')})", float(vals[j]), "해당 검사 실시 건수") for j, k in enumerate(kinds) if j < len(vals) and vals[j] is not None]
+                bd = month_end(label); nums = [_num(v) for v in vals[:len(kinds)]]; per = [v for v in nums if v is not None]
+                stu = _num(vals[len(kinds)]) if len(vals) > len(kinds) else None
+                recs = ([("진단검사 건수", float(sum(per)), base["진단검사 건수"])] if per else []) + ([("진단검사 학생 수", stu, base["진단검사 학생 수"])] if stu is not None else [])
+                recs += [(f"진단검사 건수({k.get('k')} {k.get('label')})", nums[j], "해당 검사 실시 건수") for j, k in enumerate(kinds) if j < len(nums) and nums[j] is not None]
                 for ind, v, d in recs:
                     rows.append({"indicator": ind, "center": center, "base_date": bd, "value": v, "definition": d, "calc_period": str(label), "extract_date": asof, "source_version": src, "source_file": "통합 대시보드", "source_sheet": ind, "source_row": None}); cnt += 1
         notes.append(f"진단검사: {len(D.get('centers') or [])}개소 × {len(months)}개월 → {cnt}건")
@@ -138,8 +147,8 @@ def indicator_rows(data: dict, include_partial: bool = False) -> tuple[list[dict
             for c in U.get("centers") or []:
                 center = canonical(c.get("name"), nm)
                 for k, ind in USAGE_COLS.items():
-                    if c.get(k) is None: continue
-                    rows.append({"indicator": ind, "center": center, "base_date": bd, "value": float(c[k]), "definition": f"이용현황 집계({U.get('asof')}) · {ind}" + (" — 누계" if k in ("reg", "hours", "consult") else ""),
+                    if (num := _num(c.get(k))) is None: continue
+                    rows.append({"indicator": ind, "center": center, "base_date": bd, "value": num, "definition": f"이용현황 집계({U.get('asof')}) · {ind}" + (" — 누계" if k in ("reg", "hours", "consult") else ""),
                                  "calc_period": str(U.get("asof")), "extract_date": bd, "source_version": "이용현황 집계", "source_file": "통합 대시보드", "source_sheet": ind, "source_row": None}); cnt += 1
             notes.append(f"이용현황({U.get('asof')} 기준): {len(U.get('centers') or [])}개소 → {cnt}건")
         else: notes.append("이용현황: 기준일(asof)을 읽지 못해 건너뜀")

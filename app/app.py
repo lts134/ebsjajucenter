@@ -197,30 +197,36 @@ def value_sources(key: str, what: str = "값", base_date_default: str | None = N
         df = df.drop_duplicates(subset=["indicator", "center", "base_date"], keep="last").reset_index(drop=True)
     return df, " + ".join(dict.fromkeys(names))
 
-def run_ai(label: str, fn, hint: str = "", rules_label: str | None = None):
+def run_ai(label: str, fn, hint: str = "", rules_label: str | None = None, job: dict | None = None):
     """AI 호출을 진행 상자 안에서 실행한다. 호출은 작업 스레드에서 돌고, 화면은 0.5초마다 경과 시간을 갱신하며
     llm이 보내는 단계 글(모델·입력 크기·응답 시간·잘림 재시도·도구 호출)을 줄줄이 보여 준다. 끝나면 상자가 접히고 걸린 시간이 남는다.
+    job(세션에 둔 dict)을 주면 스레드·큐를 거기 보관해, 처리 중 화면이 다시 실행돼도(다른 메뉴 클릭 등) 결과를 잃지 않고 이어서 기다린다.
     AI가 없으면 규칙 기반으로 바로 실행(짧으니 스피너만). fn은 Streamlit 요소를 만지면 안 된다(결과만 반환)."""
     if not HAS_API:
         with st.spinner(rules_label or f"{label} (규칙 기반)"): return fn()
-    box = st.status(f"{label} — {llm.model_label()} 준비", expanded=True)
+    resumed = bool(job and job.get("q") is not None)
+    box = st.status(f"{label} — {llm.model_label()} " + ("이어서 기다리는 중" if resumed else "준비"), expanded=True)
     with box:
         timer = st.empty(); log_box = st.container()
-    q: queue.Queue = queue.Queue()
-    cfg = (st.session_state["llm_cfg"], st.session_state["llm_state"], st.session_state["llm_log"])
-    def worker():
-        llm.configure(*cfg); llm.set_progress(lambda m: q.put(m))
-        try: q.put(("done", fn()))
-        except BaseException as e: q.put(("err", e))
-        finally: llm.set_progress(None)
-    threading.Thread(target=worker, daemon=True).start()
-    t0, last, outcome = time.time(), "", None
+    if resumed: q, t0 = job["q"], job["t0"]
+    else:
+        q = queue.Queue(); t0 = time.time()
+        cfg = (st.session_state["llm_cfg"], st.session_state["llm_state"], st.session_state["llm_log"])
+        def worker():
+            llm.configure(*cfg); llm.set_progress(lambda m: q.put(m))
+            try: q.put(("done", fn()))
+            except BaseException as e: q.put(("err", e))
+            finally: llm.set_progress(None)
+        threading.Thread(target=worker, daemon=True).start()
+        if job is not None: job.update(q=q, t0=t0, last="")
+    last, outcome = (job or {}).get("last", ""), None
     while outcome is None:
         try: item = q.get(timeout=0.5)
         except queue.Empty: item = None
         if isinstance(item, tuple): outcome = item
         elif isinstance(item, str):
             last = item; log_box.write(f"{dt.datetime.now().strftime('%H:%M:%S')}  {item}"); box.update(label=f"{label} — {item[:90]}", state="running", expanded=True)
+            if job is not None: job["last"] = item
         timer.markdown(f"**경과 {time.time() - t0:.0f}초**" + (f" · {hint}" if hint else "") + (f"  \n지금: {last}" if last else ""))
     took = time.time() - t0
     if outcome[0] == "err":
@@ -265,13 +271,16 @@ def req_label(r): return f"#{r['id']} {r['received_date'] or '접수일 미기�
 # ================= 홈 = 대화 =================
 REQ_EXT = (".hwp", ".hwpx", ".pdf", ".docx", ".txt"); VAL_EXT = (".xlsx", ".xls", ".xlsm", ".csv"); DASH_EXT = (".html", ".htm")
 
-def _import_dashboard(data: bytes, name: str, include_partial: bool = False) -> tuple[str, int]:
-    """대시보드 저장 파일 → 지표 데이터 묶음 + 센터 명부. (설명, 묶음 번호)"""
-    S = dashboard_import.summarize(dashboard_import.parse(data), include_partial)
+def _import_dashboard(data: bytes, name: str, include_partial: bool = False, S: dict | None = None) -> tuple[str, int]:
+    """대시보드 저장 파일 → 지표 데이터 묶음 + 센터 명부. (설명, 묶음 번호). 파일 자체는 저장하지 않는다(계정 영역이 들어 있을 수 있음)."""
+    S = S or dashboard_import.summarize(dashboard_import.parse(data), include_partial)
+    if not S["rows"] and not S["centers"]: raise ValueError("지표 자료도 센터 명부도 찾지 못했습니다. 대시보드 페이지를 '웹페이지, 전체'로 저장했는지 확인하세요.")
+    n_rep = db.data_replaced_count(S["rows"]) if S["rows"] else 0
     bid, n = db.add_data_batch(S["rows"], USER, f"통합 대시보드({name})", "대시보드 저장 파일 가져오기")
     nc = db.replace_centers(S["centers"], name) if S["centers"] else 0
-    return (f"대시보드 저장 파일 '{name}'에서 지표 데이터 {n:,}건(지표 {len(S['by_indicator'])}개, 기준일 {S['dates'][0]}~{S['dates'][-1]})" + (f"과 센터 명부 {nc}개소" if nc else "") + f"를 가져왔습니다(묶음 #{bid}). "
-            + " / ".join(S["notes"]) + " 계정·연락처 등 개인정보 영역은 읽지 않았습니다."), bid
+    span = f", 기준일 {S['dates'][0]}~{S['dates'][-1]}" if S["dates"] else ""
+    return (f"대시보드 저장 파일 '{name}'에서 지표 데이터 {n:,}건(지표 {len(S['by_indicator'])}개{span})" + (f"과 센터 명부 {nc}개소" if nc else "") + f"를 가져왔습니다(묶음 #{bid})."
+            + (f" 이미 있던 값 {n_rep:,}건은 새 값으로 바뀌었습니다(묶음을 지우면 되돌아갑니다)." if n_rep else "") + " " + " / ".join(S["notes"]) + " 계정·연락처 등 개인정보 영역은 읽지 않았습니다."), bid
 
 def _template_bytes() -> bytes | None:
     """대화 처리의 HWPX 서식: 설정에서 자리표시자 서식을 올렸을 때만 그 서식, 아니면 None(답변자료 양식을 처음부터 생성)."""
@@ -285,8 +294,8 @@ def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
         if low.endswith(REQ_EXT):
             try: text = docread.read(name, data)
             except Exception as e: notes.append(f"'{name}'을 읽지 못했습니다: {e}"); continue
-            if case["request_id"] or case["draft"]:                              # 새 의뢰서면 새 작업
-                st.session_state["case"] = case = agent.Case(); st.session_state["chat_msgs"] = []
+            if case["request_id"] or case["draft"] or case.get("approved"):      # 새 의뢰서면 새 작업(앞 건의 기록은 그대로 남는다)
+                _new_case(say=False); case = st.session_state["case"]
             case["request_text"], case["request_name"] = text, name; case["uploads"].append(name)
             notes.append(f"의뢰서 '{name}'을 받았습니다({len(text):,}자).")
         elif low.endswith(DASH_EXT):
@@ -300,8 +309,9 @@ def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
                 elif info.shape == "wide" and (info.center_cols or info.center_col is not None) and info.value_cols and (info.base_date_hint or info.col_dates):
                     df = tabular.wide_to_long(grid, info, info.center_cols or [info.center_col], info.value_cols, info.base_date_hint or "")
                 else: raise ValueError("센터 열·값 열·기준일을 확인해야 합니다. '지표 데이터' 화면에서 올려 주세요.")
-                bid, n = db.add_data_batch(df.to_dict("records"), USER, name, "대화 첨부")
-                notes.append(f"집계 파일 '{name}'을 지표 데이터에 넣었습니다(묶음 #{bid}, {n}건, 지표 {', '.join(sorted(df['indicator'].unique())[:4])}). 잘못 넣었으면 '지표 데이터'에서 지울 수 있습니다.")
+                recs = df.to_dict("records"); n_rep = db.data_replaced_count(recs)
+                bid, n = db.add_data_batch(recs, USER, name, "대화 첨부")
+                notes.append(f"집계 파일 '{name}'을 지표 데이터에 넣었습니다(묶음 #{bid}, {n}건, 지표 {', '.join(sorted(df['indicator'].unique())[:4])})." + (f" 이미 있던 값 {n_rep}건은 새 값으로 바뀌었습니다." if n_rep else "") + " 잘못 넣었으면 '지표 데이터'에서 묶음을 지우면 이전 값으로 돌아갑니다.")
                 case["plans"] = []; case["values"] = None
             except Exception as e: notes.append(f"집계 파일 '{name}'을 넣지 못했습니다: {e}")
         else: notes.append(f"'{name}'은 다루지 않는 형식입니다.")
@@ -322,14 +332,78 @@ def _rule_reply(case: agent.Case, text: str, tpl: bytes | None) -> str:
         return "\n".join(lines + ([""] if lines and doc_lines else []) + doc_lines)
     return "의뢰서(hwp·hwpx·pdf·docx·txt)를 붙이고 '요구하는 것들 작성해 줘'라고 하면 끝까지 준비합니다. 기록을 찾으려면 지표나 기관 이름을, 사업 내용을 물으려면 '운영 시간' '이용 대상'처럼 핵심어를 넣어 물어보세요(참고 문서가 등록돼 있어야 합니다). AI를 연결하면 자유로운 지시와 질문에 답합니다."
 
+def _case_label(case: agent.Case) -> str:
+    """지금 작업 한 줄: '요구서 #12 · ○○ 의원실 · 제목 · 확정 완료'. 아무 작업도 없으면 빈 문자열."""
+    if not (case["request_text"] or case["draft"]): return ""
+    req = db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})
+    head = f"요구서 #{case['request_id']}" if case["request_id"] else "미등록 요구"
+    tail = " · ".join(str(x) for x in ((req or {}).get("requester"), (req or {}).get("title")) if x)
+    return head + (f" · {tail}" if tail else "") + (" · 확정 완료" if case.get("approved") else "")
+
+def _new_case(say: bool = True):
+    """지금 작업을 접고 빈 작업으로. 모델 대화 기록은 중간을 자르지 않고 통째로 비우며, 접은 사실 한 줄만 다음 턴에 넘긴다(확정한 기록은 DB에 남는다)."""
+    case: agent.Case = st.session_state.get("case") or agent.Case(); prev = _case_label(case)
+    case.reset(); st.session_state["case"] = case; st.session_state["chat_msgs"] = []
+    if prev: st.session_state["chat_carry"] = f"직전 작업({prev})은 접었고 지금은 새 작업입니다. 앞 작업의 기록은 바꾸지 않습니다."
+    if say and prev: st.session_state.setdefault("chat", []).append({"role": "assistant", "text": f"— 새 요구 시작 — 이전 작업({prev})은 접었습니다. 의뢰서를 붙이거나 요구를 말씀해 주세요."})
+
+def _approve_checks(case: agent.Case, req: dict, d: dict) -> list[tuple[str, str]]:
+    """확정 전 확인 목록: (등급 bad·warn·info, 문장). 막는 것은 개인정보 패턴뿐이고 나머지는 알려만 준다."""
+    out = []
+    hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(str(d.get(k, "")), f"초안 {k}")]
+    if hits: out.append(("bad", f"초안에 개인정보로 보이는 패턴 {len(hits)}건 — 삭제·가명 처리 뒤 확정하세요"))
+    n_flag = sum(str(d.get(k, "")).count("[확인 필요]") for k in ("제목", "본문", "차이사유", "산출근거"))
+    if n_flag: out.append(("warn", f"[확인 필요] 표시 {n_flag}곳 — 그대로 확정하면 회신에 남습니다"))
+    cov = case.get("coverage")
+    if cov is not None and len(cov) and "판정" in cov:
+        n_bad = int((cov["판정"] != "충족").sum())
+        if n_bad: out.append(("warn", f"요구 항목 미충족 {n_bad}건(자료 없음·누락)"))
+    if case["compare"] is not None:
+        diff = case["compare"][case["compare"]["판정"] == "차이"]
+        empty = [r["center"] for _, r in diff.iterrows() if not str(case["reasons"].get((r["indicator"], r["center"], r["base_date"]), "") or "").strip()]
+        if empty: out.append(("warn", f"차이 사유가 빈 행 {len(empty)}건: {', '.join(empty[:5])}" + (" …" if len(empty) > 5 else "")))
+    if not (req or {}).get("requester"): out.append(("warn", "요청 주체 미기재 — 회신 머리글과 파일 이름에 '요구'로 들어갑니다. 대화에서 알려 주면 반영합니다"))
+    if case.get("draft_stale") or case.get("hwpx_stale") or case["hwpx"] is None: out.append(("info", "고친 내용이 한글 파일에 아직 반영되지 않았습니다 — 확정하면 다시 만들어 저장합니다"))
+    if not case["request_id"]: out.append(("info", "기록에 등록되지 않은 요구 — 확정하면 요구서·제출본으로 등록됩니다"))
+    return out
+
+def _approve_now(case: agent.Case, tpl: bytes | None):
+    """확정: 고친 사유를 초안 칸에 반영하고(모델 호출 없이 코드로), 한글 파일을 다시 만든 뒤 저장. 모델 대화 기록은 비우고 확정 사실만 다음 턴에 넘긴다."""
+    if case.get("draft_stale") and case["draft"]: case["draft"]["차이사유"] = draft.reasons_text(case["reasons"]); case["draft_stale"] = False
+    if case["hwpx"] is None or case.get("hwpx_stale"): agent.step_hwpx(case, tpl)
+    out = agent.approve(case, USER, REVIEWER, OUT_DIR)
+    st.session_state["chat_msgs"] = []; st.session_state["chat_carry"] = f"직전 작업을 확정했습니다(제출본 #{out['submission_id']}, 초안 #{out['draft_id']}). 새 요구는 새 작업으로 처리합니다."
+
+def _send_card(case: agent.Case, req: dict):
+    """확정 뒤: 받을 파일·메일 문안·발송 기록. 메일 발송은 담당자가 한다(이 앱은 보내지 않는다)."""
+    sid, did = case["approved"]; d = case["draft"] or {}
+    st.success(f"확정했습니다 · 제출본 #{sid} · 초안 #{did} · 값 {len(case['values']) if case['values'] is not None else 0}건. 파일을 받아 보내고, 보낸 뒤 발송을 기록하세요.")
+    c1, c2 = st.columns([1.2, 1])
+    with c1:
+        if case["hwpx"]: st.download_button("회신 HWPX 받기", case["hwpx"], file_name=case["hwpx_name"], key=f"rv_dl_done_{sid}", icon=":material/download:", type="primary")
+        mail = draft.mail_text(req or {}, d, case["hwpx_name"], USER)
+        st.text_input("메일 제목", mail["subject"], key=f"mail_subj_{sid}")
+        st.text_area("메일 본문 — 복사해서 메일 프로그램에 붙이세요", mail["body"], height=170, key=f"mail_body_{sid}")
+    with c2:
+        st.markdown("**발송 기록** — 보낸 뒤 적어 두면 현황에 '발송 완료'로 표시됩니다.")
+        sent_to = st.text_input("보낸 곳", (req or {}).get("requester") or "", key=f"disp_to_{sid}")
+        method = st.selectbox("방법", ["메일", "공문(전자문서)", "팩스", "직접 전달", "기타"], key=f"disp_m_{sid}")
+        sent_at = st.date_input("보낸 날짜", dt.date.today(), key=f"disp_d_{sid}")
+        memo = st.text_input("메모(선택)", key=f"disp_n_{sid}", placeholder="예: 담당 보좌관 메일, 공문번호")
+        if st.button("발송 기록 저장", key=f"disp_save_{sid}", type="primary", icon=":material/send:", disabled=not sent_to.strip()):
+            db.add_dispatch(sid, did, str(sent_at), sent_to.strip(), method, USER, memo.strip()); st.toast("발송을 기록했습니다"); st.rerun()
+        for x in db.dispatches_for(sid): st.caption(f"✓ {x['sent_at']} · {x['method']} → {x['sent_to']} · {x['sent_by']}" + (f" · {x['note']}" if x["note"] else ""))
+    if st.button("＋ 새 요구 시작", key=f"rv_new_{sid}", icon=":material/add:"): _new_case(); st.rerun()
+
 def _review_panel(case: agent.Case, tpl: bytes | None):
-    """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인."""
+    """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인. 입력칸 키에 판 번호(rev)를 넣어 모델·코드가 초안을 새로 쓰면 칸도 새 내용으로 바뀐다."""
+    rev = int(case.get("rev") or 0); locked = bool(case.get("approved"))
     with st.container(border=True):
-        st.markdown("### 검수 — 확인하고 승인하면 확정됩니다")
+        st.markdown("### 확정된 작업" if locked else "### 검수 — 확인하고 승인하면 확정됩니다")
         req = db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})
-        st.caption(f"{('요구서 #' + str(case['request_id'])) if case['request_id'] else '요구서 미등록(승인하면 등록)'} · {req.get('requester') or '요청 주체 미기재'} · {req.get('title') or ''} · 기한 {req.get('due_date') or '-'}")
+        st.caption(f"{('요구서 #' + str(case['request_id'])) if case['request_id'] else '요구서 미등록(승인하면 등록)'} · {req.get('requester') or '요청 주체 미기재'} · {req.get('title') or ''} · 기한 {req.get('due_date') or '미기재'}")
         missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
-        if missing: st.warning("자료가 없어 새로 산출해야 하는 항목: " + " / ".join(missing) + ". 초안에는 [확인 필요]로 들어가 있습니다. 집계 파일을 대화에 붙이면 지표 데이터에 넣고 다시 처리합니다.")
+        if missing and not locked: st.warning("자료가 없어 새로 산출해야 하는 항목: " + " / ".join(missing) + ". 초안에는 [확인 필요]로 들어가 있습니다. 집계 파일을 대화에 붙이면 지표 데이터에 넣고 다시 처리합니다.")
         t1, t2, t3, t4 = st.tabs(["이번에 낼 수치", "대조·차이 사유", "회신 초안", "예상 질문"])
         with t1:
             if case["values"] is not None and len(case["values"]):
@@ -344,47 +418,58 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                 k1, k2, k3 = st.columns(3); k1.metric("짝이 맞는 행", int(m["판정"].isin(["차이", "일치", "값 누락"]).sum())); k2.metric("차이", len(diff)); k3.metric("일치", int((m["판정"] == "일치").sum()))
                 st.dataframe(m[["indicator", "center", "base_date", "old_value", "new_value", "diff", "판정", "단서"]].rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "지난번", "new_value": "이번", "diff": "차이"}), width="stretch", hide_index=True, height=min(60 + 35 * len(m), 320))
                 if len(diff):
-                    st.markdown("**차이 사유** (제안이 채워져 있음 · 고치면 초안을 다시 씁니다)")
-                    changed = False
+                    st.markdown("**차이 사유** (제안이 채워져 있음 · 고치면 '초안 다시 쓰기'로 반영)")
                     for _, r in diff.iterrows():
-                        k = (r["indicator"], r["center"], r["base_date"])
-                        new = st.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=case["reasons"].get(k, ""), key=f"rv_reason_{k}")
-                        if new != case["reasons"].get(k, ""): case["reasons"][k] = new; changed = True
-                    if changed or case.get("draft_stale"):
-                        if st.button("사유 반영해 초안 다시 쓰기", key="rv_redraft"):
+                        k = (r["indicator"], r["center"], r["base_date"]); cur = case["reasons"].get(k, "") or ""
+                        new = st.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=cur, key=f"rv_reason_{k}_{rev}", disabled=locked)
+                        if new != cur: case["reasons"][k] = new; case["draft_stale"] = True
+                    if not locked:
+                        c1, c2 = st.columns([1.6, 3], vertical_alignment="center")
+                        if c1.button("사유 반영해 초안 다시 쓰기", key=f"rv_redraft_{rev}", type="primary" if case.get("draft_stale") else "secondary", icon=":material/edit_note:"):
                             run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
+                        if case.get("draft_stale"): c2.warning("사유가 바뀌었습니다. 초안을 다시 써야 회신 본문에 반영됩니다(확정 때는 사유 칸만 자동 반영).", icon=":material/sync_problem:")
         with t3:
             d = case["draft"] or {}
-            st.caption(f"생성 방식: {case.get('draft_how', '')} · 고치면 HWPX에 반영됩니다.")
-            d["제목"] = st.text_input("제목", d.get("제목", ""), key="rv_title")
-            d["본문"] = st.text_area("본문", d.get("본문", ""), height=260, key="rv_body")
+            st.caption(f"생성 방식: {case.get('draft_how', '')} · 고치면 'HWPX 다시 만들기'로 반영됩니다(확정할 때는 자동으로 다시 만듭니다).")
+            def field(label, key, widget, **kw):
+                new = widget(label, d.get(key, "") or "", key=f"rv_{key}_{rev}", disabled=locked, **kw)
+                if new != (d.get(key, "") or ""): d[key] = new; case["hwpx_stale"] = True
+            field("제목", "제목", st.text_input); field("본문", "본문", st.text_area, height=260)
             c1, c2 = st.columns(2)
-            d["차이사유"] = c1.text_area("차이 사유", d.get("차이사유", ""), height=120, key="rv_reasons")
-            d["산출근거"] = c2.text_area("산출 근거", d.get("산출근거", ""), height=120, key="rv_prov")
+            with c1: field("차이 사유", "차이사유", st.text_area, height=120)
+            with c2: field("산출 근거", "산출근거", st.text_area, height=120)
             cov = case.get("coverage")
             if cov is not None and len(cov):
                 n_ok = int((cov["판정"] == "충족").sum())
                 (st.success if n_ok == len(cov) else st.warning)(f"요구 항목 충족 {n_ok}/{len(cov)}" + ("" if n_ok == len(cov) else " — 나머지는 [확인 필요]"))
                 with st.expander("항목별 판정"): st.dataframe(cov, width="stretch", hide_index=True)
-            hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(d.get(k, ""), f"초안 {k}")]
-            if hits: st.error(f"초안에 개인정보로 보이는 패턴 {len(hits)}건 — 승인 전 삭제·가명 처리")
+            hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(str(d.get(k, "")), f"초안 {k}")]
+            if hits: st.error(f"초안에 개인정보로 보이는 패턴 {len(hits)}건 — 승인 전 삭제·가명 처리"); st.dataframe(pd.DataFrame(hits), width="stretch", hide_index=True)
         with t4:
-            if st.button("예상 질문 보기", key="rv_foresee"):
+            if st.button("예상 질문 보기", key=f"rv_foresee_{rev}"):
                 run_ai("예상 후속 질문 뽑는 중", lambda: agent.step_foresee(case), "보통 20~30초", "예측 중… (규칙 기반)"); st.rerun()
             if case.get("foresee"):
                 qs, how = case["foresee"]; st.caption(f"생성 방식: {how}")
                 st.dataframe(pd.DataFrame(qs)[["가능성", "질문", "근거", "준비할 자료"]], width="stretch", hide_index=True)
         st.divider()
-        b1, b2, b3, b4 = st.columns([1.6, 1.4, 1.4, 1.6])
-        if case.get("approved"):
-            sid, did = case["approved"]; b1.success(f"승인됨 · 제출본 #{sid} · 초안 #{did}")
-        elif b1.button("승인하고 확정", type="primary", key="rv_approve", icon=":material/task_alt:", disabled=case["values"] is None or not len(case["values"]),
-                       help="이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 삭제."):
-            if case["hwpx"] is None or case.get("draft_stale"): agent.step_hwpx(case, tpl)
-            agent.approve(case, USER, REVIEWER, OUT_DIR); st.toast("승인·확정했습니다"); st.rerun()
-        if case["hwpx"]:
-            if case.get("draft") and b2.button("HWPX 다시 만들기", key="rv_rehwpx", help="초안·사유를 고쳤으면 눌러 반영"): agent.step_hwpx(case, tpl); st.rerun()
-            b3.download_button("회신 HWPX 받기", case["hwpx"], file_name=case["hwpx_name"], key="rv_dl", icon=":material/download:")
+        if locked: _send_card(case, req); return
+        checks = _approve_checks(case, req, case["draft"] or {})
+        n_vals = len(case["values"]) if case["values"] is not None else 0
+        b1, b2, b3, b4 = st.columns([1.6, 1.5, 1.7, 1.6])
+        with b1.popover("승인하고 확정", icon=":material/task_alt:", disabled=not n_vals, width="stretch", help="이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 제출본을 지웁니다."):
+            st.markdown("**확정 전 확인**")
+            for tone, t in checks: {"bad": st.error, "warn": st.warning, "info": st.info}[tone](t)
+            if not checks: st.success("걸리는 것이 없습니다.")
+            n_reason = sum(1 for v in case["reasons"].values() if str(v or "").strip())
+            st.caption(f"확정하면 이번 수치 {n_vals}건을 확정 제출본으로, 차이 사유 {n_reason}건을 기록으로, 초안을 승인 상태로 저장하고 한글 파일을 보관합니다.")
+            ok = st.checkbox("개인정보로 보이는 부분을 확인했고 그대로 확정합니다", key=f"rv_pii_ok_{rev}") if any(t == "bad" for t, _ in checks) else True
+            if st.button("확정", type="primary", key="rv_approve_go", icon=":material/task_alt:", disabled=not ok):
+                with st.spinner("확정하는 중…"): _approve_now(case, tpl)
+                st.toast("승인·확정했습니다"); st.rerun()
+        stale = bool(case.get("hwpx_stale") or case.get("draft_stale") or case["hwpx"] is None)
+        if case.get("draft") and b2.button("HWPX 다시 만들기", key=f"rv_rehwpx_{rev}", type="primary" if stale and case.get("draft") else "secondary", icon=":material/refresh:", help="초안·사유를 고쳤으면 눌러 반영"):
+            agent.step_hwpx(case, tpl); st.rerun()
+        if case["hwpx"]: b3.download_button("회신 HWPX 받기" + (" (고친 내용 반영 전)" if stale else ""), case["hwpx"], file_name=case["hwpx_name"], key=f"rv_dl_{rev}", icon=":material/download:")
         if b4.button("단계 화면에서 자세히 고치기", key="rv_detail", type="tertiary"):
             st.session_state["target_request"] = case["request_id"]; go("새 요구서 처리", 2)
 
@@ -393,6 +478,7 @@ def page_chat():
     case: agent.Case = st.session_state.setdefault("case", agent.Case())
     hist: list = st.session_state.setdefault("chat", []); st.session_state.setdefault("chat_msgs", [])
     tpl = _template_bytes(); case["dept_head"] = st.session_state.get("dept_head", os.environ.get("DEPT_HEAD", "")); case["phone"] = st.session_state.get("dept_phone", os.environ.get("DEPT_PHONE", ""))
+    job = st.session_state.get("chat_job")                      # 처리 중이던 작업(화면이 다시 실행돼도 결과를 잃지 않게 세션에 둔다)
     if not hist:
         with st.container(border=True):
             st.markdown("**의뢰서를 붙이고 말하면 됩니다.** 예: \"이 의뢰서에서 요구하는 것들 작성해 줘\"  \n요구 항목을 읽고 → 가진 자료(지표 데이터·과거 제출값)에서 기준일을 정해 값을 모으고 → 과거 제출값과 맞춰 보고 → 차이 사유 후보를 채우고 → 회신 초안과 HWPX를 만듭니다. 사람은 아래 검수 화면에서 확인하고 승인합니다.")
@@ -403,29 +489,43 @@ def page_chat():
                     p = SAMPLE / "새요구서_의원실_2026-09-15.txt"
                     st.session_state["chat_pending"] = ("이 의뢰서에서 요구하는 것들 작성해 줘", [(p.name, p.read_bytes())]); st.rerun()
                 c2.caption("가상의 9/15 의원실 요구서를 붙이고 작성을 요청합니다. 먼저 설정 → 시연 데이터 넣기, 지표 데이터에 샘플 적재를 해 두면 결과가 풍부합니다.")
+    else:
+        label = _case_label(case)
+        if label:
+            c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
+            c1.caption(f"지금 작업: {label}")
+            if c2.button("＋ 새 요구 시작", key="chat_new", icon=":material/add:", disabled=bool(job), help="지금 작업을 접고 빈 작업으로 시작합니다. 확정한 기록은 남고, 확정하지 않은 초안·수치는 사라집니다."):
+                _new_case(); st.rerun()
     for m in hist:
         with st.chat_message(m["role"], avatar=":material/person:" if m["role"] == "user" else ":material/smart_toy:"):
             st.markdown(ui.safe_md(m["text"]))
             if m.get("files"): st.caption("첨부: " + ", ".join(m["files"]))
     if case["draft"]: _review_panel(case, tpl)
-    prompt = st.chat_input("의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple", file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv", "html", "htm"], key="chat_in")
+    prompt = st.chat_input("처리 중입니다… 끝나면 다시 입력할 수 있습니다" if job else "의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple",
+                           file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv", "html", "htm"], key="chat_in", disabled=bool(job))
     pending = st.session_state.pop("chat_pending", None)
-    if prompt is None and pending is None: return
-    if pending: text, files = pending
-    else: text, files = (prompt.text or "").strip(), [(f.name, f.getvalue()) for f in (prompt.files or [])]
-    if not text and not files: return
-    notes = _attach(case, files); case = st.session_state["case"]
-    hist.append({"role": "user", "text": text or "(파일 첨부)", "files": [n for n, _ in files]})
-    if not text: text = "붙인 파일을 확인해 줘" if not case["request_text"] else "이 의뢰서에서 요구하는 것들 작성해 줘"
+    if job is None:
+        if prompt is None and pending is None: return
+        if pending: text, files = pending
+        else: text, files = (prompt.text or "").strip(), [(f.name, f.getvalue()) for f in (prompt.files or [])]
+        if not text and not files: return
+        notes = _attach(case, files); case = st.session_state["case"]
+        hist.append({"role": "user", "text": text or "(파일 첨부)", "files": [n for n, _ in files]})
+        if not text: text = "이 의뢰서에서 요구하는 것들 작성해 줘" if any(n.lower().endswith(REQ_EXT) for n, _ in files) else "붙인 파일을 확인해 줘"   # 말 없이 집계 파일만 붙이면 확인만 한다
+        msgs = list(st.session_state.get("chat_msgs") or []); carry = st.session_state.pop("chat_carry", None)
+        if len(msgs) > agent.HISTORY_MAX_BLOCKS: carry = agent.carry_note(case, hist, carry); msgs = []     # 긴 대화는 요약 한 줄로 새로 시작(중간을 자르지 않는다)
+        job = {"text": text, "notes": notes, "msgs": msgs, "carry": carry}; st.session_state["chat_job"] = job
+    case = st.session_state["case"]
     try:
         if HAS_API:
-            msgs = list(st.session_state.get("chat_msgs") or [])            # 세션 값은 여기서 꺼낸다(run_ai는 작업 스레드에서 돌아 세션에 접근 못 함)
-            res = run_ai("처리 중", lambda: agent.chat_turn(case, msgs, text, tpl, notes=notes), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다")
+            res = run_ai("처리 중", lambda: agent.chat_turn(case, job["msgs"], job["text"], tpl, notes=job["notes"], carry=job.get("carry")), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다", job=job)
             st.session_state["chat_msgs"] = res["messages"]; reply = res["text"] or "(답이 비어 있습니다)"
         else:
-            reply = run_ai("처리 중", lambda: _rule_reply(case, text, tpl), "", "처리 중… (규칙 기반)")
+            reply = run_ai("처리 중", lambda: _rule_reply(case, job["text"], tpl), "", "처리 중… (규칙 기반)")
     except Exception as e:
         reply = f"처리 중 오류가 났습니다: {llm.explain_error(e) or e}"
+    st.session_state.pop("chat_job", None)
+    notes = job["notes"]
     hist.append({"role": "assistant", "text": "\n\n".join(notes + [reply]) if notes else reply})
     st.session_state["chat"] = hist[-40:]; st.rerun()
 
@@ -463,12 +563,14 @@ def page_data():
             for b in db.list_data_batches():
                 a, d = st.columns([5, 1])
                 a.caption(f"#{b['id']} · {b['loaded_at'][:16]} · {b['loaded_by']} · {b['source']} · {b['n_rows']}건(남은 {b['n_live']}건)" + (f" · {b['note']}" if b['note'] else ""))
-                if d.button("지우기", key=f"data_del_{b['id']}", type="tertiary", icon=":material/delete:"):
-                    db.delete_data_batch(b["id"]); st.rerun()
+                with d.popover("지우기", icon=":material/delete:"):
+                    st.caption(f"묶음 #{b['id']}의 남은 {b['n_live']}건을 지웁니다. 이 묶음이 덮어썼던 이전 값은 되살아납니다.")
+                    if st.button("정말 지우기", key=f"data_del_{b['id']}", type="primary"): db.delete_data_batch(b["id"]); st.rerun()
         st.caption("[계획] 사내 집계 시스템·DB와 직접 연결(읽기 전용 조회)하면 이 화면에 올리는 일도 없어집니다. 연결 방식은 전산 부서와 협의 필요 [확인 필요].")
     st.divider()
     st.markdown("### 통합 대시보드에서 한 번에 가져오기")
-    st.caption("자기주도학습센터 현황 대시보드를 브라우저에서 **페이지 저장(Ctrl+S, '웹페이지, 전체')** 한 .html 파일을 올리면, 안에 들어 있는 월간 출결(등원율·시간달성율·등원일수…)·진단검사·관리인원·상담횟수·이용현황과 센터 명부(지역·유형·개소일·정원·주말 운영)를 지표 데이터로 바로 넣습니다. 계정·연락처 등 개인정보 영역은 읽지 않습니다.")
+    st.caption("자기주도학습센터 현황 대시보드를 브라우저에서 **페이지 저장(Ctrl+S, '웹페이지, 전체')** 한 .html 파일을 올리면, 안에 들어 있는 월간 출결(등원율·시간달성율·등원일수…)·진단검사·관리인원·상담횟수·이용현황과 센터 명부(지역·유형·개소일·정원·주말 운영)를 지표 데이터로 바로 넣습니다. 계정·연락처 등 개인정보 영역은 읽지 않고 파일도 저장하지 않습니다.")
+    st.warning("저장 파일에는 대시보드 '계정정보' 영역의 아이디·비밀번호가 평문으로 들어 있을 수 있습니다. 파일 자체를 메일·메신저로 공유하지 말고, 쓰고 난 사본은 지우세요.", icon=":material/lock:")
     dcol1, dcol2 = st.columns([1.2, 1])
     with dcol1:
         up = st.file_uploader("대시보드 저장 파일(.html)", type=["html", "htm"], key="dash_up")
@@ -484,9 +586,11 @@ def page_data():
             name, S = pv
             st.markdown("\n".join(f"- {n}" for n in S["notes"]) + f"\n- 센터 명부 {len(S['centers'])}개소(2025 운영 {sum(1 for c in S['centers'] if c['year25'])}·2026 선정 {sum(1 for c in S['centers'] if c['year26'])})")
             if S["errors"]: st.warning("읽지 못한 자료: " + ", ".join(f"{k}({v})" for k, v in S["errors"].items()))
+            n_rep = db.data_replaced_count(S["rows"]) if S["rows"] else 0
+            if n_rep: st.caption(f"이미 있는 값 {n_rep:,}건이 새 값으로 바뀝니다(묶음을 지우면 되돌아갑니다).")
             st.dataframe(pd.DataFrame([{"지표": k, "건수": v} for k, v in sorted(S["by_indicator"].items(), key=lambda x: -x[1])]), width="stretch", hide_index=True, height=min(60 + 35 * len(S["by_indicator"]), 300))
             if st.button("지표 데이터·센터 명부에 저장", type="primary", key="dash_save", icon=":material/database:"):
-                note, bid = _import_dashboard(up.getvalue(), name, inc); st.session_state["data_last"] = (bid, len(S["rows"])); st.session_state.pop("dash_preview", None); st.toast("가져왔습니다"); st.rerun()
+                note, bid = _import_dashboard(up.getvalue(), name, inc, S); st.session_state["data_last"] = (bid, len(S["rows"])); st.session_state.pop("dash_preview", None); st.toast("가져왔습니다"); st.rerun()
     with dcol2:
         nC = db.center_count()
         st.markdown(f"**센터 명부: {nC}개소**" if nC else "**센터 명부: 없음** — 왼쪽에서 대시보드 저장 파일을 가져오면 채워집니다.")
@@ -529,7 +633,9 @@ def page_refdocs():
         for d in docs:
             a, b = st.columns([5, 1])
             a.markdown(f"**{d['title']}**  \n{d['file_name']} · {d['pages']}쪽 · 조각 {d['n_chunks']}개 · {d['uploaded_at'][:10]} · {d['uploaded_by']}" + (f" · {d['note']}" if d['note'] else ""))
-            if b.button("삭제", key=f"ref_del_{d['id']}", type="tertiary", icon=":material/delete:"): db.delete_ref_doc(d["id"]); st.rerun()
+            with b.popover("삭제", icon=":material/delete:"):
+                st.caption(f"「{d['title']}」 조각 {d['n_chunks']}개를 지웁니다. 되돌릴 수 없습니다(다시 올리면 됩니다).")
+                if st.button("정말 삭제", key=f"ref_del_{d['id']}", type="primary"): db.delete_ref_doc(d["id"]); st.rerun()
         st.caption("검색은 서버 안에서 키워드로 합니다(외부 전송 없음). AI가 연결돼 있으면 모델이 이 검색 도구를 써서 찾은 문구만 근거로 답하고 쪽을 밝힙니다. 스캔 이미지 PDF는 글자 추출이 안 됩니다.")
 
 # ================= 과거 답변 등록 =================
@@ -857,7 +963,7 @@ def page_review():
     drafts = db.list_drafts()
     if not drafts: st.info("아직 초안이 없습니다."); return
     for d in drafts:
-        with st.expander(f"초안 #{d['id']} · {ko(d['status'])} · {d['requester']} — {d['request_title']} (기한 {d['due_date']}) · {d['created_at'][:16]}", expanded=d["status"] == "review_requested"):
+        with st.expander(f"초안 #{d['id']} · {ko(d['status'])} · {d['requester'] or '요청 주체 미기재'} — {d['request_title'] or '(제목 없음)'} (기한 {d['due_date'] or '미기재'}) · {(d['created_at'] or '')[:16]}", expanded=d["status"] == "review_requested"):
             st.markdown(f"**{d['title']}**"); st.text(d["body"]); st.caption("차이 사유"); st.text(d["reasons_text"]); st.caption("산출 근거"); st.text(d["provenance_text"])
             f = OUT_DIR / (d["hwpx_name"] or "")
             if d["hwpx_name"] and f.exists(): st.download_button("회신 HWPX", f.read_bytes(), file_name=d["hwpx_name"], key=f"dl_{d['id']}")
@@ -908,7 +1014,7 @@ def page_history():
     inv = {v: k for k, v in VAL_KO.items()}
     for r in reqs:
         rid = r["id"]
-        with st.expander(f"#{rid} {r['received_date']} · {r['requester']} · {r['title']} (기한 {r['due_date']})"):
+        with st.expander(f"#{rid} {r['received_date'] or '접수일 미기재'} · {r['requester'] or '요청 주체 미기재'} · {r['title'] or '(제목 없음)'} (기한 {r['due_date'] or '미기재'})"):
             h1, h2 = st.columns([5, 1])
             h1.caption(f"원문 {len(r['raw_text'] or '')}자 · 파일 {r['source_file'] or '-'} · 등록 {r['created_at'][:16] if r.get('created_at') else '-'}")
             if h2.button("수정", key=f"edit_btn_{rid}", type="tertiary", icon=":material/edit:"):
@@ -948,18 +1054,21 @@ def page_status():
     if not ov: st.info("등록된 요구서가 없습니다."); return
     df = pd.DataFrame(ov); today = pd.Timestamp(dt.date.today())
     df["D-day"] = (pd.to_datetime(df["due_date"], errors="coerce") - today).dt.days
-    df["상태"] = df.apply(lambda r: "확정 제출" if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
+    dispatched = db.dispatched_request_ids()                   # 확정 ≠ 발송: 발송 기록이 있어야 '발송 완료'
+    df["상태"] = df.apply(lambda r: ("발송 완료" if r["id"] in dispatched else "확정(미발송)") if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
     show = df.rename(columns={"id": "번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_items": "항목 수", "n_confirmed": "확정 제출본", "last_submitted": "최근 제출일"})
     soon = (df["상태"] == "진행 중") & df["D-day"].between(0, 3)
-    c1, c2, c3, c4 = st.columns(4)
-    ui.kpi(c1, len(df), "요구서"); ui.kpi(c2, int((df["상태"] == "진행 중").sum()), "진행 중"); ui.kpi(c3, int(soon.sum()), "기한 3일 이내", "warn" if soon.sum() else ""); ui.kpi(c4, int((df["상태"] == "기한 경과").sum()), "기한 경과(미제출)", "bad" if (df["상태"] == "기한 경과").sum() else "")
-    view = show[["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일"]]
+    n_unsent = int((df["상태"] == "확정(미발송)").sum())
+    c1, c2, c3, c4, c5 = st.columns(5)
+    ui.kpi(c1, len(df), "요구서"); ui.kpi(c2, int((df["상태"] == "진행 중").sum()), "진행 중"); ui.kpi(c3, int(soon.sum()), "기한 3일 이내", "warn" if soon.sum() else ""); ui.kpi(c4, int((df["상태"] == "기한 경과").sum()), "기한 경과(미제출)", "bad" if (df["상태"] == "기한 경과").sum() else ""); ui.kpi(c5, n_unsent, "확정(미발송)", "warn" if n_unsent else "")
+    view = show[["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일"]].fillna({"요청 주체": "미기재", "접수일": "미기재", "제출기한": "미기재", "제목": "(제목 없음)"})
     def _row_style(r):
         if r["상태"] == "기한 경과": return ["background-color: #FDE8E8"] * len(r)
         if r["상태"] == "진행 중" and pd.notna(r["D-day"]) and r["D-day"] <= 3: return ["background-color: #FFF4D6"] * len(r)
+        if r["상태"] == "확정(미발송)": return ["background-color: #E8F1FD"] * len(r)
         return [""] * len(r)
     st.dataframe(view.style.apply(_row_style, axis=1), width="stretch", hide_index=True)
-    st.caption("노랑: 진행 중이며 기한 3일 이내 · 빨강: 기한 경과(미제출)")
+    st.caption("노랑: 진행 중이며 기한 3일 이내 · 빨강: 기한 경과(미제출) · 파랑: 확정했지만 발송 기록이 없음(홈 검수 화면의 '발송 기록 저장'으로 남깁니다)")
     rows = [{"요구번호": r["id"], "요청 주체": r["requester"], "접수일": r["received_date"], "제출기한": r["due_date"], "제목": r["title"], "항목": it["item_text"], "지표": it["indicator"], "기준일": it["base_date"], "단위": it["unit"], "확정 제출본 수": r["n_confirmed"], "최근 제출일": r["last_submitted"]} for r in ov for it in db.get_items(r["id"])]
     lb = io.BytesIO(); pii.excel_safe(pd.DataFrame(rows)).to_excel(lb, index=False)
     st.download_button("관리대장 엑셀 내보내기", lb.getvalue(), file_name=f"요구자료_관리대장_{dt.date.today()}.xlsx")
@@ -1011,15 +1120,23 @@ def page_settings():
     tab_ai, tab_data, tab_demo = st.tabs(["AI 연결", "서식·사전", "시연·초기화"])
     with tab_ai:
         st.markdown("키는 이 브라우저 세션에만 보관되고 파일에 저장되지 않습니다. 탭을 닫으면 사라집니다. 혼자 쓰는 PC라면 `set_key.bat`으로 한 번 저장해 두면 매번 넣지 않아도 됩니다.")
+        if st.session_state.pop("cfg_clear", False):            # '키 지우기' 다음 실행: 입력칸(위젯) 값도 비운다(칸이 그려지기 전에 지워야 한다)
+            for k in [k for k in st.session_state if str(k).startswith("cfg_") and k not in ("cfg_dept_head", "cfg_dept_phone")]: del st.session_state[k]
         cfg = st.session_state["llm_cfg"]
         pnames = providers.names()
         prov_name = st.selectbox("공급자", pnames, index=pnames.index(cfg.get("provider")) if cfg.get("provider") in pnames else 0,
                                  format_func=lambda n: f"{providers.PROVIDERS[n].label} ({n})")
         pcls = providers.PROVIDERS[prov_name]
         new_cfg = {"provider": prov_name}
+        EFFORTS = [("", "기본 — 모델 기본값(Opus 5.5는 medium)"), ("low", "빠르게(low) — 추출·분류 위주, 비용·지연 최소"), ("medium", "보통(medium)"), ("high", "꼼꼼하게(high) — 초안·대화 품질 우선"), ("xhigh", "매우 꼼꼼하게(xhigh)"), ("max", "최대(max) — 느리고 비쌈")]
         for f in pcls.fields:
             env_set = bool(os.environ.get(f.get("env", ""), ""))
             hint = " · 이 PC 환경변수에 값이 있어 비워도 됨" if env_set else ""
+            if f["key"] == "effort":
+                cur = (cfg.get("effort") or "").strip().lower(); keys = [e for e, _ in EFFORTS]
+                new_cfg["effort"] = st.selectbox("추론 강도" + hint, keys, index=keys.index(cur) if cur in keys else 0, format_func=dict(EFFORTS).get, key=f"cfg_{prov_name}_effort",
+                                                 help="추출·분류·연결 테스트는 설정과 상관없이 low로 돌고, 이 값은 초안·대화 처리·이력 질의에 쓰입니다. 비우면 모델 기본.")
+                continue
             new_cfg[f["key"]] = st.text_input(f["label"] + hint, value=cfg.get(f["key"], "") or "", type="password" if f.get("secret") else "default", key=f"cfg_{prov_name}_{f['key']}").strip()
         models = st.session_state.get("model_list") or []
         model_ids = [m["id"] for m in models]
@@ -1034,8 +1151,8 @@ def page_settings():
             cfg.clear(); cfg.update(new_cfg)
             if "model" in changed or "provider" in changed: st.session_state["llm_state"] = {}
             st.rerun()
-        if c2.button("키 지우기"):
-            cfg.clear(); st.session_state["llm_state"] = {}; st.session_state["model_list"] = []; st.rerun()
+        if c2.button("키 지우기", help="이 세션의 키·모델 설정과 입력칸을 모두 비웁니다"):
+            cfg.clear(); st.session_state["llm_state"] = {}; st.session_state["model_list"] = []; st.session_state["cfg_clear"] = True; st.rerun()
         if c3.button("연결 테스트", disabled=not llm.available()):
             r = run_ai("연결 테스트", llm.test_connection, "1~3초")
             if r.get("ok"): st.success(f"연결 성공 · 공급자 {r.get('provider')} · 모델 {r['model']} · 왕복 {r['latency_s']}초")
