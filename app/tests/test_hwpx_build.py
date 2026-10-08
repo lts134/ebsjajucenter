@@ -10,7 +10,7 @@ def test_table_pivot_and_single_date():
                        {"indicator": "등원율", "center": "센터B", "base_date": "2026-06-30", "value": 59.4}])
     hdr, rows = hwpx_build._table_for(df)
     assert hdr == ["구분", "2026-06-30", "2026-07-31"] and rows == [["센터A", "60.3", "61.0"], ["센터B", "59.4", "-"]]
-    hdr1, rows1 = hwpx_build._table_for(df[df["base_date"] == "2026-06-30"]); assert hdr1 == ["구분", "값(2026-06-30  기준)"] and rows1[0] == ["센터A", "60.3"]
+    hdr1, rows1 = hwpx_build._table_for(df[df["base_date"] == "2026-06-30"]); assert hdr1 == ["구분", "값(2026-06-30 기준)"] and rows1[0] == ["센터A", "60.3"]
     ints = pd.DataFrame([{"indicator": "등록 학생 수", "center": "센터A", "base_date": "2026-06-30", "value": 188.0}, {"indicator": "등록 학생 수", "center": "센터B", "base_date": "2026-06-30", "value": 1095.0}])
     assert hwpx_build._table_for(ints)[1] == [["센터A", "188"], ["센터B", "1,095"]]        # 정수 표는 정수로, 소수 섞인 표(위)는 61.0처럼 소수 유지
 
