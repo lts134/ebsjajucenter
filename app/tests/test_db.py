@@ -65,5 +65,14 @@ def test_indicator_data_store(fresh_db):
     rows = db.data_values_for("등원율", "2026-06-30"); assert len(rows) == 2 and {r["center"]: r["value"] for r in rows} == {"센터A": 61.0, "센터B": 59.4}
     assert db.data_dates_for("등원율") == ["2026-07-31", "2026-06-30"] and db.data_count() == 3
     cov = db.data_coverage(); assert [(c["indicator"], c["base_date"], c["n_centers"]) for c in cov] == [("등원율", "2026-07-31", 1), ("등원율", "2026-06-30", 2)]
-    bl = db.list_data_batches(); assert bl[0]["id"] == bid2 and bl[0]["n_rows"] == 2 and bl[1]["n_live"] == 1   # 첫 묶음의 센터A는 대체돼 1건만 남음
-    assert db.delete_data_batch(bid2) == 2 and db.data_count() == 1 and db.data_values_for("등원율", "2026-06-30")[0]["center"] == "센터B"
+    bl = db.list_data_batches(); assert bl[0]["id"] == bid2 and bl[0]["n_rows"] == 2 and bl[1]["n_live"] == 1   # 첫 묶음의 센터A는 대체돼 활성 1건만 남음(행은 보존)
+    assert db.data_replaced_count([v("센터B", 1.0), v("센터Z", 1.0)]) == 1
+    # 두 번째 묶음을 지우면 대체됐던 첫 묶음의 센터A 값(60.3)이 되살아난다
+    assert db.delete_data_batch(bid2) == 2 and db.data_count() == 2 and {r["center"]: r["value"] for r in db.data_values_for("등원율", "2026-06-30")} == {"센터A": 60.3, "센터B": 59.4}
+    # 세 묶음 사슬: 1→2→3에서 가운데(2)를 지워도 3이 활성, 그다음 3을 지우면 1이 살아난다
+    b2, _ = db.add_data_batch([v("센터A", 61.0)], "홍", "b2"); b3, _ = db.add_data_batch([v("센터A", 62.0)], "홍", "b3")
+    db.delete_data_batch(b2); assert db.data_values_for("등원율", "2026-06-30")[0]["value"] == 62.0
+    db.delete_data_batch(b3); assert db.data_values_for("등원율", "2026-06-30")[0]["value"] == 60.3
+    # 묶음 안 중복 키는 마지막 것만, 센터 표기·기준일은 정규화해 저장
+    b4, n4 = db.add_data_batch([v("EBS 계룡 센터", 1.0, "2026. 8. 31."), v("EBS계룡센터", 2.0, "2026-08-31")], "홍", "b4")
+    assert n4 == 1 and db.data_values_for("등원율", "2026-08-31")[0]["value"] == 2.0

@@ -93,11 +93,11 @@ def test_describe_request_without_file_and_deferred_register(fresh_db):
     db = fresh_db
     months = [f"{y}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 10)]]
     db.add_data_batch([{"indicator": "등원율", "center": f"센터{i}", "base_date": d, "value": 50 + i} for d in months for i in range(1, 4)], "u", "센터별월간출결.xls")
-    assert agent.coverage_line() == "지표 데이터 보유: 등원율 2025-12-31~2026-09-30(10개 기준일·3센터)"
+    assert agent.coverage_line() == "지표 데이터 보유: 등원율 2025-12-31~2026-09-30(10개 기준일)·최대 3센터"
     case = agent.Case()
     r = agent.describe_request(case, items=["센터별 등원율 요청이 들어왔어. 작성해줘"])
     assert r["items"][0]["item_text"] == "센터별 등원율" and r["items"][0]["indicator"] == "등원율" and r["missing_header"] == ["요청 주체", "접수일", "기한"]
-    assert "describe_request" in agent.status_line(agent.Case()) and "지표 데이터 보유" in agent.status_line(case)
+    assert "말로 알려 주면" in agent.status_line(agent.Case()) and "지표 데이터 보유" in agent.status_line(case)
     lines = agent.autopilot(case, None, register=False)
     assert case["request_id"] is None and case["no_register"] and any("등록하지 않았습니다" in l for l in lines)
     assert len(case["values"]) == 3 and case["values"]["base_date"].unique().tolist() == ["2026-09-30"]        # 기간 말이 없으면 최신
@@ -109,10 +109,15 @@ def test_describe_request_without_file_and_deferred_register(fresh_db):
     assert len(case["values"]) == 27 and case["values"]["base_date"].min() == "2025-12-31" and case["values"]["base_date"].max() == "2026-08-31"
     assert case["coverage"]["판정"].tolist() == ["충족"] and "2025-12-31 ~ 2026-08-31 기준(9개 기준일)" in case["draft"]["본문"]
     text = docread.read("x.hwpx", case["hwpx"]); assert text.startswith("테스트용 답변자료") and "2026-08-31" in text and "2. 25년" not in text   # 규칙 초안의 '2.' 항목이 1번 항목 아래로 들어감
+    # 등록된 뒤(승인 전) 다시 describe하면 기록도 고쳐진다
+    agent.step_register(case); rid = case["request_id"]
+    agent.describe_request(case, title="센터별 월별 등원율(수정)"); assert db.get_request(rid)["title"] == "센터별 월별 등원율(수정)" and case["values"] is None
+    agent.autopilot(case, None)
     out = agent.approve(case, "담당자", "팀장")
     req = db.get_request(case["request_id"]); assert req["requester"] == "테스트용" and req["due_date"] == "2026-10-09" and len(db.get_values(out["submission_id"])) == 27
-    # 등록된 뒤 다시 describe하면 기록도 고쳐진다
-    agent.describe_request(case, title="센터별 월별 등원율(수정)"); assert db.get_request(case["request_id"])["title"] == "센터별 월별 등원율(수정)"
+    # 확정이 끝난 뒤의 새 요구는 새 작업으로 — 앞 건의 기록은 건드리지 않는다
+    agent.describe_request(case, items=["센터별 등록 학생 수"])
+    assert case["request_id"] is None and not case.get("approved") and db.get_request(rid)["title"] == "센터별 월별 등원율(수정)"
     # 도구 표: 새 도구가 핸들러와 맞고 data_coverage가 지표 데이터를 보여 준다
     hs = agent.handlers(agent.Case(), None); assert {t["name"] for t in agent.TOOLS} == set(hs)
     assert hs["data_coverage"]()["indicators"][0]["n_dates"] == 10 and hs["case_status"]()["data_coverage"].startswith("지표 데이터 보유")

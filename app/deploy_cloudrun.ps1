@@ -70,6 +70,11 @@ if ($LASTEXITCODE -ne 0) { Fail "컨테이너 빌드 실패. 위 로그 링크�
 
 Step "배포"
 # 환경변수는 '갱신'만 한다(--update-env-vars): 다시 배포할 때 -AppPassword를 생략해도 이미 설정된 비밀번호·키가 유지된다.
+# 접속 비밀번호 없이 공개 URL로 뜨는 일을 막는다: 서비스가 처음이거나 기존 서비스에 APP_PASSWORD가 없으면 반드시 받아야 한다
+if (-not $AppPassword) {
+  $existingEnv = gcloud run services describe $Service --region $Region --format="value(spec.template.spec.containers[0].env)" 2>$null
+  if (-not ($existingEnv -match "APP_PASSWORD")) { Fail "APP_PASSWORD가 없습니다. 외부 URL이므로 접속 비밀번호(10자 이상, 영문·숫자)를 -AppPassword 로 주세요." }
+}
 $envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db"
 if ($AppPassword) { $envs += ",APP_PASSWORD=$AppPassword" } else { Write-Host "비밀번호를 지정하지 않아 기존 값을 유지합니다." }
 if ($LlmProvider) { $envs += ",LLM_PROVIDER=$LlmProvider" }

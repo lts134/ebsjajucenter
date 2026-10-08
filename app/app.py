@@ -31,8 +31,8 @@ if os.environ.get("APP_PASSWORD") and not st.session_state.get("authed"):       
     import hmac
     st.markdown("# 대외 요구자료 대응"); st.caption("접속 비밀번호를 입력하세요.")
     pw = st.text_input("비밀번호", type="password", label_visibility="collapsed")
-    if pw and hmac.compare_digest(pw, os.environ["APP_PASSWORD"]): st.session_state["authed"] = True; st.rerun()
-    elif pw: st.error("비밀번호가 맞지 않습니다.")
+    if pw and hmac.compare_digest(pw.encode("utf-8"), os.environ["APP_PASSWORD"].encode("utf-8")): st.session_state["authed"] = True; st.rerun()
+    elif pw: time.sleep(1.0); st.error("비밀번호가 맞지 않습니다.")
     st.stop()
 HERE = Path(__file__).parent
 SAMPLE = HERE / "sample_data"
@@ -69,7 +69,7 @@ with st.sidebar:
     USER = st.session_state.get("user_name") or "담당자"; REVIEWER = st.session_state.get("reviewer_name") or "팀장"
     u = llm.usage_summary() if HAS_API and llm.log() else None
     ui.sidefoot(USER, HAS_API, f"AI {llm.model_label()}" if HAS_API else "AI 연결 안 됨 · 규칙만 동작",
-                (f"이 세션 호출 {u['calls']}회 · 추정 ${u['cost_usd']:.3f}" if u else "") + ("<br>시연 모드(샘플 파일 선택칸 표시)" if DEMO else ""))
+                (f"이 세션 호출 {u['calls']}회 · 추정 ${u['cost_usd']:.3f}" + (f" · 캐시 읽기 {u['cache_read_tokens'] // 1000}k토큰" if u.get("cache_read_tokens") else "") if u else "") + ("<br>시연 모드(샘플 파일 선택칸 표시)" if DEMO else ""))
 
 @st.cache_data(show_spinner=False, max_entries=20)
 def render_hwpx_cached(tpl_bytes: bytes, fill_json: str, rows_json: str) -> bytes:
@@ -179,7 +179,7 @@ def value_sources(key: str, what: str = "값", base_date_default: str | None = N
                 if df is not None: parts.append(df); names.append(pick.name); st.caption(f"읽음: {len(df)}건")
     for up in ups or []:
         with st.container(border=True):
-            st.markdown(f"**{up.name}**  \n<span class='small-muted'>{up.size / 1024:.0f} KB</span>", unsafe_allow_html=True)
+            st.markdown(f"**{ui.esc(up.name)}**  \n<span class='small-muted'>{up.size / 1024:.0f} KB</span>", unsafe_allow_html=True)
             dfs = _file_values(up, f"{key}_{up.file_id}", base_date_default)
             if dfs: parts += dfs; names.append(up.name); st.caption(f"읽음: {sum(len(d) for d in dfs)}건" + (f" · 표 {len(dfs)}개" if len(dfs) > 1 else ""))
     with st.expander("파일 없이 직접 입력", expanded=not ups and not parts):
@@ -235,8 +235,8 @@ def analyze_with_status(text: str):
 
 def analyze(text: str):
     res, how = extract.extract(text)
-    res["items"] = normalize.normalize_items(res.get("items") or [])
-    res["items"] = normalize.normalize_llm(res["items"])
+    items = normalize.normalize_items(res.get("items") or [])
+    res["items"] = items if how.startswith("Claude") else normalize.normalize_llm(items)      # 모델 추출이면 지표 분류를 다시 묻지 않는다(중복 호출 제거)
     return res, how
 
 def request_input(key: str, demo_glob: str | None):
@@ -405,7 +405,7 @@ def page_chat():
                 c2.caption("가상의 9/15 의원실 요구서를 붙이고 작성을 요청합니다. 먼저 설정 → 시연 데이터 넣기, 지표 데이터에 샘플 적재를 해 두면 결과가 풍부합니다.")
     for m in hist:
         with st.chat_message(m["role"], avatar=":material/person:" if m["role"] == "user" else ":material/smart_toy:"):
-            st.markdown(m["text"])
+            st.markdown(ui.safe_md(m["text"]))
             if m.get("files"): st.caption("첨부: " + ", ".join(m["files"]))
     if case["draft"]: _review_panel(case, tpl)
     prompt = st.chat_input("의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple", file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv", "html", "htm"], key="chat_in")
@@ -614,7 +614,7 @@ def step_read():
             st.markdown(f"**{it['item_text']}**")
             st.caption(f"지표 {it.get('indicator') or '사전에 없음'}{mb} · 기준일 {it.get('base_date') or '없음'} · 기간 {it.get('period') or '-'} · 단위 {it.get('unit') or '-'}")
             sg = suggest.suggest(it)
-            st.markdown(f"→ **{sg['판단']}**  \n<span class='small-muted'>출처 {sg['데이터 출처']} · 담당 {sg['담당']} · 과거 제출 {sg['과거 제출']}</span>", unsafe_allow_html=True)
+            st.markdown(f"→ **{ui.esc(sg['판단'])}**  \n<span class='small-muted'>출처 {ui.esc(sg['데이터 출처'])} · 담당 {ui.esc(sg['담당'])} · 과거 제출 {ui.esc(sg['과거 제출'])}</span>", unsafe_allow_html=True)
             if it.get("indicator") and it.get("base_date") and (dv := db.data_values_for(it["indicator"], it["base_date"])):
                 st.markdown(f"지표 데이터에 있음: **{len(dv)}건** · 적재 {dv[0]['loaded_at'][:10]} · {dv[0]['source']} → 2단계에서 자동으로 채워짐")
             if it.get("indicator") and it.get("base_date"):
@@ -622,7 +622,7 @@ def step_read():
                 subs = {}
                 for p_ in past: subs.setdefault((p_["submitted_date"], p_["requester"], p_["request_title"], p_["file_name"]), []).append(p_)
                 for (sd, rq, tt, fn), rows in subs.items():
-                    st.markdown(f"전에 낸 값: **{sd}** · {rq} · {tt} · {fn} · {len(rows)}건  \n<span class='small-muted'>근거: 정의 {rows[0]['definition']} / 집계기간 {rows[0]['calc_period']} / 추출시점 {rows[0]['extract_date']} / 원자료 {rows[0]['source_version']}</span>", unsafe_allow_html=True)
+                    st.markdown(f"전에 낸 값: **{ui.esc(sd)}** · {ui.esc(rq)} · {ui.esc(tt)} · {ui.esc(fn)} · {len(rows)}건  \n<span class='small-muted'>근거: 정의 {ui.esc(rows[0]['definition'])} / 집계기간 {ui.esc(rows[0]['calc_period'])} / 추출시점 {ui.esc(rows[0]['extract_date'])} / 원자료 {ui.esc(rows[0]['source_version'])}</span>", unsafe_allow_html=True)
             sims = search.similar_items(it, top=3)
             if sims:
                 with st.expander("비슷한 과거 항목"):
@@ -662,7 +662,7 @@ def step_compare():
         for i, (it, pl) in enumerate(zip(items, plans, strict=True)):
             with st.container(border=True):
                 a, b = st.columns([3, 2])
-                a.markdown(f"**{it['item_text']}**  \n<span class='small-muted'>지표 {pl['indicator'] or '사전에 없음'} · 요구 기준일 {pl['base_date'] or '없음'}" + (f" · 기간 {it['period']}" if it.get("period") else "") + "</span>", unsafe_allow_html=True)
+                a.markdown(f"**{ui.esc(it['item_text'])}**  \n<span class='small-muted'>지표 {ui.esc(pl['indicator'] or '사전에 없음')} · 요구 기준일 {ui.esc(pl['base_date'] or '없음')}" + (f" · 기간 {ui.esc(it['period'])}" if it.get("period") else "") + "</span>", unsafe_allow_html=True)
                 tone = {"exact": "ok", "all": "ok", "latest": "warn", "nearest": "warn", "yearly": "ok", "quarterly": "ok"}.get(pl["mode"], "bad")
                 icon = {"ok": ":material/check_circle:", "warn": ":material/help:", "bad": ":material/cancel:"}[tone]
                 a.markdown(f"{icon} {pl['why']}")
@@ -787,7 +787,7 @@ def step_draft():
     for _, v in values.iterrows():
         for rr in db.reasons_for(v["indicator"], v["center"], v["base_date"]):
             reasons_raw[(v["indicator"], v["center"], v["base_date"])] = rr["reason"]; break
-    prov = {k: values.iloc[0].get(k) for k in ("definition", "calc_period", "extract_date", "source_version")} if len(values) else {}
+    prov = draft.provenance_by_indicator(values)
     ck_now = st.session_state.get("last_checklist") if st.session_state.get("last_request") == req["id"] else None
     if st.button("초안 만들기", type="primary"):
         d, how = run_ai("회신 초안 쓰는 중", lambda: draft.make_draft(req, items, values, reasons_raw, prov, ck_now), "보통 10~15초", "초안 만드는 중… (규칙 기반)")
@@ -988,10 +988,10 @@ def page_ask():
             st.markdown(f"**Q. {e['q']}**")
             res, kw = e["res"], e["kw"]
             if res.get("text"):
-                st.markdown(res["text"]); st.caption(res.get("how", ""))
+                st.markdown(ui.safe_md(res["text"])); st.caption(res.get("how", ""))
                 with st.expander(f"근거 기록 — 조회 {len(res['trace'])}회"):
                     for t in res["trace"]:
-                        st.markdown(f"`{t['tool']}` {json.dumps(t['input'], ensure_ascii=False)}" + (f" → {t['rows']}건" if t.get("rows") is not None else ""))
+                        st.markdown(f"{llm.tool_label(t['tool'])} — {ui.esc(', '.join(f'{k}: {v}' for k, v in (t['input'] or {}).items()) or '전체')}" + (f" → {t['rows']}건" if t.get("rows") is not None else ""))
                         r_ = t.get("result")
                         if isinstance(r_, list) and r_ and isinstance(r_[0], dict): st.dataframe(pd.DataFrame(r_), width="stretch", height=min(300, 40 + 35 * len(r_)), hide_index=True)
                         elif isinstance(r_, dict) and "error" in r_: st.error(r_["error"])

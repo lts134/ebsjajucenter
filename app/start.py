@@ -15,7 +15,8 @@ REQUIRED = {
     "hwpx": "python-hwpx>=6.7",       # HWP(구형식 5.0) → HWPX 변환
     "xlrd": "xlrd>=2.0",              # 구형 엑셀(.xls)
     "json5": "json5>=0.9",            # 대시보드 저장 파일(HTML 안의 자바스크립트 데이터) 읽기
-    "lxml": "lxml>=4.9",              # 이름만 .xls인 HTML 표
+    "httpx": "httpx>=0.27",           # OpenAI 호환·Gemini 공급자(HTTP)
+    "lxml": "lxml>=4.9",              # python-hwpx(HWP 변환)·이름만 .xls인 HTML 표 읽기
 }
 
 def missing_modules():

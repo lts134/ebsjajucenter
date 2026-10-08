@@ -42,8 +42,8 @@ def test_history_handlers_and_keyword_search(fresh_db):
     H = history_qa.HANDLERS
     assert H["search_requests"]("감사실")[0]["id"] == rid
     d = H["request_detail"](rid); assert d["submissions"][0]["n_values"] == 1 and d["items"][0]["indicator"] == "등원율"
-    assert H["submission_values"](sid, "센터A")[0]["value"] == 60.3 and H["submission_values"](sid, "없음") == []
-    assert H["past_values_for"]("등원율", "2026-06-30")[0]["requester"] == "감사실"
+    sv = H["submission_values"](sid, "센터A"); assert sv["groups"][0]["values"] == [["센터A", 60.3]] and sv["groups"][0]["definition"] is None and H["submission_values"](sid, "없음")["groups"] == []
+    pv = H["past_values_for"]("등원율", "2026-06-30"); assert pv["submissions"][0]["requester"] == "감사실" and pv["submissions"][0]["values"] == [["센터A", 60.3]]
     assert H["diff_reasons"]("등원율")[0]["center"] == "센터G"
     assert "requests" in H["overview"]() and "등원율" in H["indicators"]()["지표 사전"]
     kw = history_qa.keyword_search("감사실에 등원율 어떻게 냈지?")
@@ -89,16 +89,16 @@ def test_run_tools_reports_progress(monkeypatch):
     seen = []; llm.set_progress(seen.append)
     try: llm.run_tools("q", "sys", history_qa.TOOLS, {"search_requests": lambda keyword: [{"id": 1}, {"id": 2}]}, max_turns=3, purpose="이력 질의")
     finally: llm.set_progress(None)
-    assert any("질문을 읽고 조회할 기록을 정하는 중" in m for m in seen)
-    assert any("조회 search_requests(keyword=감사실) → 2건" in m for m in seen), seen
-    assert any("2회차" in m for m in seen) and "조회 1건을 근거로 답을 정리함" in seen[-1]
+    assert any("무엇부터 할지 정하는 중" in m for m in seen)
+    assert any("요구서 찾기(keyword=감사실) → 2건" in m for m in seen), seen                      # 도구 이름 대신 우리말 단계명
+    assert any("2단계" in m for m in seen) and "작업 1건을 바탕으로 답을 정리함" in seen[-1]
 
 def test_run_tools_turn_limit(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()
     fake = Fake([_M([_Use("search_requests", {"keyword": "x"}, f"t{i}")], "tool_use") for i in range(3)])
     monkeypatch.setattr(llm, "_provider", lambda: fake)
     out = llm.run_tools("q", "s", history_qa.TOOLS, {"search_requests": lambda keyword: []}, max_turns=2)
-    assert "한도" in out["text"] and out["turns"] == 2
+    assert "단계 수를 넘었습니다" in out["text"] and out["turns"] == 2
 
 def test_run_tools_404_moves_to_next_model(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()

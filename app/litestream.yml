@@ -5,3 +5,4 @@ dbs:
     replicas:
       - url: ${LITESTREAM_REPLICA_URL}
         sync-interval: 1s
+        retention: 720h              # 스냅샷·WAL 보존 30일(기본 24시간) — 잘못 지운 뒤 되돌릴 여지

@@ -1,5 +1,5 @@
 """SQLite 이력 저장소. 요청 → 항목 → 제출본 → 제출값(산출 근거 포함) → 차이 사유."""
-import sqlite3, os, datetime as dt
+import sqlite3, os, re, datetime as dt
 from pathlib import Path
 
 DB_PATH = Path(os.environ.get("HISTORY_DB", Path(__file__).parent / "storage" / "history.db"))
@@ -125,6 +125,11 @@ CREATE TABLE IF NOT EXISTS ref_chunks (        -- 참고 문서 조각(쪽·순�
     doc_id INTEGER, page INTEGER, seq INTEGER, text TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_ref_chunks_doc ON ref_chunks(doc_id);
+CREATE TABLE IF NOT EXISTS dispatches (        -- 발송 기록: 확정한 회신을 언제 어디로 어떻게 보냈나(메일·공문). 확정 ≠ 발송
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER, draft_id INTEGER,
+    sent_at TEXT, sent_to TEXT, method TEXT, sent_by TEXT, note TEXT, created_at TEXT
+);
 """
 
 _initialized = set()
@@ -147,7 +152,7 @@ def connect(_retry=True):
     except sqlite3.DatabaseError as e:
         if not _retry or not any(m in str(e).lower() for m in CORRUPT_MARKERS):
             raise                                   # 잠금·권한 등은 그대로 올려 사용자에게 보인다(데이터를 비켜 두지 않음)
-        for suffix in ("", "-journal"):
+        for suffix in ("", "-journal", "-wal", "-shm"):             # WAL·shm을 남기면 새 DB가 옛 WAL과 짝을 이뤄 다시 손상된다
             f = Path(str(DB_PATH) + suffix)
             if f.exists():
                 try: f.rename(str(f) + ".broken")
@@ -155,7 +160,7 @@ def connect(_retry=True):
         return connect(_retry=False)
 
 def _migrate(con):
-    """구버전 DB에 새 컬럼 추가"""
+    """구버전 DB에 새 컬럼 추가 + 중복 정리 + 고유 인덱스(같은 지표·센터·기준일 행이 둘 생기지 않게)."""
     cols = {r[1] for r in con.execute("PRAGMA table_info(submission_values)")}
     for c, t in [("source_file", "TEXT"), ("source_sheet", "TEXT"), ("source_row", "INTEGER")]:
         if c not in cols:
@@ -163,7 +168,107 @@ def _migrate(con):
     icols = {r[1] for r in con.execute("PRAGMA table_info(items)")}
     if "period" not in icols:
         con.execute("ALTER TABLE items ADD COLUMN period TEXT")
+    dcols = {r[1] for r in con.execute("PRAGMA table_info(indicator_data)")}
+    if "active" not in dcols: con.execute("ALTER TABLE indicator_data ADD COLUMN active INTEGER DEFAULT 1")
+    if "superseded_by" not in dcols: con.execute("ALTER TABLE indicator_data ADD COLUMN superseded_by INTEGER")
+    con.execute("UPDATE indicator_data SET active=1 WHERE active IS NULL")
+    # 같은 키의 활성 행이 둘 이상이면 최신(id 큰 것)만 활성으로
+    con.execute("""UPDATE indicator_data SET active=0 WHERE active=1 AND id NOT IN (
+                     SELECT MAX(id) FROM indicator_data WHERE active=1 GROUP BY indicator, center, base_date)""")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_indicator_data_active ON indicator_data(indicator, center, base_date) WHERE active=1")
+    con.execute("""DELETE FROM submission_values WHERE id NOT IN (
+                     SELECT MAX(id) FROM submission_values GROUP BY submission_id, indicator, center, base_date)""")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_submission_values ON submission_values(submission_id, indicator, center, base_date)")
     con.commit()
+
+# ---------- 값 정규화(모든 쓰기 경로가 같은 함수를 쓴다) ----------
+def norm_date(v, keep_unparsed: bool = False):
+    """기준일·접수일·기한 → 'YYYY-MM-DD'. 엑셀 일련번호(20000~80000)·날짜 객체·'2026. 6. 30.'·"'26.6.30"·'2026년 6월 30일'·'2026.6'(→ 월말)을 받는다.
+    해석 못 하면 None(keep_unparsed=True면 원문 그대로 — 머리 정보처럼 사람이 볼 값)."""
+    import calendar
+    if v is None: return None
+    if isinstance(v, float) and v != v: return None
+    if hasattr(v, "strftime"):
+        try: return v.strftime("%Y-%m-%d")
+        except ValueError: return None
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if 20000 <= float(v) <= 80000:                                                   # 엑셀 일련번호
+            return (dt.date(1899, 12, 30) + dt.timedelta(days=int(v))).isoformat()
+        return str(v) if keep_unparsed else None
+    s = str(v).strip().strip("'")
+    if not s: return None
+    m = re.match(r"^(\d{4}|\d{2})\s*[.\-/년]\s*(\d{1,2})\s*[.\-/월]\s*(\d{1,2})\s*일?\.?$", s)
+    if m:
+        y = int(m.group(1)); y = y + 2000 if y < 100 else y
+        try: return dt.date(y, int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError: return s if keep_unparsed else None
+    m = re.match(r"^(\d{4}|\d{2})\s*[.\-/년]\s*(\d{1,2})\s*월?\.?$", s)                # 연·월만 → 월말
+    if m:
+        y = int(m.group(1)); y = y + 2000 if y < 100 else y; mo = int(m.group(2))
+        if 1 <= mo <= 12: return f"{y:04d}-{mo:02d}-{calendar.monthrange(y, mo)[1]:02d}"
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        try: return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        except ValueError: return s if keep_unparsed else None
+    return s if keep_unparsed else None
+
+def center_key(name) -> str:
+    """센터 이름 비교용 키: 공백·기호·대소문자·'EBS' 접두를 무시('EBS 계룡 자기주도학습센터' == 'EBS계룡자기주도학습센터')."""
+    return re.sub(r"[\s·!()（）\-_.]", "", str(name or "")).lower().replace("ebs", "")
+
+_center_cache: dict = {"ver": None, "map": {}}
+def canonical_center(name):
+    """센터 명부(이름·별칭)에 있는 표기면 표준 이름으로, 없으면 공백만 정리한 원래 이름."""
+    if name is None: return None
+    s = str(name).strip()
+    if not s: return s
+    try:
+        con = connect(); ver = con.execute("SELECT COUNT(*), MAX(loaded_at) FROM centers").fetchone(); 
+        if tuple(ver) != _center_cache["ver"]:
+            mp = {}
+            for r in con.execute("SELECT name, aliases FROM centers").fetchall():
+                mp[center_key(r[0])] = r[0]
+                try:
+                    import json
+                    for a in json.loads(r[1] or "[]"): mp[center_key(a)] = r[0]
+                except ValueError: pass
+            _center_cache.update(ver=tuple(ver), map=mp)
+        con.close()
+    except sqlite3.DatabaseError: pass
+    return _center_cache["map"].get(center_key(s), re.sub(r"\s+", " ", s))
+
+def _known_spellings() -> dict:
+    """센터 비교 키 → 이미 저장된 표기. 명부가 없어도 먼저 들어온 표기('EBS 계룡 센터')에 뒤의 다른 표기('EBS계룡센터')를 맞춰
+    같은 센터가 두 행으로 갈라지지 않게 한다(고유 인덱스는 글자 그대로 비교하므로 저장 전에 맞춰야 한다)."""
+    known = {}
+    try:
+        con = connect()
+        for (name,) in con.execute("SELECT DISTINCT center FROM submission_values UNION SELECT DISTINCT center FROM indicator_data").fetchall():
+            if name: known.setdefault(center_key(name), name)
+        con.close()
+    except sqlite3.DatabaseError: pass
+    return known
+
+def _norm_rows(values) -> list[dict]:
+    """값 행들을 저장 형태로: 센터 표준화(명부 → 저장된 표기 → 묶음 안 첫 표기)·기준일 정규화·값 float·중복 키는 마지막 것만."""
+    known = _known_spellings(); out: dict = {}
+    for v in values:
+        r = _norm_value_row(v)
+        if not r: continue
+        k = center_key(r["center"])
+        if k in _center_cache["map"] or k not in known: known.setdefault(k, r["center"])          # 명부 표기가 우선, 아니면 먼저 본 표기
+        r["center"] = known[k] if k not in _center_cache["map"] else r["center"]
+        out[(r["indicator"], r["center"], r["base_date"])] = r
+    return list(out.values())
+
+def _norm_value_row(v: dict) -> dict | None:
+    """값 행 하나를 저장 형태로: 센터 표준화·기준일 정규화·값 float. 핵심 칸이 비면 None."""
+    ind, center, bd = _s(v.get("indicator")), canonical_center(v.get("center")), norm_date(v.get("base_date"))
+    val = v.get("value")
+    if not ind or not center or not bd or val is None or val != val: return None
+    try: val = float(val)
+    except (TypeError, ValueError): return None
+    return {**v, "indicator": ind, "center": center, "base_date": bd, "value": val}
 
 def now():
     return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -249,9 +354,8 @@ def replace_values(submission_id, values) -> int:
     con = connect()
     con.execute("DELETE FROM submission_values WHERE submission_id=?", (submission_id,))
     rows = []
-    for v in values:
-        if not (_s(v.get("indicator")) and _s(v.get("center")) and _s(v.get("base_date"))) or v.get("value") is None or v.get("value") != v.get("value"): continue
-        rows.append((submission_id, _s(v["indicator"]), _s(v["center"]), _s(v["base_date"]), float(v["value"]), _s(v.get("definition")), _s(v.get("calc_period")),
+    for v in _norm_rows(values):
+        rows.append((submission_id, v["indicator"], v["center"], v["base_date"], v["value"], _s(v.get("definition")), _s(v.get("calc_period")),
                      _s(v.get("extract_date")), _s(v.get("source_version")), _s(v.get("source_file")), _s(v.get("source_sheet")),
                      _int_or_none(v.get("source_row"))))
     con.executemany("INSERT INTO submission_values(submission_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows)
@@ -279,10 +383,11 @@ def add_submission(request_id, submitted_date, submitted_by, file_name, status, 
         "INSERT INTO submissions(request_id,submitted_date,submitted_by,file_name,status,note,created_at) VALUES(?,?,?,?,?,?,?)",
         (request_id, submitted_date, submitted_by, file_name, status, note, now()))
     sid = cur.lastrowid
+    rows = _norm_rows(values)
     con.executemany(
         "INSERT INTO submission_values(submission_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-        [(sid, v["indicator"], v["center"], v["base_date"], v["value"], v.get("definition"), v.get("calc_period"),
-          v.get("extract_date"), v.get("source_version"), v.get("source_file"), v.get("source_sheet"), v.get("source_row")) for v in values])
+        [(sid, v["indicator"], v["center"], v["base_date"], v["value"], _s(v.get("definition")), _s(v.get("calc_period")),
+          _s(v.get("extract_date")), _s(v.get("source_version")), _s(v.get("source_file")), _s(v.get("source_sheet")), _int_or_none(v.get("source_row"))) for v in rows])
     con.commit(); con.close()
     return sid
 
@@ -305,7 +410,7 @@ def past_values_for(indicator, base_date):
         SELECT v.*, s.submitted_date, s.file_name, s.status, r.requester, r.title AS request_title
         FROM submission_values v JOIN submissions s ON s.id=v.submission_id JOIN requests r ON r.id=s.request_id
         WHERE v.indicator=? AND v.base_date=? AND s.status='confirmed'
-        ORDER BY s.submitted_date DESC""", (indicator, base_date)).fetchall()
+        ORDER BY s.submitted_date DESC, s.id DESC""", (indicator, base_date)).fetchall()
     con.close(); return [dict(r) for r in rows]
 
 def add_reason(submission_id, indicator, center, base_date, old_value, new_value, reason, entered_by):
@@ -366,42 +471,57 @@ def all_values_sample(limit=2000):
 
 # ---------- 지표 데이터(미리 넣어 두는 집계값) ----------
 def add_data_batch(values, loaded_by, source, note="") -> tuple[int, int]:
-    """집계값 묶음 적재. 같은 지표·센터·기준일이 이미 있으면 새 값으로 대체(이전 행 삭제). (batch_id, 저장 건수) 반환."""
+    """집계값 묶음 적재. 같은 지표·센터·기준일이 이미 있으면 그 행을 '대체됨(active=0)'으로 두고 새 값을 활성으로 넣는다(지우지 않으므로 묶음을 되돌리면 이전 값이 살아난다).
+    묶음 안의 중복 키는 마지막 것만. (batch_id, 저장 건수) 반환."""
     con = connect()
-    rows = [v for v in values if _s(v.get("indicator")) and _s(v.get("center")) and _s(v.get("base_date")) and v.get("value") is not None and v.get("value") == v.get("value")]
+    rows = _norm_rows(values)
     cur = con.execute("INSERT INTO data_batches(loaded_at,loaded_by,source,note,n_rows) VALUES(?,?,?,?,?)", (now(), loaded_by, source, note, len(rows)))
     bid = cur.lastrowid
-    con.executemany("DELETE FROM indicator_data WHERE indicator=? AND center=? AND base_date=?", [(_s(v["indicator"]), _s(v["center"]), _s(v["base_date"])) for v in rows])
-    con.executemany("INSERT INTO indicator_data(batch_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                    [(bid, _s(v["indicator"]), _s(v["center"]), _s(v["base_date"]), float(v["value"]), _s(v.get("definition")), _s(v.get("calc_period")), _s(v.get("extract_date")),
+    con.executemany("UPDATE indicator_data SET active=0, superseded_by=? WHERE active=1 AND indicator=? AND center=? AND base_date=?", [(bid, v["indicator"], v["center"], v["base_date"]) for v in rows])
+    con.executemany("INSERT INTO indicator_data(batch_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row,active) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    [(bid, v["indicator"], v["center"], v["base_date"], v["value"], _s(v.get("definition")), _s(v.get("calc_period")), _s(v.get("extract_date")),
                       _s(v.get("source_version")), _s(v.get("source_file")), _s(v.get("source_sheet")), _int_or_none(v.get("source_row"))) for v in rows])
     con.commit(); con.close(); return bid, len(rows)
 
+def data_replaced_count(values) -> int:
+    """이 값들을 넣으면 이미 있는 활성 행 몇 건이 바뀌는지(미리보기용)."""
+    rows = _norm_rows(values)
+    if not rows: return 0
+    con = connect(); n = 0
+    for v in rows:
+        n += con.execute("SELECT COUNT(*) FROM indicator_data WHERE active=1 AND indicator=? AND center=? AND base_date=?", (v["indicator"], v["center"], v["base_date"])).fetchone()[0]
+    con.close(); return n
+
 def data_values_for(indicator, base_date):
     con = connect()
-    rows = con.execute("SELECT d.*, b.loaded_at, b.source FROM indicator_data d JOIN data_batches b ON b.id=d.batch_id WHERE d.indicator=? AND d.base_date=? ORDER BY d.center", (indicator, base_date)).fetchall()
+    rows = con.execute("SELECT d.*, b.loaded_at, b.source FROM indicator_data d JOIN data_batches b ON b.id=d.batch_id WHERE d.active=1 AND d.indicator=? AND d.base_date=? ORDER BY d.center", (indicator, base_date)).fetchall()
     con.close(); return [dict(r) for r in rows]
 
 def data_coverage():
     """지표 × 기준일별 건수와 최근 적재일(화면의 '무엇이 들어 있나' 표)."""
     con = connect()
     rows = con.execute("""SELECT d.indicator, d.base_date, COUNT(*) AS n_centers, MAX(b.loaded_at) AS loaded_at, MAX(b.source) AS source
-                          FROM indicator_data d JOIN data_batches b ON b.id=d.batch_id GROUP BY d.indicator, d.base_date ORDER BY d.indicator, d.base_date DESC""").fetchall()
+                          FROM indicator_data d JOIN data_batches b ON b.id=d.batch_id WHERE d.active=1 GROUP BY d.indicator, d.base_date ORDER BY d.indicator, d.base_date DESC""").fetchall()
     con.close(); return [dict(r) for r in rows]
 
 def data_dates_for(indicator):
     con = connect()
-    rows = con.execute("SELECT DISTINCT base_date FROM indicator_data WHERE indicator=? ORDER BY base_date DESC", (indicator,)).fetchall()
+    rows = con.execute("SELECT DISTINCT base_date FROM indicator_data WHERE active=1 AND indicator=? ORDER BY base_date DESC", (indicator,)).fetchall()
     con.close(); return [r[0] for r in rows]
 
 def list_data_batches():
     con = connect()
-    rows = con.execute("SELECT b.*, (SELECT COUNT(*) FROM indicator_data d WHERE d.batch_id=b.id) AS n_live FROM data_batches b ORDER BY b.id DESC").fetchall()
+    rows = con.execute("SELECT b.*, (SELECT COUNT(*) FROM indicator_data d WHERE d.batch_id=b.id AND d.active=1) AS n_live FROM data_batches b ORDER BY b.id DESC").fetchall()
     con.close(); return [dict(r) for r in rows]
 
 def delete_data_batch(batch_id) -> int:
+    """묶음 삭제: 이 묶음이 대체했던 이전 값을 되살린다. (이 묶음의 행이 이미 더 뒤 묶음에 대체됐으면 그 사슬을 이어 준다.)"""
     con = connect()
-    n = con.execute("DELETE FROM indicator_data WHERE batch_id=?", (batch_id,)).rowcount
+    mine = [dict(r) for r in con.execute("SELECT id, indicator, center, base_date, active, superseded_by FROM indicator_data WHERE batch_id=?", (batch_id,)).fetchall()]
+    n = con.execute("DELETE FROM indicator_data WHERE batch_id=?", (batch_id,)).rowcount        # 먼저 지워야 되살리는 행이 고유 인덱스와 부딪히지 않는다
+    for r in mine:
+        if r["active"]: con.execute("UPDATE indicator_data SET active=1, superseded_by=NULL WHERE superseded_by=? AND indicator=? AND center=? AND base_date=?", (batch_id, r["indicator"], r["center"], r["base_date"]))
+        else: con.execute("UPDATE indicator_data SET superseded_by=? WHERE superseded_by=? AND indicator=? AND center=? AND base_date=?", (r["superseded_by"], batch_id, r["indicator"], r["center"], r["base_date"]))
     con.execute("DELETE FROM data_batches WHERE id=?", (batch_id,))
     con.commit(); con.close(); return n
 
@@ -412,7 +532,7 @@ def past_dates_for(indicator) -> list[str]:
     con.close(); return [r[0] for r in rows]
 
 def data_count() -> int:
-    con = connect(); n = con.execute("SELECT COUNT(*) FROM indicator_data").fetchone()[0]; con.close(); return n
+    con = connect(); n = con.execute("SELECT COUNT(*) FROM indicator_data WHERE active=1").fetchone()[0]; con.close(); return n
 
 # ---------- 통계 ----------
 def request_overview():
@@ -448,17 +568,30 @@ def all_items_with_requests():
     con.close(); return [dict(r) for r in rows]
 
 def reset():
-    _initialized.discard(str(DB_PATH))
+    """기록 전체 삭제: 파일을 지우지 않고 모든 표를 비운다(WAL·복제가 파일을 잡고 있어도 안전). 지우기 전에 백업 사본을 남긴다."""
+    import shutil
     if DB_PATH.exists():
-        DB_PATH.unlink()
+        bdir = DB_PATH.parent / "backup"; bdir.mkdir(parents=True, exist_ok=True)
+        try: shutil.copy2(DB_PATH, bdir / f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
+        except OSError: pass
+    con = connect()
+    tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
+    with con:
+        for t in tables: con.execute(f"DELETE FROM {t}")
+        con.execute("DELETE FROM sqlite_sequence")
+    con.close()
+    _center_cache.update(ver=None, map={})
 
 # ---------- 보조 기능용(사유 후보·이력 질의) ----------
-def all_reasons(indicator=None, limit=50):
-    """입력된 차이 사유 기록(최근순). indicator로 좁힐 수 있음."""
+def all_reasons(indicator=None, limit=50, center=None, base_date=None):
+    """입력된 차이 사유 기록(최근순). indicator·center·base_date로 좁힐 수 있음."""
     con = connect()
     q = "SELECT d.*, s.submitted_date, r.requester FROM diff_reasons d LEFT JOIN submissions s ON s.id=d.submission_id LEFT JOIN requests r ON r.id=s.request_id"
-    args = ()
-    if indicator: q += " WHERE d.indicator=?"; args = (indicator,)
+    conds, args = [], []
+    if indicator: conds.append("d.indicator=?"); args.append(indicator)
+    if center: conds.append("d.center LIKE ?"); args.append(f"%{center}%")
+    if base_date: conds.append("d.base_date=?"); args.append(base_date)
+    if conds: q += " WHERE " + " AND ".join(conds)
     rows = con.execute(q + " ORDER BY d.created_at DESC LIMIT ?", (*args, limit)).fetchall()
     con.close(); return [dict(r) for r in rows]
 
@@ -490,9 +623,10 @@ def request_detail(request_id: int):
 
 # ---------- 센터 명부 ----------
 def replace_centers(rows: list[dict], source: str) -> int:
-    """센터 명부 전체 교체(대시보드 저장 파일을 다시 가져올 때). aliases는 리스트로 받아 JSON으로 저장."""
+    """센터 명부 전체 교체(대시보드 저장 파일을 다시 가져올 때). aliases는 리스트로 받아 JSON으로 저장. 빈 목록이면 기존 명부를 지우지 않는다."""
     import json
-    con = connect(); con.execute("DELETE FROM centers")
+    if not rows: return center_count()
+    con = connect(); con.execute("DELETE FROM centers"); _center_cache.update(ver=None, map={})
     con.executemany("""INSERT INTO centers(center_id,name,aliases,year25,year26,status,edu,region,facility,type,size,open_date,capacity,weekend,weekend_days,source,loaded_at)
                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     [(_s(r.get("center_id")), _s(r.get("name")), json.dumps(r.get("aliases") or [], ensure_ascii=False), 1 if r.get("year25") else 0, 1 if r.get("year26") else 0, _s(r.get("status")),
@@ -544,3 +678,17 @@ def ref_chunks(doc_id=None) -> list[dict]:
     q = "SELECT c.id, c.doc_id, c.page, c.seq, c.text, d.title FROM ref_chunks c JOIN ref_docs d ON d.id=c.doc_id"
     rows = con.execute(q + (" WHERE c.doc_id=?" if doc_id else "") + " ORDER BY c.doc_id, c.page, c.seq", (doc_id,) if doc_id else ()).fetchall()
     con.close(); return [dict(r) for r in rows]
+
+
+# ---------- 발송 기록 ----------
+def add_dispatch(submission_id, draft_id, sent_at, sent_to, method, sent_by, note="") -> int:
+    con = connect()
+    cur = con.execute("INSERT INTO dispatches(submission_id,draft_id,sent_at,sent_to,method,sent_by,note,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                      (submission_id, draft_id, norm_date(sent_at, keep_unparsed=True), _s(sent_to), _s(method), _s(sent_by), _s(note), now()))
+    con.commit(); did = cur.lastrowid; con.close(); return did
+
+def dispatches_for(submission_id) -> list[dict]:
+    con = connect(); rows = con.execute("SELECT * FROM dispatches WHERE submission_id=? ORDER BY id DESC", (submission_id,)).fetchall(); con.close(); return [dict(r) for r in rows]
+
+def dispatched_request_ids() -> set:
+    con = connect(); rows = con.execute("SELECT DISTINCT s.request_id FROM dispatches d JOIN submissions s ON s.id=d.submission_id").fetchall(); con.close(); return {r[0] for r in rows}

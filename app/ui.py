@@ -13,8 +13,8 @@ CSS = f"""
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard-dynamic-subset.min.css');
 html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"], .stMarkdown, p, li, label, input, textarea, button, table {{
   font-family: Pretendard, "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif !important; }}
-#MainMenu, footer, [data-testid="stStatusWidget"], [data-testid="stToolbar"] {{visibility: hidden; height: 0;}}
-header[data-testid="stHeader"] {{background: transparent; height: 0;}}
+#MainMenu, footer, [data-testid="stToolbarActions"], [data-testid="stMainMenu"] {{visibility: hidden; height: 0;}}   /* 사이드바 여는 버튼(stToolbar 안)과 실행 중 표시는 살린다 */
+header[data-testid="stHeader"] {{background: transparent;}}
 .block-container {{padding: 1.6rem 2.4rem 4rem; max-width: 1180px;}}
 html {{font-size: 16px;}}
 p, li, label, .stMarkdown {{line-height: 1.6; color: {TEXT};}}
@@ -143,3 +143,15 @@ def ai_banner(on_click_settings) -> None:
     c1, c2 = st.columns([6, 1], vertical_alignment="center")
     c1.warning("**AI가 연결되지 않았습니다.** 지금은 규칙 기반으로만 동작해 요구서 읽기·초안·후속 질문의 정확도가 낮습니다. 설정에서 API 키를 넣으면 바로 전환됩니다.", icon=":material/link_off:")
     if c2.button("설정으로", type="primary", width="stretch", key="banner_settings"): on_click_settings()
+
+
+import re as _re, html as _html
+def esc(x) -> str:
+    """HTML로 그리는 글에 넣는 값(요구서·정의·기관명 등 외부 문자열)은 반드시 이걸로 감싼다."""
+    return _html.escape("" if x is None else str(x), quote=True)
+
+def safe_md(text: str) -> str:
+    """모델·외부 문서에서 온 글을 마크다운으로 보일 때: 이미지 문법(브라우저가 외부 주소를 자동 요청 → 데이터 유출 경로)과 HTML 태그를 무력화한다."""
+    t = "" if text is None else str(text)
+    t = _re.sub(r"!\[", "[", t)
+    return t.replace("<", "&lt;").replace(">", "&gt;")

@@ -75,22 +75,35 @@ def model_label() -> str:
     cands = _provider().default_models
     return pref or _state().get("resolved") or (cands[0] if cands else "-")
 
-def estimate_cost(model: str | None, input_tokens, output_tokens) -> float | None:
-    """공급자 단가표에 있는 모델만 추정(USD). 없으면 None."""
+CACHE_WRITE_RATE, CACHE_READ_RATE = 1.25, 0.10     # Anthropic 프롬프트 캐시: 쓰기는 입력 단가의 1.25배(5분 기준), 읽기는 0.1배
+
+def estimate_cost(model: str | None, input_tokens, output_tokens, cache_read=0, cache_write=0) -> float | None:
+    """공급자 단가표에 있는 모델만 추정(USD). 없으면 None. input_tokens는 캐시되지 않은 입력(Anthropic usage 그대로)."""
     p = _provider().pricing.get(model or "")
     if not p or input_tokens is None or output_tokens is None: return None
-    return round(input_tokens / 1e6 * p[0] + output_tokens / 1e6 * p[1], 6)
+    return round((input_tokens + (cache_write or 0) * CACHE_WRITE_RATE + (cache_read or 0) * CACHE_READ_RATE) / 1e6 * p[0] + output_tokens / 1e6 * p[1], 6)
+
+# 용도별 추론 강도: 정형 작업은 낮게(빠르고 싸게). 설정 칸에 값이 있으면 그것이 우선. 요구서 추출은 정확도 검증(check_llm.py) 전까지 모델 기본값.
+EFFORT_BY_PURPOSE = {"지표 분류": "low", "표 열 매핑 제안": "low", "연결 테스트": "low"}
+
+def _effort_for(purpose: str) -> str | None:
+    return (_cfg().get("effort") or "").strip() or EFFORT_BY_PURPOSE.get((purpose or "").replace("(잘림 재시도)", "").replace("(재시도)", "").strip())
 
 def _record(msg, model: str, t0: float, purpose: str, structured: bool) -> str:
     text = "".join(getattr(b, "text", "") for b in msg.content)
     usage = getattr(msg, "usage", None)
     inp, out = getattr(usage, "input_tokens", None), getattr(usage, "output_tokens", None)
+    c_read, c_write = getattr(usage, "cache_read_input_tokens", None) or 0, getattr(usage, "cache_creation_input_tokens", None) or 0
     info = {"when": dt.datetime.now().strftime("%H:%M:%S"), "purpose": purpose, "model": model,
-            "latency_s": round(time.time() - t0, 2), "input_tokens": inp, "output_tokens": out,
+            "latency_s": round(time.time() - t0, 2), "input_tokens": inp, "output_tokens": out, "cache_read_tokens": c_read, "cache_write_tokens": c_write,
             "structured": structured, "stop_reason": getattr(msg, "stop_reason", None),
-            "cost_usd": estimate_cost(model, inp, out)}
+            "cost_usd": estimate_cost(model, inp, out, c_read, c_write)}
     LAST.clear(); LAST.update(info); log().append(info)
     return text
+
+TOOL_LABELS: dict[str, str] = {}      # 도구 이름 → 화면에 보여 줄 우리말 단계명(agent·history_qa가 채운다)
+def tool_label(name: str) -> str: return TOOL_LABELS.get(name, name)
+RESULT_CHARS = 7600                   # 도구 결과를 모델에 넘길 때 글자 상한(넘으면 잘렸다고 알리고 범위를 좁히라고 안내)
 
 MAX_TOKENS_CAP = 32000          # 잘림 재시도 때 늘릴 수 있는 상한. 추론 모델(Opus 5.5·Fable)은 생각 토큰도 이 한도에 들어가므로 넉넉히 둔다(한도는 상한일 뿐 쓴 만큼만 과금)
 
@@ -125,21 +138,21 @@ def ask(prompt: str, system: str | None = None, max_tokens: int = DEFAULT_MAX_TO
         t0 = time.time()
         use_struct = schema is not None and model not in state["no_structured"]
         messages = [{"role": "user", "content": prompt}]
-        _notify(f"{purpose or '호출'} — {model} 호출 중 (출력 한도 {max_tokens:,} 토큰, 입력 약 {len(prompt) // 2:,} 토큰)…")
+        _notify(f"{purpose or '호출'} — AI가 읽고 쓰는 중…")
         try:
-            msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, schema=schema if use_struct else None)
+            msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, schema=schema if use_struct else None, effort=_effort_for(purpose))
         except Exception as e:
             if prov.is_not_found(e):                      # 모델명이 없음 → 다음 후보
                 last_err = e; continue
             # 이 모델(또는 SDK)이 구조화 출력을 모름 → 같은 모델로 텍스트 방식 재시도. 그 외 오류는 그대로 올림
             if use_struct and (isinstance(e, TypeError) or (prov.is_bad_request(e) and ("output_config" in str(e) or "format" in str(e)))):
                 state["no_structured"].add(model); t0 = time.time(); use_struct = False
-                msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, schema=None)
+                msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, schema=None, effort=_effort_for(purpose))
             else:
                 raise
         state["resolved"] = model
         text = _record(msg, model, t0, purpose, use_struct)
-        _notify(f"{purpose or '호출'} — {model} 응답 {LAST['latency_s']}초, 출력 {LAST.get('output_tokens') or '?'} 토큰")
+        _notify(f"{purpose or '호출'} — 응답 받음 ({LAST['latency_s']}초)")
         if getattr(msg, "stop_reason", None) == "max_tokens": raise Truncated(max_tokens, text)
         if getattr(msg, "stop_reason", None) == "refusal" and not text.strip(): raise Refused(model)
         return text
@@ -204,6 +217,7 @@ def usage_summary() -> dict:
     costs = [x.get("cost_usd") for x in L]
     return {"calls": n, "input_tokens": sum(x.get("input_tokens") or 0 for x in L),
             "output_tokens": sum(x.get("output_tokens") or 0 for x in L),
+            "cache_read_tokens": sum(x.get("cache_read_tokens") or 0 for x in L), "cache_write_tokens": sum(x.get("cache_write_tokens") or 0 for x in L),
             "avg_latency_s": round(sum(x.get("latency_s") or 0 for x in L) / n, 2) if n else None,
             "cost_usd": round(sum(c for c in costs if c is not None), 4) if n else 0.0,
             "cost_unknown_calls": sum(1 for c in costs if c is None),
@@ -225,9 +239,9 @@ def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handler
     trace, turns, last_err = [], 0, None
     while turns < max_turns:
         t0 = time.time()
-        _notify(f"{purpose} — {turns + 1}회차: {model}이(가) 어떤 기록을 조회할지 정하는 중…" if turns else f"{purpose} — {model}이(가) 질문을 읽고 조회할 기록을 정하는 중…")
+        _notify(f"{purpose} — {turns + 1}단계: 다음에 할 일을 정하는 중…" if turns else f"{purpose} — 요청을 읽고 무엇부터 할지 정하는 중…")
         try:
-            msg = prov.create_message(model=model, max_tokens=max_tokens, messages=list(messages), system=system, tools=tools)   # 호출 시점의 대화 스냅샷
+            msg = prov.create_message(model=model, max_tokens=max_tokens, messages=list(messages), system=system, tools=tools, cache=True, effort=_effort_for(purpose))   # 호출 시점의 대화 스냅샷. 도구 루프는 접두사 캐싱
         except Exception as e:
             if not prov.is_not_found(e): raise
             last_err = e
@@ -237,10 +251,14 @@ def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handler
         _record(msg, model, t0, purpose, False)
         uses = [b for b in msg.content if getattr(b, "type", "") == "tool_use"]
         messages.append({"role": "assistant", "content": msg.content})
+        if msg.stop_reason == "max_tokens" and uses:
+            # 출력 한도에서 잘린 도구 호출: 실행하지 않고 오류 결과를 붙여 대화 기록을 유효하게 둔다(결과 없는 tool_use가 남으면 다음 턴이 400으로 막힌다)
+            messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": u.id, "content": "(응답이 출력 한도에서 잘려 이 작업을 실행하지 못했습니다)", "is_error": True} for u in uses]})
+            return {"text": "한 번에 처리할 양이 너무 많아 답이 잘렸습니다. 요청을 나눠서 다시 말씀해 주세요.", "trace": trace, "turns": turns, "messages": messages}
         if msg.stop_reason != "tool_use" or not uses:
-            _notify(f"{purpose} — 조회 {len(trace)}건을 근거로 답을 정리함 ({time.time() - t0:.1f}초)")
+            _notify(f"{purpose} — 작업 {len(trace)}건을 바탕으로 답을 정리함 ({time.time() - t0:.1f}초)")
             text = "".join(getattr(b, "text", "") for b in msg.content).strip()
-            if msg.stop_reason == "refusal" and not text: text = f"(모델이 이 요청에 대한 답을 거절했습니다 — {model}의 안전 분류. 질문을 바꾸거나 설정에서 다른 모델을 고르세요.)"
+            if msg.stop_reason == "refusal" and not text: text = "AI가 이 요청에는 답하지 않았습니다(안전 분류). 개인정보가 들어 있지 않은지 확인하고 표현을 바꿔 다시 물어 주세요."
             elif msg.stop_reason == "max_tokens": text = (text + "\n\n(답이 출력 한도에서 잘렸습니다. 질문을 좁혀 다시 물어보세요.)").strip()
             return {"text": text, "trace": trace, "turns": turns, "messages": messages}
         results = []
@@ -252,17 +270,17 @@ def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handler
             except Exception as e:
                 out, err = {"error": f"{type(e).__name__}: {e}"}, True
             s = json.dumps(out, ensure_ascii=False, default=str)
-            if len(s) > 8000: s = s[:8000] + f" …(이하 생략, 총 {len(s)}자)"
+            if len(s) > RESULT_CHARS: s = s[:RESULT_CHARS] + f"\n…(잘림: 전체 {len(s):,}자 중 {RESULT_CHARS:,}자만 표시. 전체가 아니므로 '없음'으로 단정하지 말고, 지표·센터·기준일·검색어 인자로 범위를 좁혀 다시 조회하세요.)"
             trace.append({"tool": u.name, "input": u.input, "rows": len(out) if isinstance(out, list) else None, "result": out})
-            arg = ", ".join(f"{k}={v}" for k, v in (u.input or {}).items())[:80]
-            _notify(f"{purpose} — 조회 {u.name}({arg}) → " + ("오류" if err else (f"{len(out)}건" if isinstance(out, list) else "결과 받음")))
+            arg = ", ".join(f"{k}={v}" for k, v in (u.input or {}).items())[:60]
+            _notify(f"{purpose} — {tool_label(u.name)}" + (f"({arg})" if arg else "") + " → " + ("오류" if err else (f"{len(out)}건" if isinstance(out, list) else "완료")))
             if on_tool:
                 try: on_tool(u.name, u.input, out)
                 except Exception: pass
             results.append({"type": "tool_result", "tool_use_id": u.id, "content": s, "is_error": err})
         messages.append({"role": "user", "content": results})
-    messages.append({"role": "assistant", "content": [{"type": "text", "text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다.)"}]})
-    return {"text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다. 질문을 더 좁혀 주세요.)", "trace": trace, "turns": turns, "messages": messages}
+    messages.append({"role": "assistant", "content": [{"type": "text", "text": "(작업 단계 한도에 도달해 답을 마치지 못했습니다.)"}]})
+    return {"text": "한 번에 처리할 수 있는 단계 수를 넘었습니다. 요청을 나눠서 말씀해 주세요.", "trace": trace, "turns": turns, "messages": messages}
 
 # 하위 호환(설정 화면 문구 등에서 참조)
 CANDIDATES = providers.AnthropicProvider.default_models

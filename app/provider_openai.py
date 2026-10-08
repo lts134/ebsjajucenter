@@ -5,7 +5,7 @@
 Chat Completions 형식(messages[system|user|assistant(tool_calls)|tool], tools[{type:function}], response_format json_schema)으로 바꾸고,
 응답은 providers.SimpleMessage(TextBlock·ToolUseBlock, stop_reason, usage)로 되돌린다. 추론 모델(gpt-5 계열)은 temperature를 받지 않으므로 보내지 않는다."""
 from __future__ import annotations
-import json, os
+import json, os, re, time
 import httpx
 from providers import Provider, SimpleMessage, SimpleUsage, TextBlock, ToolUseBlock, HttpError, iter_blocks, block_get, MAX_RETRIES
 
@@ -27,7 +27,12 @@ class OpenAIProvider(Provider):
     docs_url = "https://platform.openai.com"
     transport = None            # 테스트용 httpx 전송 계층 주입
 
-    def base(self) -> str: return (self.value("base_url") or DEFAULT_BASE).rstrip("/")
+    def base(self) -> str:
+        b = (self.value("base_url") or DEFAULT_BASE).rstrip("/")
+        # 공용 키(서버 환경변수)를 접속자가 바꾼 주소로 보내는 것을 막는다(키 유출 경로). 공용 키면 환경변수 주소나 기본 주소로만.
+        if self.from_env.get("api_key") and not self.from_env.get("base_url") and b != (os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE).rstrip("/"):
+            raise PermissionError("공용 API 키는 기본 주소로만 호출할 수 있습니다. 다른 주소를 쓰려면 설정 화면에 본인 키를 넣으세요.")
+        return b
 
     def _client(self, timeout: float) -> httpx.Client:
         return httpx.Client(base_url=self.base(), timeout=timeout, transport=self.transport,
@@ -85,20 +90,26 @@ class OpenAIProvider(Provider):
         for attempt in range(MAX_RETRIES + 1):
             try:
                 with self._client(timeout) as c: r = c.post(path, json=body)
-            except httpx.HTTPError as e:
+            except (httpx.ConnectError, httpx.RemoteProtocolError) as e:        # 연결 자체가 안 된 경우만 재시도. 시간 초과(이미 생성·과금됐을 수 있음)는 재전송하지 않는다
                 last = e
-                if attempt < MAX_RETRIES: continue
+                if attempt < MAX_RETRIES: time.sleep(0.5 * 2 ** attempt); continue
                 raise
             if r.status_code < 400: return r.json()
             try: msg = (r.json().get("error") or {}).get("message") or r.text
             except ValueError: msg = r.text
             err = HttpError(r.status_code, str(msg)[:500], r.text[:2000])
-            if r.status_code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES: last = err; continue
+            if r.status_code in (429, 500, 502, 503, 504) and attempt < MAX_RETRIES:
+                last = err
+                try: wait = float(r.headers.get("retry-after") or 0)
+                except ValueError: wait = 0
+                time.sleep(min(30, wait or 0.5 * 2 ** attempt)); continue       # 지수 백오프, Retry-After 우선
             raise err
         raise last  # pragma: no cover
 
-    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None):
+    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None, cache=False, effort=None):
         body = {"model": model, "messages": self.to_messages(messages, system), "max_completion_tokens": int(max_tokens)}
+        eff = (effort or "").strip().lower()
+        if eff and re.match(r"(gpt-5|o[134])", model or ""): body["reasoning_effort"] = {"xhigh": "high", "max": "high"}.get(eff, eff)   # 추론 모델만 받는 값. 캐싱은 OpenAI가 자동
         if tools: body["tools"] = self.to_tools(tools); body["tool_choice"] = "auto"
         if schema is not None:
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema, "strict": False}}
@@ -125,6 +136,7 @@ class OpenAIProvider(Provider):
             if e.status == 429: return "호출 한도 또는 잔액 초과(429). 플랫폼 콘솔의 사용량·결제를 확인하고 잠시 후 다시 시도하세요."
             if e.status == 400: return f"요청 형식 오류(400): {e.message[:200]}"
             if e.status >= 500: return f"OpenAI 서버 오류({e.status}). 잠시 후 다시 시도하세요."
+        if isinstance(e, PermissionError): return str(e)
         if isinstance(e, httpx.TimeoutException): return "응답 시간 초과. 네트워크 상태를 확인하거나 더 빠른 모델(예: gpt-5-mini)을 고르세요."
         if isinstance(e, httpx.HTTPError): return f"API 서버에 연결하지 못했습니다({self.base()}). 사내망 프록시·방화벽 허용 여부를 확인하세요."
         return None

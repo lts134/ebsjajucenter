@@ -83,6 +83,6 @@ TOOLS = [
     {"name": "list_docs", "description": "등록된 참고 문서 목록(제목·쪽수·등록일).", "input_schema": {"type": "object", "properties": {}}},
 ]
 HANDLERS = {
-    "search_docs": lambda query, k=5: {"hits": search(query, int(k or 5)), "note": "문구는 원문 그대로. 답에는 문서 이름과 쪽을 함께 적는다."},
+    "search_docs": lambda query, k=5: {"hits": [{"doc": h["doc"], "page": h["page"], "text": h["text"]} for h in search(query, min(int(k or 5), 8))], "note": "문구는 원문 그대로. 답에는 문서 이름과 쪽을 함께 적는다."},
     "list_docs": lambda: [{k: d[k] for k in ("id", "title", "pages", "uploaded_at", "note")} for d in db.list_ref_docs()],
 }

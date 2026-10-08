@@ -23,6 +23,10 @@ REPO="cloud-run-source-deploy"
 gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 || gcloud artifacts repositories create "$REPO" --repository-format=docker --location="$REGION"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/$SERVICE:$(date +%Y%m%d-%H%M%S)"
 gcloud builds submit --tag "$IMAGE" --region "$REGION" --timeout 1200 .
+# 접속 비밀번호 없이 공개 URL로 뜨는 일을 막는다: 서비스가 처음이거나 기존 서비스에 APP_PASSWORD가 없으면 반드시 받아야 한다
+if [ -z "${APP_PASSWORD:-}" ] && ! gcloud run services describe "$SERVICE" --region "$REGION" --format="value(spec.template.spec.containers[0].env)" 2>/dev/null | grep -q "APP_PASSWORD"; then
+  echo "APP_PASSWORD가 없습니다. 외부 URL이므로 접속 비밀번호(10자 이상, 영문·숫자)를 APP_PASSWORD=... 로 주세요." >&2; exit 1
+fi
 ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db"
 [ -n "${APP_PASSWORD:-}" ] && ENVS="$ENVS,APP_PASSWORD=$APP_PASSWORD"          # 생략하면 기존 비밀번호 유지
 [ -n "${LLM_PROVIDER:-}" ] && ENVS="$ENVS,LLM_PROVIDER=$LLM_PROVIDER"

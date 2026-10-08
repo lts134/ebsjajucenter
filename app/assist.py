@@ -5,6 +5,11 @@ import json, re
 import pandas as pd
 import llm, db, pii
 
+def _count_by(keys: list[str]) -> dict:
+    out = {}
+    for k in keys: out[k] = out.get(k, 0) + 1
+    return dict(sorted(out.items(), key=lambda x: -x[1])[:8])
+
 # ---------- 1) 차이 사유 후보 ----------
 def _parse_clue(clue: str) -> list[tuple[str, str, str]]:
     """'추출시점 변경(2026-07-03→2026-09-10); 원자료 버전 변경(출결 v1→출결 v2)' → [(필드, 전, 후)]"""
@@ -40,22 +45,29 @@ def reason_candidates(diff_rows: list[dict]) -> tuple[dict, str]:
     for r in diff_rows: past_by_ind.setdefault(r["indicator"], db.all_reasons(r["indicator"], limit=20))
     rule = {(r["indicator"], r["center"], r["base_date"]): reason_candidates_rule(r, past_by_ind[r["indicator"]]) for r in diff_rows}
     if not llm.available() or not diff_rows: return rule, "규칙(단서·과거 사유)"
+    # 이미 사유 기록이 있는 행은 모델에 묻지 않는다(기록을 그대로 쓴다). 나머지는 (지표, 단서)로 묶어 묶음마다 한 번만 묻고 코드로 행에 펼친다 — 같은 단서가 48센터에 반복되는 경우 출력이 수십 배 준다.
+    todo = [r for r in diff_rows if not db.reasons_for(r["indicator"], r["center"], r["base_date"])]
+    groups: dict[tuple, list] = {}
+    for r in todo: groups.setdefault((r["indicator"], str(r.get("단서") or "")), []).append(r)
+    if not groups: return rule, "규칙(단서·과거 사유) — 전 행 사유 기록 있음"
     try:
-        payload = {"차이 행": [{"key": f"{r['indicator']}|{r['center']}|{r['base_date']}", "과거값": r.get("old_value"), "신규값": r.get("new_value"), "단서": r.get("단서")} for r in diff_rows],
-                   "과거 입력 사유": [{"지표": p["indicator"], "센터": p["center"], "기준일": p["base_date"], "사유": p["reason"], "입력일": (p.get("created_at") or "")[:10], "요청 주체": p.get("requester")} for ps in past_by_ind.values() for p in ps][:30]}
+        glist = list(groups.items())
+        payload = {"묶음": [{"g": i, "지표": ind, "대조 단서": clue, "해당 센터 수": len(rows), "센터": [r["center"] for r in rows][:5]} for i, ((ind, clue), rows) in enumerate(glist)],
+                   "같은 지표의 과거 입력 사유(같은 센터이거나 같은 단서일 때만 재사용)": pii.redact_obj([{"지표": p["indicator"], "센터": p["center"], "기준일": p["base_date"], "사유": p["reason"], "입력일": (p.get("created_at") or "")[:10]} for ps in past_by_ind.values() for p in ps][:12])}
         schema = {"type": "object", "additionalProperties": False, "required": ["rows"],
-                  "properties": {"rows": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["key", "candidates"],
-                     "properties": {"key": {"type": "string"}, "candidates": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["문구", "근거"],
+                  "properties": {"rows": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["g", "candidates"],
+                     "properties": {"g": {"type": "integer"}, "candidates": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["문구", "근거"],
                         "properties": {"문구": {"type": "string"}, "근거": {"type": "string"}}}}}}}}}
-        res = llm.ask_json("각 차이 행에 대해 사유 문구 후보를 1~3개씩 제안하세요. 근거에는 '대조 단서: …' 또는 '과거 입력 사유(입력일, 요청 주체, 센터)'를 적습니다.\n" + json.dumps(payload, ensure_ascii=False, default=str),
-                           SYSTEM_REASON, 8000, purpose="사유 후보", schema=schema)
+        res = llm.ask_json("각 묶음(g)에 대해 사유 문구 후보를 1~3개씩 제안하세요(센터 이름·값은 문구에 넣지 않음). 근거에는 '대조 단서: …' 또는 '과거 입력 사유(입력일, 센터)'를 적습니다. 단서가 '근거 필드 동일'이면 '[확인 필요]'를 붙인 후보 하나만 냅니다.\n" + json.dumps(payload, ensure_ascii=False, default=str),
+                           SYSTEM_REASON, 4000, purpose="사유 후보", schema=schema)
         out = {}
         for row in res.get("rows", []):
-            parts = str(row.get("key", "")).split("|")
-            if len(parts) == 3 and tuple(parts) in rule and row.get("candidates"):
-                out[tuple(parts)] = [c for c in row["candidates"] if c.get("문구")][:3]
+            g = row.get("g")
+            if isinstance(g, int) and 0 <= g < len(glist) and row.get("candidates"):
+                cs = [c for c in row["candidates"] if c.get("문구")][:3]
+                for r in glist[g][1]: out[(r["indicator"], r["center"], r["base_date"])] = cs
         for k in rule: out.setdefault(k, rule[k])
-        return out, f"Claude({llm.model_label()}) + 규칙"
+        return out, f"Claude({llm.model_label()}) + 규칙 · 묶음 {len(glist)}개"
     except Exception as e:
         for v in rule.values(): v.append({"문구": "", "근거": f"(Claude 후보 실패: {type(e).__name__}) 규칙 후보만 표시"})
         return rule, "규칙(Claude 오류로 대체)"
@@ -99,10 +111,12 @@ def foresee(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict, c
         payload = {"요구": pii.redact_obj({k: req.get(k) for k in ("requester", "received_date", "due_date", "title")}),
                    "요구 항목": pii.redact_obj(list(dict.fromkeys(it.get("item_text") for it in items if it.get("item_text")))),   # 중복 원문 제거 + 연락처 마스킹
                    "확정 수치 요약": {"지표": sorted({v for v in values["indicator"]}) if len(values) else [], "센터 수": int(values["center"].nunique()) if len(values) else 0, "기준일": sorted({v for v in values["base_date"]}) if len(values) else []},
-                   "대조 결과(코드)": [{"센터": r.get("center") or r.get("센터"), "판정": r.get("판정"), "단서": r.get("단서")} for r in (checklist or []) if str(r.get("판정")) == "차이"],
-                   "담당자 입력 사유": {" ".join(k): v for k, v in reasons.items() if v},
+                   "대조 결과(코드)": {"차이 건수": sum(1 for r in (checklist or []) if str(r.get("판정")) == "차이"), "단서별 건수": _count_by([str(r.get("단서") or "") for r in (checklist or []) if str(r.get("판정")) == "차이"]),
+                                   "차이 센터(최대 10)": [r.get("center") or r.get("센터") for r in (checklist or []) if str(r.get("판정")) == "차이"][:10]},
+                   "담당자 입력 사유": pii.redact_obj({" ".join(k): v for k, v in reasons.items() if v}),
                    "같은 지표·기준일을 다른 기관에 제출한 이력": [dict(zip(("지표", "기준일", "요청 주체", "제출일"), h, strict=True)) for h in hist_summary][:20],
-                   "초안": draft}
+                   "오늘": str(__import__("datetime").date.today()),
+                   "초안 본문": pii.redact_obj((draft or {}).get("본문", ""))}
         schema = {"type": "object", "additionalProperties": False, "required": ["questions"],
                   "properties": {"questions": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["질문", "근거", "준비할 자료", "가능성"],
                      "properties": {"질문": {"type": "string"}, "근거": {"type": "string"}, "준비할 자료": {"type": "string"}, "가능성": {"type": "string", "enum": ["높음", "중간", "낮음"]}}}}}}

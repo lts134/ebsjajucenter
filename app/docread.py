@@ -124,7 +124,15 @@ def read(name: str, data: bytes) -> str:
     if n.endswith(".hwpx"): return _hwpx_text(data)
     if n.endswith(".pdf"): return _pdf_text(data)
     if n.endswith(".docx"): return _docx_text(data)
-    return data.decode("utf-8", errors="ignore")
+    return decode_text(data)
+
+def decode_text(data: bytes) -> str:
+    """txt 인코딩 판별: UTF-16 BOM → utf-8-sig → cp949(한글 Windows 기본) → euc-kr → utf-8(대체 문자)."""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"): return data.decode("utf-16", errors="ignore")
+    for enc in ("utf-8-sig", "cp949", "euc-kr"):
+        try: return data.decode(enc)
+        except UnicodeDecodeError: continue
+    return data.decode("utf-8", errors="replace")
 
 def tables(name: str, data: bytes) -> list[list[list]] | None:
     """문서 형식별 표 격자. hwp·hwpx·docx는 표 개체에서 직접, 그 외(pdf·txt)는 None(본문 텍스트에서 찾아야 함)."""

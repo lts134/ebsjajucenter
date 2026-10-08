@@ -95,7 +95,7 @@ def test_progress_callback_receives_call_stages(monkeypatch):
     seen = []; llm.set_progress(seen.append)
     try: llm.ask_json("p", purpose="요구서 추출")
     finally: llm.set_progress(None)
-    assert any("호출 중" in m and "요구서 추출" in m for m in seen) and any("응답" in m for m in seen)
+    assert any("읽고 쓰는 중" in m and "요구서 추출" in m for m in seen) and any("응답 받음" in m for m in seen)
 
 def test_timeout_scales_with_max_tokens():
     import providers

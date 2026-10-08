@@ -10,7 +10,9 @@
         pricing: dict[str, (입력$/1M, 출력$/1M)]
         def __init__(self, cfg: dict)  # fields의 key → 값
         def ready(self) -> bool        # 호출에 필요한 값이 다 있는가(없으면 앱은 규칙 기반으로 동작)
-        def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None) -> 응답
+        def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None, cache=False, effort=None) -> 응답
+            # cache: 여러 턴이 이어지는 호출(도구 루프)에서 접두사(도구·시스템·이전 대화) 캐싱을 켜 달라는 뜻. 지원하지 않으면 무시.
+            # effort: 추론 강도(low·medium·high…). 지원하지 않으면 무시.
         def list_models(self) -> list[dict]   # [{"id","name","created"}]
         def is_not_found(self, e) -> bool     # 모델 없음 → 다음 후보로 넘어가도 되는 오류
         def is_bad_request(self, e) -> bool   # 요청 형식 거부(구조화 출력 미지원 판단에 사용)
@@ -91,6 +93,7 @@ class Provider:
 
     def __init__(self, cfg: dict | None = None):
         self.cfg = {f["key"]: (cfg or {}).get(f["key"]) or os.environ.get(f.get("env", ""), "") for f in self.fields}
+        self.from_env = {f["key"]: not (cfg or {}).get(f["key"]) and bool(os.environ.get(f.get("env", ""), "")) for f in self.fields}   # 어느 값이 서버 환경변수(공용)에서 왔나
 
     def value(self, key: str) -> str:
         return (self.cfg.get(key) or "").strip()
@@ -98,7 +101,7 @@ class Provider:
     def ready(self) -> bool:
         return all(self.value(f["key"]) for f in self.fields if f.get("required"))
 
-    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None):
+    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None, cache=False, effort=None):
         raise NotImplementedError
 
     def list_models(self) -> list[dict]:
@@ -148,25 +151,35 @@ class AnthropicProvider(Provider):
         return float(min(900, TIMEOUT_S + max_tokens / 1000 * 20))
 
     @staticmethod
+    def supports_effort(model: str) -> bool:
+        """output_config.effort를 받는 모델(4.6 세대 이후). Haiku 4.5·Sonnet 4.5 등 구형은 400을 내므로 보내지 않는다."""
+        return bool(re.match(r"claude-(opus-4-[678]|opus-5|sonnet-4-6|sonnet-5|haiku-5|fable|mythos)", model or ""))
+
+    @staticmethod
     def wants_fallback(model: str) -> bool:
         """서버 측 거절 대체(fallbacks)를 붙일 모델: Opus 5.x · Sonnet 5.5 · Fable 5.x. Haiku 5.5·4.x 세대는 지원하지 않는다."""
         return bool(re.match(r"claude-(opus-5|sonnet-5-5|fable-5)", model or ""))
 
-    def request_kwargs(self, *, model, max_tokens, messages, system=None, tools=None, schema=None) -> dict:
-        """SDK에 넘길 인자(테스트에서 그대로 검사). 추론 강도(effort)는 설정에 있을 때만 output_config에 넣는다(지원 안 하는 구형 모델에 보내면 400)."""
+    def request_kwargs(self, *, model, max_tokens, messages, system=None, tools=None, schema=None, cache=False, effort=None) -> dict:
+        """SDK에 넘길 인자(테스트에서 그대로 검사).
+        - cache=True(도구 루프): 시스템 프롬프트 블록에 1시간 캐시 표식(도구 정의 → 시스템 순으로 렌더링되므로 도구까지 함께 캐시, 모든 접속자가 공유)과
+          요청 상위 cache_control(마지막 블록에 자동 표식 → 이전 대화·도구 결과가 다음 회차에서 10% 가격으로 읽힘). 단발 호출은 재사용이 없어 끄는 것이 싸다.
+        - effort: 호출 쪽이 정한 용도별 강도 > 설정 칸 값. 지원하는 모델에만 보낸다."""
         kw = dict(model=model, max_tokens=max_tokens, messages=messages, timeout=self.timeout_for(max_tokens))
-        if system: kw["system"] = system
+        if system: kw["system"] = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral", "ttl": "1h"}}] if cache else system
         if tools: kw["tools"] = tools
+        if cache: kw["cache_control"] = {"type": "ephemeral"}
         oc = {}
         if schema is not None: oc["format"] = {"type": "json_schema", "schema": schema}
-        if self.value("effort"): oc["effort"] = self.value("effort").lower()
+        eff = (effort or self.value("effort") or "").strip().lower()
+        if eff and self.supports_effort(model): oc["effort"] = eff
         if oc: kw["output_config"] = oc
         return kw
 
-    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None):
+    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None, cache=False, effort=None):
         import anthropic
         client = self._client()
-        kw = self.request_kwargs(model=model, max_tokens=max_tokens, messages=messages, system=system, tools=tools, schema=schema)
+        kw = self.request_kwargs(model=model, max_tokens=max_tokens, messages=messages, system=system, tools=tools, schema=schema, cache=cache, effort=effort)
         if self.wants_fallback(model):
             try:
                 return client.beta.messages.create(**kw, betas=[self.FALLBACK_BETA], fallbacks="default", **self._ws_kwargs(client.beta.messages.create))

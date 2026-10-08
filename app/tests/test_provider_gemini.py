@@ -42,7 +42,7 @@ def test_contents_translation_maps_tool_names():
 
 def test_response_translation():
     m = GeminiProvider.from_response(gen([{"text": "생각", "thought": True}, {"functionCall": {"name": "lookup", "args": {"q": 1}}}], usage=(50, 10, 30))[1])
-    assert m.stop_reason == "tool_use" and m.content[0].type == "tool_use" and m.content[0].name == "lookup" and m.content[0].id == "call_1" and m.usage.output_tokens == 40
+    assert m.stop_reason == "tool_use" and m.content[0].type == "tool_use" and m.content[0].name == "lookup" and m.content[0].id.startswith("call_") and len(m.content[0].id) > 8 and m.usage.output_tokens == 40
     assert GeminiProvider.from_response(gen([{"text": "..."}], "MAX_TOKENS")[1]).stop_reason == "max_tokens"
     assert GeminiProvider.from_response(gen([], "SAFETY")[1]).stop_reason == "refusal"
     assert GeminiProvider.from_response((200, {"promptFeedback": {"blockReason": "SAFETY"}})[1]).stop_reason == "refusal"

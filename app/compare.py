@@ -134,7 +134,9 @@ def spreadsheetml_sheets(data: bytes) -> list[tuple[str, list[list]]]:
                     while len(cells) < c_i - 1:
                         col = len(cells)
                         if col in pending:
-                            left, val = pending[col]; cells.append(val); pending[col] = (left - 1, val) if left - 1 > 0 else pending.pop(col) and None
+                            left, val = pending[col]; cells.append(val)
+                            if left - 1 > 0: pending[col] = (left - 1, val)
+                            else: pending.pop(col)                                  # 세로 병합이 끝나면 지운다(None을 다시 넣으면 다음 행에서 터진다)
                         else: cells.append(None)
                     d = cell.find(q("Data")); val = ("".join(d.itertext()).strip() if d is not None else None) or None
                     across = int(cell.get(q("MergeAcross")) or 0); down = int(cell.get(q("MergeDown")) or 0)
@@ -264,15 +266,18 @@ def compare(new_df: pd.DataFrame, old_df: pd.DataFrame, tol: float = 0.0) -> pd.
         for c in ["source_file", "source_sheet", "source_row"]:
             if c not in d.columns: d[c] = None
     EXTRA = ["value", "definition", "calc_period", "extract_date", "source_version", "source_file", "source_row"]
-    n = new_df[KEY + EXTRA].rename(columns={c: f"new_{c}" for c in EXTRA})
-    o = old_df[KEY + EXTRA].rename(columns={c: f"old_{c}" for c in EXTRA})
-    m = n.merge(o, on=KEY, how="outer", indicator=True)
+    import db as _db
+    n = new_df[KEY + EXTRA].rename(columns={c: f"new_{c}" for c in EXTRA}); n["_ck"] = n["center"].map(_db.center_key)
+    o = old_df[KEY + EXTRA].rename(columns={c: f"old_{c}" for c in EXTRA}); o["_ck"] = o["center"].map(_db.center_key)
+    # 센터 이름은 공백·기호·EBS 접두를 무시한 키로 맞춘다('EBS 계룡 자기주도학습센터' = 'EBS계룡자기주도학습센터'). 표시 이름은 이번 값 쪽 표기.
+    m = n.merge(o.rename(columns={"center": "_old_center"}), on=["indicator", "_ck", "base_date"], how="outer", indicator=True)
+    m["center"] = m["center"].where(m["center"].notna(), m["_old_center"]); m = m.drop(columns=["_old_center", "_ck"])
     m["diff"] = m["new_value"] - m["old_value"]
     def judge(r):
         if r["_merge"] == "left_only": return "과거 제출값 없음"
         if r["_merge"] == "right_only": return "신규 집계값 없음"
         if pd.isna(r["diff"]): return "값 누락"
-        return "차이" if abs(r["diff"]) > tol else "일치"
+        return "차이" if abs(r["diff"]) > tol + 1e-9 else "일치"                 # 부동소수 오차(67.9-67.8 = 0.1000…0085)로 경계값이 '차이'가 되지 않게
     m["판정"] = m.apply(judge, axis=1)
     # 차이의 단서: 근거 필드가 다르면 표시
     def clue(r):

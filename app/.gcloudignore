@@ -1,0 +1,13 @@
+.git
+.gitignore
+docs/*.mp4
+docs/*.docx
+docs/*.pdf
+docs/*.pptx
+docs/img
+dist
+tests
+storage
+__pycache__
+*.pyc
+.pytest_cache
