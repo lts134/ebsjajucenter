@@ -180,3 +180,37 @@ def test_sparse_note_column_is_not_center():
     rows = [["연도", "세부항목", "편성액", "비고"], [2025, "인건비", 100, None], [2025, "운영비", 50, "이월"], [2026, "인건비", 120, None], [2026, "운영비", 60, None]]
     info = tabular.analyze(tabular.read_grid(xlsx(rows)))
     assert info.center_col == 1 and info.center_cols == [0, 1] and info.value_cols == [2]
+
+
+# ---- .xls 세 가지: 구형 바이너리(xlrd), 이름만 .xls인 HTML 표, 탭 구분 텍스트 ----
+class _Up:
+    def __init__(s, name, data): s.name, s._d = name, data
+    def getvalue(s): return s._d
+
+LONG_ROWS = [["지표명", "센터명", "기준일", "값"], ["등원율", "센터A", "2026-06-30", 60.3], ["등원율", "센터B", "2026-06-30", 59.4]]
+
+def test_xls_binary_via_xlrd():
+    xlwt = pytest.importorskip("xlwt")
+    import io as _io
+    wb = xlwt.Workbook(encoding="utf-8"); ws = wb.add_sheet("월별")
+    for i, r in enumerate(LONG_ROWS):
+        for j, v in enumerate(r): ws.write(i, j, v)
+    buf = _io.BytesIO(); wb.save(buf); data = buf.getvalue()
+    up = _Up("센터별월간출결_261008.xls", data)
+    assert compare.sheet_kind(up.name, data) == "xls" and compare.list_sheets(up) == ["월별"]
+    df = compare.load_values(up); assert len(df) == 2 and df["value"].tolist() == [60.3, 59.4] and df["source_sheet"].iloc[0] == "월별"
+
+def test_xls_actually_html_table_cp949():
+    html = "<html><body><table><tr><td>지표명</td><td>센터명</td><td>기준일</td><td>값</td></tr>" + "".join(
+        f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>" for r in LONG_ROWS[1:]) + "</table></body></html>"
+    data = html.encode("cp949"); up = _Up("월별관리인원_261008.xls", data)
+    assert compare.sheet_kind(up.name, data) == "html" and compare.list_sheets(up) == []      # 표가 하나면 시트 선택 없음
+    df = compare.load_values(up); assert len(df) == 2 and df["center"].tolist() == ["센터A", "센터B"]
+    two = (html.replace("</table>", "</table><table><tr><td>a</td></tr></table>")).encode("cp949")
+    assert compare.list_sheets(_Up("x.xls", two)) == ["표 1", "표 2"]
+    g = tabular.read_grid(_Up("x.xls", two), "표 2"); assert g.rows[0][0] == "a" and g.source_sheet == "표 2"
+
+def test_xls_actually_tab_text():
+    data = "\n".join("\t".join(str(v) for v in r) for r in LONG_ROWS).encode("cp949"); up = _Up("월별상담횟수_261008.xls", data)
+    assert compare.sheet_kind(up.name, data) == "text" and compare.list_sheets(up) == []
+    df = compare.load_values(up); assert len(df) == 2 and df["value"].tolist() == [60.3, 59.4]

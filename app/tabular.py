@@ -9,7 +9,7 @@
 
 원칙: 열 매핑은 규칙으로 추정하고(선택: Claude가 제안), 담당자가 화면에서 확정한다. 값을 계산하거나 고치지 않는다."""
 from __future__ import annotations
-import io, os, re
+import os, re
 from dataclasses import dataclass, field
 import pandas as pd
 import compare
@@ -62,10 +62,16 @@ def read_grid(file, sheet: str | int | None = None) -> Grid:
     """엑셀/CSV를 머리글 해석 없이(header=None) 셀 격자로 읽는다. 빈 행도 유지해 행 번호가 맞게 한다."""
     name = str(getattr(file, "name", file))
     data = compare._bytes(file)
-    if name.lower().endswith((".xlsx", ".xls", ".xlsm")):
-        xl = pd.ExcelFile(io.BytesIO(data))
+    kind = compare.sheet_kind(name, data) if name.lower().endswith((".xlsx", ".xls", ".xlsm", ".csv", ".txt")) else "text"
+    if kind in ("xlsx", "xls"):
+        xl = compare.excel_file(data, kind)
         sheet_name = sheet if sheet is not None else xl.sheet_names[0]
         df = xl.parse(sheet_name, header=None)
+    elif kind == "html":                                  # 이름만 .xls인 HTML 표(사내 시스템 내려받기)
+        tables = compare.html_tables(data)
+        idx = (int(str(sheet).split()[-1]) - 1) if isinstance(sheet, str) and sheet.startswith("표 ") else (sheet if isinstance(sheet, int) else 0)
+        if not tables: raise ValueError("파일 안에 표가 없습니다.")
+        df, sheet_name = tables[idx], (f"표 {idx + 1}" if len(tables) > 1 else "")
     else:
         df, sheet_name = compare._read_csv(data, header=None), ""
     rows = [[None if is_blank(v) else v for v in r] for r in df.itertuples(index=False, name=None)]

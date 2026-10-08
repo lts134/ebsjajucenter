@@ -13,16 +13,52 @@ def _bytes(file) -> bytes:
     if hasattr(file, "getvalue"): return file.getvalue()
     return Path(str(file)).read_bytes()
 
+XLS_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+def sheet_kind(name: str, data: bytes) -> str:
+    """파일 이름이 아니라 내용으로 종류를 판별한다. 'xlsx' | 'xls'(구형 바이너리) | 'html'(이름만 .xls인 HTML 표 — 사내 시스템 내려받기에 흔함) | 'text'(CSV·탭 구분)."""
+    lower = name.lower()
+    if data[:4] == b"PK\x03\x04": return "xlsx"
+    if data[:8] == XLS_OLE_MAGIC: return "xls"
+    head = data[:6000].lower()
+    if b"<table" in head or b"<html" in head or b"<body" in head: return "html"
+    if lower.endswith((".xlsx", ".xlsm")): return "xlsx"
+    return "text"                                   # 진짜 .xls는 항상 OLE 머리말이 있으므로, 없으면 텍스트(탭·쉼표 구분)로 본다
+
+def decode_text(data: bytes) -> str:
+    last = None
+    for enc in ENCODINGS:
+        try: return data.decode(enc)
+        except UnicodeDecodeError as e: last = e
+    raise ValueError(f"글자 인코딩을 판별하지 못했습니다(시도: {', '.join(ENCODINGS)}). ({last})")
+
+def html_tables(data: bytes) -> list[pd.DataFrame]:
+    """HTML 안의 <table>을 전부 격자(머리글 해석 없음)로."""
+    try: return pd.read_html(io.StringIO(decode_text(data)), header=None)
+    except ValueError as e:
+        raise ValueError(f"HTML에서 표를 찾지 못했습니다: {e}") from e
+
+def excel_file(data: bytes, kind: str) -> pd.ExcelFile:
+    if kind == "xls":
+        try: return pd.ExcelFile(io.BytesIO(data), engine="xlrd")
+        except ImportError as e: raise ValueError("구형 엑셀(.xls)을 읽으려면 xlrd 패키지가 필요합니다: pip install xlrd") from e
+    return pd.ExcelFile(io.BytesIO(data))
+
 def list_sheets(file) -> list[str]:
-    """엑셀 시트 이름 목록(CSV면 빈 리스트)."""
-    name = str(getattr(file, "name", file))
-    if not name.lower().endswith((".xlsx", ".xls", ".xlsm")): return []
-    return pd.ExcelFile(io.BytesIO(_bytes(file))).sheet_names
+    """시트 이름 목록. 엑셀은 시트명, HTML 표 파일은 '표 1…'(표가 둘 이상일 때), CSV·탭 구분은 빈 리스트."""
+    name = str(getattr(file, "name", file)); data = _bytes(file)
+    if not name.lower().endswith((".xlsx", ".xls", ".xlsm", ".csv", ".txt")): return []
+    kind = sheet_kind(name, data)
+    if kind in ("xlsx", "xls"): return excel_file(data, kind).sheet_names
+    if kind == "html":
+        n = len(html_tables(data)); return [f"표 {i + 1}" for i in range(n)] if n > 1 else []
+    return []
 
 def _read_csv(data: bytes, header="infer") -> pd.DataFrame:
     last = None
+    sep = "\t" if b"\t" in data[:4000] and data[:4000].count(b"\t") > data[:4000].count(b",") else ","   # 탭 구분 파일(이름만 .xls/.csv) 대응
     for enc in ENCODINGS:
-        try: return pd.read_csv(io.BytesIO(data), encoding=enc, skip_blank_lines=False, header=header)   # 빈 줄도 행으로 읽어 엑셀 행 번호를 맞춘다
+        try: return pd.read_csv(io.BytesIO(data), encoding=enc, sep=sep, skip_blank_lines=False, header=header)   # 빈 줄도 행으로 읽어 엑셀 행 번호를 맞춘다
         except UnicodeDecodeError as e: last = e
     raise ValueError(f"CSV 인코딩을 판별하지 못했습니다(시도: {', '.join(ENCODINGS)}). 엑셀에서 'CSV UTF-8'로 다시 저장하세요. ({last})")
 

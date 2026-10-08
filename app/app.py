@@ -155,9 +155,9 @@ def value_sources(key: str, what: str = "값", base_date_default: str | None = N
     """값 입력 한 곳: 엑셀·CSV·회신 문서(hwp·hwpx·docx·pdf)를 종류 구분 없이 여러 개 올리면 파일마다 읽어 하나로 모은다. 파일이 없으면 직접 입력.
     (df | None, 출처 이름) 반환. 시연 모드면 시연 파일 선택칸이 추가된다."""
     parts, names = [], []
-    ups = st.file_uploader(f"{what} 파일 — 엑셀·CSV, 회신 공문(hwp·hwpx·docx·pdf). 여러 개를 한 번에 올려도 됩니다",
-                           type=["xlsx", "xlsm", "csv", "hwp", "hwpx", "docx", "pdf"], accept_multiple_files=True, key=f"{key}_files",
-                           help="긴 형식(지표명·센터명·기준일·값)은 그대로, 실적표 서식(제목 행·병합 머리글·합계 행)은 열 확인을 거쳐 읽습니다. 한글 HWP(5.0)는 자동 변환(암호·배포용 문서 제외). 올린 파일마다 결과가 아래에 쌓이고, 전부 합쳐 저장됩니다.")
+    ups = st.file_uploader(f"{what} 파일 — 엑셀(xlsx·xls)·CSV, 회신 공문(hwp·hwpx·docx·pdf). 여러 개를 한 번에 올려도 됩니다",
+                           type=["xlsx", "xls", "xlsm", "csv", "hwp", "hwpx", "docx", "pdf"], accept_multiple_files=True, key=f"{key}_files",
+                           help="긴 형식(지표명·센터명·기준일·값)은 그대로, 실적표 서식(제목 행·병합 머리글·합계 행)은 열 확인을 거쳐 읽습니다. 구형 엑셀(.xls)과 이름만 .xls인 시스템 내려받기(HTML 표·탭 구분)도 읽습니다. 한글 HWP(5.0)는 자동 변환(암호·배포용 문서 제외). 올린 파일마다 결과가 아래에 쌓이고, 전부 합쳐 저장됩니다.")
     if DEMO and demo_files:
         for pick in st.multiselect("시연 파일", demo_files, default=demo_files if len(demo_files) == 1 else None, format_func=lambda p: p.name, key=f"{key}_demo"):
             with st.container(border=True):

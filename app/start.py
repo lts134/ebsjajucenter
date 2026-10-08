@@ -13,6 +13,8 @@ REQUIRED = {
     "pypdf": "pypdf>=4.0",
     "docx": "python-docx>=1.1",
     "hwpx": "python-hwpx>=6.7",       # HWP(구형식 5.0) → HWPX 변환
+    "xlrd": "xlrd>=2.0",              # 구형 엑셀(.xls)
+    "lxml": "lxml>=4.9",              # 이름만 .xls인 HTML 표
 }
 
 def missing_modules():
