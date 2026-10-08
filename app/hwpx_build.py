@@ -18,6 +18,8 @@ import pandas as pd
 from hwpx.document import HwpxDocument
 
 ITEM_RE = re.compile(r"^\s*(\d+)\s*[.)]\s*(.*)$")
+DROP_RE = re.compile(r"^\s*(붙임|첨부)\s*[:：]?\s*.*|^\s*끝\.?\s*$")
+BIG_TABLE_ROWS = 20     # 이보다 긴 표는 새 쪽에서 시작(한글이 표를 통째로 다음 쪽에 보내 앞 쪽이 비는 것을 피함)
 
 def split_body(body: str, n_items: int, item_texts: list[str] | None = None) -> tuple[list[str], dict[int, list[str]]]:
     """초안 본문을 항목 번호별 문단으로 나눈다. 번호 문단 앞의 글은 머리말(preamble)로. (머리말, {번호: [문단…]})
@@ -28,6 +30,7 @@ def split_body(body: str, n_items: int, item_texts: list[str] | None = None) -> 
     shift = 1 if (intro and nums == list(range(1, n_items + 2))) else 0
     pre, cur, by = [], None, {}
     for line in lines:
+        if DROP_RE.match(line): continue                                            # '붙임: … 1부. 끝.' 같은 줄은 양식이 따로 넣으므로 뺀다
         m = ITEM_RE.match(line)
         if m and 1 <= int(m.group(1)) - shift <= n_items:
             cur = int(m.group(1)) - shift; by.setdefault(cur, []); text = m.group(2).strip()
@@ -35,7 +38,8 @@ def split_body(body: str, n_items: int, item_texts: list[str] | None = None) -> 
             if text: by[cur].append(text)
             continue
         if m and shift and int(m.group(1)) == 1: pre.append(m.group(2).strip()); cur = None; continue
-        (by[cur] if cur else pre).append(line.strip())
+        text = m.group(2).strip() if (m and cur) else line.strip()                 # 항목 수를 넘는 번호('2.' '3.'를 문단 번호로 쓴 경우)는 번호만 뗀다
+        (by[cur] if cur else pre).append(text)
     return pre, by
 
 def _index_of(doc, p) -> int:
@@ -74,7 +78,6 @@ def _table_for(df: pd.DataFrame) -> tuple[list[str], list[list[str]]]:
 
 # ---- 표 치수(HWPUNIT = 1/7200인치, 1pt = 100) ----
 TEXT_W = 42520          # A4 본문 폭(210mm - 좌우 30mm씩)
-MAX_ROWS = 24           # 표 하나의 최대 자료 행 — 한 쪽(약 130mm)에 들어가게 나눠서 한글이 표를 통째로 다음 쪽에 보내거나 자르지 않게 한다
 CELL_MARGIN = 280       # 셀 좌우 안쪽 여백(≈1mm) — 열이 많은 표도 들어가게 기본값(510)보다 좁게
 CELL_PAD = CELL_MARGIN * 2
 
@@ -172,17 +175,20 @@ def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft
     for i, it in enumerate(items, 1):
         para(f"{i}. {it['item_text']}", bold12, before=10, after=2)
         para(confirm, small9, align="RIGHT", after=4)
-        for line in by.get(i, []): para(line, body10, indent=3, after=2)
+        for line in by.get(i, []): para(line, body10, align="LEFT", indent=3, after=2)      # 양쪽 정렬은 긴 낱말에서 글자 사이가 벌어져 왼쪽 정렬
         ind = it.get("indicator")
         sub = vals[vals["indicator"] == ind] if ind else vals.iloc[0:0]
         if ind and it.get("base_date") and len(sub) and it["base_date"] in set(sub["base_date"]): sub = sub[sub["base_date"] == it["base_date"]]
         if len(sub):
             hdr, rows = _table_for(sub)
             unit = _unit_for(ind); dates = sorted(sub["base_date"].dropna().unique().tolist())
-            para(f"□ {ind}" + (f" (단위: {unit})" if unit else "") + (f" — 기준일 {dates[0]} ~ {dates[-1]}, 각 월 말일" if len(dates) > 1 else ""), bold10, before=4, after=2)
+            cap = para(f"□ {ind}" + (f" (단위: {unit})" if unit else "") + (f" — 기준일 {dates[0]} ~ {dates[-1]}, 각 월 말일" if len(dates) > 1 else ""), bold10, before=4, after=2)
+            if len(rows) > BIG_TABLE_ROWS: doc.styles.apply_paragraph_format(paragraphs=[cap], page_break_before=True)   # 긴 표는 새 쪽에서(별지처럼)
             pt = _fit_pt(hdr, rows); ws = _col_widths(hdr, rows, pt)
-            for k in range(0, len(rows), MAX_ROWS):                                 # 긴 표는 쪽 크기로 나눠 넣는다(머리글 반복, 같은 열 폭·글자 크기)
-                _emit_table(doc, hdr, rows[k:k + MAX_ROWS], border, pt, ws)
+            per_page = max(1, 60000 // _line_h(pt) - 1)                            # 한 쪽에 들어가는 자료 행 수(본문 높이 약 60000 HWPUNIT ≈ 212mm 기준)
+            n_chunks = -(-len(rows) // per_page); size = -(-len(rows) // n_chunks)   # 조각 수를 정한 뒤 고르게 나눈다(45+3 대신 24+24)
+            for k in range(0, len(rows), size):                                     # 긴 표는 쪽 단위로 나눠 넣는다(머리글 반복, 같은 열 폭·글자 크기)
+                _emit_table(doc, hdr, rows[k:k + size], border, pt, ws)
             meta = sub.iloc[0]
             prov = [f"{k}: {meta.get(col)}" for k, col in (("정의", "definition"), ("집계기간", "calc_period"), ("추출시점", "extract_date"), ("원자료 버전", "source_version")) if meta.get(col) not in (None, "", "None") and not (isinstance(meta.get(col), float) and pd.isna(meta.get(col)))]
             if prov: para("※ 산출 근거 — " + " / ".join(prov), note9, after=2)

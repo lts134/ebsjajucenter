@@ -4,7 +4,9 @@ import hwpx_build, docread, tabular
 
 def test_split_body_by_item_numbers():
     pre, by = hwpx_build.split_body("안녕하십니까.\n1. 등원율은 표와 같습니다.\n  센터C는 보정.\n2) 학생 수는 [확인 필요]\n3. 범위 밖 번호", 2)
-    assert pre == ["안녕하십니까."] and by[1] == ["등원율은 표와 같습니다.", "센터C는 보정."] and by[2] == ["학생 수는 [확인 필요]", "3. 범위 밖 번호"]
+    assert pre == ["안녕하십니까."] and by[1] == ["등원율은 표와 같습니다.", "센터C는 보정."] and by[2] == ["학생 수는 [확인 필요]", "범위 밖 번호"]   # 항목 수를 넘는 번호는 번호만 뗀다
+    pre2, by2 = hwpx_build.split_body("1. 귀 기관의 요구에 따라 회신합니다.\n2. 수치는 붙임 표와 같습니다.\n3. 0%는 [확인 필요]합니다.\n붙임: 표 1부. 끝.", 1)
+    assert pre2 == [] and by2[1] == ["귀 기관의 요구에 따라 회신합니다.", "수치는 붙임 표와 같습니다.", "0%는 [확인 필요]합니다."]           # 문단 번호 2.·3.은 떼고 '붙임…끝.'은 뺀다(양식이 붙임을 따로 넣음)
 
 def test_table_pivot_and_single_date():
     df = pd.DataFrame([{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 60.3}, {"indicator": "등원율", "center": "센터A", "base_date": "2026-07-31", "value": 61.0},
