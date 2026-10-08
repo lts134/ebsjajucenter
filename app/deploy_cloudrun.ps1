@@ -2,7 +2,6 @@
 # 사전: Google Cloud CLI 설치 + 로그인(gcloud init 또는 gcloud auth login). 결제가 연결된 프로젝트(Firebase Blaze와 같은 프로젝트여도 됨).
 # 사용(앱 폴더에서):  .\deploy_cloudrun.ps1 -Project 내-프로젝트-id -AppPassword 접속암호
 #   선택: -Region asia-northeast3  -Bucket 버킷이름  -Service 서비스이름  -AnthropicApiKey 공통키(두면 접속자 전원이 이 키로 호출)
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8   # 한글 깨짐 방지(콘솔 출력 UTF-8)
 param(
   [Parameter(Mandatory=$true)][string]$Project,
   [string]$Region = "asia-northeast3",
@@ -11,6 +10,7 @@ param(
   [string]$AppPassword = "",
   [string]$AnthropicApiKey = ""
 )
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8   # 한글 깨짐 방지(콘솔 출력 UTF-8)
 # gcloud는 안내문도 stderr로 내보내므로 PowerShell의 'Stop' 모드를 쓰지 않고 종료 코드로 성공·실패를 판단한다.
 $ErrorActionPreference = "Continue"
 function Step($msg) { Write-Host ""; Write-Host "== $msg" -ForegroundColor Cyan }
