@@ -4,13 +4,13 @@
 - 절제: 토스 디자인 원칙 '한 화면에 강조되는 행동은 하나' — 파란 버튼은 화면당 하나, 나머지는 흰 버튼·글자 버튼
 - 글꼴: Pretendard(온라인이면 CDN에서 받고, 사내망에서 막히면 맑은 고딕으로 자동 대체)
 장식 아이콘·이모지 없음. 아이콘은 Material Symbols(선 아이콘)만, 메뉴에서만 쓴다."""
-import streamlit as st
+import os, streamlit as st
 
 PRIMARY, TEXT, MUTED, LINE, SOFT, BG = "#256EF4", "#1E2124", "#6D7882", "#E4E7EB", "#EEF2F7", "#F5F6F8"
 
 CSS = f"""
 <style>
-@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard-dynamic-subset.min.css');
+{"" if os.environ.get("APP_NO_CDN") else "@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard-dynamic-subset.min.css');"}
 html, body, [data-testid="stAppViewContainer"], [data-testid="stSidebar"], .stMarkdown, p, li, label, input, textarea, button, table {{
   font-family: Pretendard, "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif !important; }}
 #MainMenu, footer, [data-testid="stToolbarActions"], [data-testid="stMainMenu"] {{visibility: hidden; height: 0;}}   /* 사이드바 여는 버튼(stToolbar 안)과 실행 중 표시는 살린다 */
@@ -118,7 +118,7 @@ def nav(sections: list[tuple[str, list[tuple[str, str]]]], current: str) -> str 
 def sidefoot(user: str, ai_on: bool, ai_text: str, extra: str = ""):
     tail = f'<div style="margin-top:6px">{extra}</div>' if extra else ""
     dot = "on" if ai_on else ""
-    st.markdown(f'<div class="sidefoot"><div class="who">{user}</div><div><span class="pill"><i class="{dot}"></i>{ai_text}</span></div>{tail}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sidefoot"><div class="who">{esc(user)}</div><div><span class="pill"><i class="{dot}"></i>{esc(ai_text)}</span></div>{tail}</div>', unsafe_allow_html=True)
 
 def page_title(title: str, lead: str = "", eyebrow: str = ""):
     if eyebrow: st.markdown(f'<div class="eyebrow">{eyebrow}</div>', unsafe_allow_html=True)
@@ -143,7 +143,7 @@ def action_card(col, title: str, desc: str, button: str, key: str, icon: str, pr
         return st.button(button, key=key, width="stretch", type="primary" if primary else "secondary", icon=f":material/{icon}:")
 
 def status_line(on: bool, text: str):
-    st.markdown(f'<span class="pill"><i class="{"on" if on else ""}"></i>{text}</span>', unsafe_allow_html=True)
+    st.markdown(f'<span class="pill"><i class="{"on" if on else ""}"></i>{esc(text)}</span>', unsafe_allow_html=True)
 
 def ai_banner(on_click_settings) -> None:
     """AI가 연결되지 않았을 때 본문 맨 위에 크게 알린다. 규칙 기반으로도 동작하지만 읽기 정확도가 떨어지므로 눈에 띄어야 한다."""

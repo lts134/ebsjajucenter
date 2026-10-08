@@ -9,7 +9,47 @@ import dashboard_import, db, match, extract, compare, docread, normalize, hwpx_o
 HERE = Path(__file__).resolve().parents[1]
 SAMPLE = HERE / "sample_data"
 TPL_DIR = HERE / "templates"
-OUT_DIR = HERE / "storage" / "out"; OUT_DIR.mkdir(parents=True, exist_ok=True)
+OUT_DIR = db.STORAGE_DIR / "out"; OUT_DIR.mkdir(parents=True, exist_ok=True)      # APP_STORAGE_DIR 아래(기록 DB·백업과 같은 곳)
+
+def out_file(name: str | None):
+    """회신 파일 이름 → OUT_DIR 안의 경로. 기록 DB 값이라도 폴더 밖('../…', 절대경로)을 가리키면 None(경로 탈출 차단)."""
+    if not name or name != Path(name).name: return None
+    f = (OUT_DIR / name).resolve()
+    try: return f if f.is_relative_to(OUT_DIR.resolve()) else None
+    except ValueError: return None
+
+# ---- 접속 비밀번호 잠금(무차별 대입 완화). app.py는 매 실행 다시 돌지만 이 모듈은 프로세스당 한 번 import되므로 여기 둔다.
+#  세션(브라우저 탭)별 5회 → 15분 잠금 · IP별 5회 → 15분 잠금(IP는 프록시 뒤에서 모두 같거나 위조될 수 있어 보조 수단) · 전체 15분 안 30회 이상 → 모든 시도에 5초 지연(잠그지는 않음: 전원이 막히는 역효과 방지)
+AUTH_FAILS: dict = {}            # ip → (실패 횟수, 잠금 해제 시각)
+AUTH_GLOBAL: dict = {"n": 0, "since": 0.0}
+LOCK_S, WINDOW_S, PER_KEY_MAX, GLOBAL_MAX = 900, 900, 5, 30
+
+def _auth_prune(now: float) -> None:
+    if len(AUTH_FAILS) > 500:
+        for k in [k for k, (_, until) in AUTH_FAILS.items() if until < now]: AUTH_FAILS.pop(k, None)
+
+def auth_locked(ip: str | None, ss) -> int:
+    """잠겨 있으면 남은 초, 아니면 0."""
+    import time
+    now = time.time(); until = max(float(ss.get("auth_lock_until") or 0), AUTH_FAILS.get(ip or "", (0, 0.0))[1] if ip else 0.0)
+    return int(until - now) + 1 if until > now else 0
+
+def auth_fail(ip: str | None, ss) -> tuple[int, float]:
+    """실패 1회 기록. (이 세션의 누적 실패 횟수, 추가 지연 초)를 돌려준다."""
+    import time
+    now = time.time(); _auth_prune(now)
+    n_s = int(ss.get("auth_fails") or 0) + 1; ss["auth_fails"] = n_s
+    if n_s >= PER_KEY_MAX: ss["auth_lock_until"] = now + LOCK_S
+    if ip:
+        n_i, until = AUTH_FAILS.get(ip, (0, 0.0)); n_i += 1
+        AUTH_FAILS[ip] = (n_i, now + LOCK_S if n_i >= PER_KEY_MAX else until)
+    if now - AUTH_GLOBAL["since"] > WINDOW_S: AUTH_GLOBAL.update(n=0, since=now)
+    AUTH_GLOBAL["n"] += 1
+    return n_s, (5.0 if AUTH_GLOBAL["n"] >= GLOBAL_MAX else 0.0)
+
+def auth_ok(ip: str | None, ss) -> None:
+    ss.pop("auth_fails", None); ss.pop("auth_lock_until", None)
+    if ip: AUTH_FAILS.pop(ip, None)
 
 class _Ctx:
     """실행마다 app.py가 채우는 값."""

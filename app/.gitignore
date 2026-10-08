@@ -9,3 +9,4 @@ storage/*.broken
 tests/.flow_apptest.db*
 build_info.json
 storage/backup/
+.env

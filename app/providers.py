@@ -120,6 +120,7 @@ class AnthropicProvider(Provider):
         {"key": "api_key", "label": "API 키", "secret": True, "required": True, "env": "ANTHROPIC_API_KEY"},
         {"key": "workspace_id", "label": "워크스페이스 ID(wrkspc_…) — 키가 워크스페이스에 묶여 있지 않을 때만", "secret": True, "required": False, "env": "ANTHROPIC_WORKSPACE_ID"},
         {"key": "effort", "label": "추론 강도(effort) — low·medium·high·xhigh·max. 비우면 모델 기본(Opus 5.5는 medium). 추출만 빨리 하려면 low", "secret": False, "required": False, "env": "LLM_EFFORT"},
+        {"key": "base_url", "label": "기본 주소 — 비우면 Anthropic 공식(api.anthropic.com). 사내 API 게이트웨이·프록시를 거칠 때만", "secret": False, "required": False, "env": "ANTHROPIC_BASE_URL"},
     ]
     # 기본 후보 순서: 현 세대 최상위(Opus 5.5) → 현 세대 Sonnet → 검증된 이전 세대(Sonnet 4.6, 추출 25/25) → 소형. 설정 화면 '연결 테스트'에서 실제 목록을 조회해 고를 수 있다.
     default_models = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5"]
@@ -134,9 +135,20 @@ class AnthropicProvider(Provider):
     FALLBACK_BETA = "server-side-fallback-2026-07-01"          # 5.x 모델이 안전 분류로 거절하면 서버가 정해 둔 대체 모델로 다시 시도(fallbacks="default")
     docs_url = "https://console.anthropic.com"
 
+    def base(self) -> str | None:
+        """호출 주소. 공용 키(서버 환경변수)를 접속자가 바꾼 주소로 보내는 것을 막는다(키 유출 경로) — 공용 키면 환경변수 주소나 기본 주소로만."""
+        b = self.value("base_url").rstrip("/") or None
+        env_b = (os.environ.get("ANTHROPIC_BASE_URL") or "").rstrip("/") or None
+        if self.from_env.get("api_key") and not self.from_env.get("base_url") and b and b != env_b:
+            raise PermissionError("공용 API 키는 기본 주소로만 호출할 수 있습니다. 다른 주소를 쓰려면 설정 화면에 본인 키를 넣으세요.")
+        if b and not self.from_env.get("base_url"): b = check_base_url(b)
+        return b
+
     def _client(self):
         import anthropic
-        return anthropic.Anthropic(api_key=self.value("api_key"), max_retries=MAX_RETRIES, timeout=TIMEOUT_S)
+        kw = dict(api_key=self.value("api_key"), max_retries=MAX_RETRIES, timeout=TIMEOUT_S)
+        if self.base(): kw["base_url"] = self.base()
+        return anthropic.Anthropic(**kw)
 
     def _ws_kwargs(self, fn) -> dict:
         ws = self.value("workspace_id")
@@ -233,6 +245,22 @@ class NoneProvider(Provider):
 
 # ---------- 레지스트리 + 플러그인 자동 발견 ----------
 PROVIDERS: dict[str, type[Provider]] = {AnthropicProvider.name: AnthropicProvider, NoneProvider.name: NoneProvider}
+
+def check_base_url(url: str) -> str:
+    """접속자가 설정 화면에 넣은 호출 주소 검사: https만, 사설·루프백·링크로컬 IP와 사내 호스트 이름(localhost·.local·.internal)은 거부
+    (앱 서버를 거쳐 내부망을 읽는 SSRF 차단). 서버 환경변수로 준 주소(관리자 설정)는 이 검사를 거치지 않는다."""
+    import ipaddress
+    from urllib.parse import urlsplit
+    u = urlsplit(url.strip())
+    if u.scheme != "https" or not u.hostname: raise PermissionError("호출 주소는 https://호스트 형태여야 합니다.")
+    h = u.hostname.lower()
+    if h == "localhost" or h.endswith((".local", ".internal", ".localhost")): raise PermissionError("내부 호스트 이름은 쓸 수 없습니다. 사내 게이트웨이는 서버 환경변수로 지정하세요.")
+    try: ip = ipaddress.ip_address(h)
+    except ValueError: return url.rstrip("/")
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+        raise PermissionError("사설·내부 IP 주소는 쓸 수 없습니다. 사내 게이트웨이는 서버 환경변수로 지정하세요.")
+    return url.rstrip("/")
+
 
 def _discover():
     """app 폴더의 provider_*.py 모듈에서 PROVIDER(클래스)를 찾아 등록한다. 실패한 플러그인은 건너뛰고 _errors에 기록."""

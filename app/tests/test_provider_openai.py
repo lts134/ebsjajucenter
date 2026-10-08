@@ -75,6 +75,6 @@ def test_llm_404_moves_to_next_model_and_errors_explained(prov):
 
 def test_base_url_override_and_model_list(prov):
     p, calls = prov([(200, {"data": [{"id": "gpt-5"}, {"id": "text-embedding-3-small"}, {"id": "gpt-4.1"}]})])
-    p2 = OpenAIProvider({"api_key": "k", "base_url": "https://gateway.local/openai/v1/"}); p2.transport = OpenAIProvider.transport
-    assert p2.base() == "https://gateway.local/openai/v1"
+    p2 = OpenAIProvider({"api_key": "k", "base_url": "https://gateway.example.com/openai/v1/"}); p2.transport = OpenAIProvider.transport
+    assert p2.base() == "https://gateway.example.com/openai/v1"
     assert [m["id"] for m in p2.list_models()] == ["gpt-4.1", "gpt-5"] and calls[0]["path"] == "/openai/v1/models"

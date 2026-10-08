@@ -48,6 +48,7 @@ def available() -> bool:
     except Exception: return False
 
 def explain_error(e: Exception) -> str:
+    if isinstance(e, BudgetExceeded): return str(e)
     """API 오류를 담당자가 조치할 수 있는 말로(공급자 안내문 우선)."""
     try:
         s = _provider().explain_error(e)
@@ -89,6 +90,37 @@ EFFORT_BY_PURPOSE = {"지표 분류": "low", "표 열 매핑 제안": "low", "�
 def _effort_for(purpose: str) -> str | None:
     return (_cfg().get("effort") or "").strip() or EFFORT_BY_PURPOSE.get((purpose or "").replace("(잘림 재시도)", "").replace("(재시도)", "").strip())
 
+DAILY_BUDGET_USD = float(os.environ.get("LLM_DAILY_BUDGET_USD") or 0)       # 하루 AI 사용 상한(추정 달러, 서버 전체). 0이면 제한 없음
+_spent: dict = {"date": None, "usd": 0.0}                                    # 기록 DB(llm_spend)가 원본, 이 값은 DB를 못 쓸 때의 보조
+_spent_lock = threading.Lock()
+
+class BudgetExceeded(RuntimeError):
+    """오늘의 AI 사용 한도를 넘음 — 규칙 경로로 계속 쓸 수 있고 내일 풀린다."""
+
+def spent_today() -> float:
+    today = dt.date.today().isoformat()
+    try:
+        import db
+        return db.spend_of(today)
+    except Exception:
+        with _spent_lock: return _spent["usd"] if _spent["date"] == today else 0.0
+
+def _spend_add(usd: float) -> None:
+    today = dt.date.today().isoformat()
+    with _spent_lock:
+        if _spent["date"] != today: _spent.update(date=today, usd=0.0)
+        _spent["usd"] += usd
+    try:
+        import db
+        db.spend_add(today, usd)
+    except Exception: pass
+
+def _budget_check() -> None:
+    if not DAILY_BUDGET_USD: return
+    used = spent_today()
+    if used >= DAILY_BUDGET_USD:
+        raise BudgetExceeded(f"오늘 AI 사용 한도(${DAILY_BUDGET_USD:.2f})를 넘어 호출을 멈췄습니다(추정 ${used:.2f}). 규칙 기반으로는 계속 쓸 수 있고, 내일 풀립니다. 관리자가 LLM_DAILY_BUDGET_USD를 올릴 수 있습니다.")
+
 def _record(msg, model: str, t0: float, purpose: str, structured: bool) -> str:
     text = "".join(getattr(b, "text", "") for b in msg.content)
     usage = getattr(msg, "usage", None)
@@ -99,6 +131,7 @@ def _record(msg, model: str, t0: float, purpose: str, structured: bool) -> str:
             "structured": structured, "stop_reason": getattr(msg, "stop_reason", None),
             "cost_usd": estimate_cost(model, inp, out, c_read, c_write)}
     LAST.clear(); LAST.update(info); log().append(info)
+    _spend_add(float(info.get("cost_usd") or 0))
     return text
 
 TOOL_LABELS: dict[str, str] = {}      # 도구 이름 → 화면에 보여 줄 우리말 단계명(agent·history_qa가 채운다)
@@ -132,6 +165,7 @@ DEFAULT_MAX_TOKENS = 8000       # 호출 기본 출력 한도. 추론 모델은 
 def ask(prompt: str, system: str | None = None, max_tokens: int = DEFAULT_MAX_TOKENS, purpose: str = "", schema: dict | None = None) -> str:
     """텍스트 응답. 모델 없음이면 다음 후보로. schema가 있으면 구조화 출력, 모델이 거부하면 그 모델은 이후 텍스트 방식.
     응답이 max_tokens에 잘리면 Truncated(잘린 본문 포함)를 올린다."""
+    _budget_check()
     prov, state = _provider(), _state()
     last_err = None
     for model in _model_order():
@@ -238,6 +272,7 @@ def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handler
     messages = list(messages)
     trace, turns, last_err = [], 0, None
     while turns < max_turns:
+        _budget_check()
         t0 = time.time()
         _notify(f"{purpose} — {turns + 1}단계: 다음에 할 일을 정하는 중…" if turns else f"{purpose} — 요청을 읽고 무엇부터 할지 정하는 중…")
         try:

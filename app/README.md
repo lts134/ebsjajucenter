@@ -67,7 +67,9 @@
 | `report.py` | 월간 리포트(접수·확정·발송·소요일 단순 집계, 요약문·엑셀) |
 | `llm.py` / `providers.py` | LLM 공통 호출(세션별 설정, 모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 도구 루프, 호출 기록·비용) / 공급자 플러그인(기본 Anthropic, `provider_*.py` 자동 발견) |
 | `run_server.bat` / `run_server.sh` | 사내 PC 서버 모드 실행 |
-| `Dockerfile` / `start_cloud.sh` / `litestream.yml` / `deploy_cloudrun.sh`·`.ps1` | 클라우드(Cloud Run) 배포: 기록 DB 복원·복제 포함 |
+| `Dockerfile` / `start_cloud.sh` / `litestream.yml` / `deploy_cloudrun.sh`·`.ps1` | 컨테이너(Cloud Run·AWS·Azure·NCP 공통, 비root): 기록 DB 복원·복제(GCS·S3·Blob·파일) 포함 |
+| `docker-compose.yml` / `.env.example` | 사내 공용 리눅스 서버용(볼륨 `/data`, 상태 확인) / 환경변수 예시(`docs/배포_호환성.md`) |
+| `provider_openai.py` / `provider_gemini.py` / `provider_aws.py` / `provider_bedrock.py` / `provider_vertex.py` | 공급자 플러그인: OpenAI 호환·Gemini·Claude Platform on AWS·Amazon Bedrock·Google Vertex AI |
 | `update.bat` / `update.sh` | git clone 한 폴더에서 최신 코드 받기 + 실행 |
 | `set_key.bat` / `unset_key.bat` | 혼자 쓰는 PC에서 API 키를 사용자 환경변수로 저장/삭제(재시작해도 유지, 설정 화면 입력 불필요) |
 | `db.py` | SQLite: requests, items(period 포함), submissions, submission_values(출처 포함), diff_reasons, drafts, reviews |
@@ -82,7 +84,7 @@
 | `tests/` / `run_checks.py` | pytest 단위 테스트·화면 흐름(홈→등록→3단계→승인→조회) / 전체 점검 한 번에 |
 | `make_submission_zip.py` | 제출용 ZIP 생성(DB·캐시 제외) |
 | `make_sample_data.py` / `make_template.py` | 가상 데이터 / 샘플 회신 템플릿 생성(실데이터 교체 시 불필요) |
-| `docs/` | 시연 시나리오 · 화면 캡처 · 캡처 스크립트 · 작업일지 |
+| `docs/` | 시연 시나리오 · 화면 캡처 · 캡처 스크립트 · 작업일지 · 배포 호환성 · 보안 점검서 |
 | `sample_data/` · `templates/` · `storage/` | 가상 데이터 · 템플릿 · DB·출력물(자동 생성) |
 
 ## 실데이터 교체 방법

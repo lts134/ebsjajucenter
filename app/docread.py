@@ -54,8 +54,15 @@ def _tbl_grid(tbl) -> list[list]:
                 if r + dr < nrows and c + dc < ncols and grid[r + dr][c + dc] is None: grid[r + dr][c + dc] = txt
     return grid
 
+ZIP_MAX_TOTAL, ZIP_MAX_ENTRY = 300 * 1024 * 1024, 100 * 1024 * 1024    # 압축 해제 크기 상한(압축 폭탄 차단): 전체 300MB · 항목 100MB
+
+def _zip_guard(z: zipfile.ZipFile) -> None:
+    infos = z.infolist()
+    if any(i.file_size > ZIP_MAX_ENTRY for i in infos) or sum(i.file_size for i in infos) > ZIP_MAX_TOTAL:
+        raise ValueError("압축을 풀면 너무 커지는 파일이라 읽지 않습니다(압축 폭탄 의심).")
+
 def _hwpx_sections(data: bytes):
-    z = zipfile.ZipFile(io.BytesIO(data))
+    z = zipfile.ZipFile(io.BytesIO(data)); _zip_guard(z)
     names = sorted(n for n in z.namelist() if n.lower().startswith("contents/section") and n.lower().endswith(".xml"))
     if not names: raise ValueError("HWPX 안에 본문(Contents/section*.xml)이 없습니다. 배포용(암호화) 문서이거나 손상된 파일일 수 있습니다.")
     for n in names:

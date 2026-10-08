@@ -1,0 +1,22 @@
+# 사내 공용 서버(리눅스 Docker)용. 사용: .env.example을 .env로 복사해 채운 뒤  docker compose up -d --build
+# 접속: http://<서버>:8080  (사내망 밖에 열 때는 앞에 TLS 리버스 프록시를 둔다 — docs/배포_호환성.md)
+services:
+  app:
+    build: .
+    image: ebs-request-agent:local
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    env_file: .env
+    environment:
+      - PORT=8080
+      - TZ=${TZ:-Asia/Seoul}
+    volumes:
+      - app-data:/data                      # 기록 DB·회신 파일·백업. 이름 있는 볼륨이라 컨테이너 사용자(app)가 바로 쓸 수 있다
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/_stcore/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+volumes:
+  app-data:

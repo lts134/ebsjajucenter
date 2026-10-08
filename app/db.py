@@ -2,7 +2,8 @@
 import sqlite3, os, re, datetime as dt
 from pathlib import Path
 
-DB_PATH = Path(os.environ.get("HISTORY_DB", Path(__file__).parent / "storage" / "history.db"))
+STORAGE_DIR = Path(os.environ.get("APP_STORAGE_DIR") or (Path(__file__).parent / "storage"))   # 기록 DB·회신 파일·백업이 놓이는 곳(컨테이너는 볼륨으로)
+DB_PATH = Path(os.environ.get("HISTORY_DB") or (STORAGE_DIR / "history.db"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS requests (          -- 요구서
@@ -140,6 +141,9 @@ CREATE TABLE IF NOT EXISTS indicator_dict (    -- 지표 사전·데이터 카�
 CREATE TABLE IF NOT EXISTS tone_presets (      -- 요청 주체 유형별 회신 톤(문서 제목 접미·확인 줄·문체 지침·메일 인사말). 비어 있으면 draft.DEFAULT_PRESETS
     kind TEXT PRIMARY KEY, doc_label TEXT, show_confirm INTEGER, style TEXT, mail_greeting TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS llm_spend (         -- 날짜별 AI 사용액 추정(달러). 하루 상한(LLM_DAILY_BUDGET_USD) 판정용 — 재시작·여러 프로세스에서도 이어진다
+    day TEXT PRIMARY KEY, usd REAL NOT NULL DEFAULT 0, calls INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS settings (          -- 조직 설정(부서장·내선·발신 표기): 접속 세션이 아니라 기록에 남는다
     key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT
 );
@@ -170,6 +174,9 @@ def connect(_retry=True):
     except sqlite3.DatabaseError as e:
         if not _retry or not any(m in str(e).lower() for m in CORRUPT_MARKERS):
             raise                                   # 잠금·권한 등은 그대로 올려 사용자에게 보인다(데이터를 비켜 두지 않음)
+        if os.environ.get("LITESTREAM_REPLICA_URL") or (os.environ.get("APP_DB_ON_CORRUPT") or "").lower() == "stop":
+            # 복제가 켜진 서버에서 빈 DB로 뜨면 Litestream이 빈 세대를 복제본 위에 쌓는다 → 조용히 덮지 말고 멈춰서 관리자가 복제본에서 복원하게 한다
+            raise RuntimeError(f"기록 DB 파일이 손상됐습니다({DB_PATH}). 서버에서는 빈 기록으로 시작하지 않습니다 — 복제본(또는 백업)에서 복원한 뒤 다시 시작하세요.") from e
         for suffix in ("", "-journal", "-wal", "-shm"):             # WAL·shm을 남기면 새 DB가 옛 WAL과 짝을 이뤄 다시 손상된다
             f = Path(str(DB_PATH) + suffix)
             if f.exists():
@@ -183,6 +190,8 @@ def _migrate(con):
     for c, t in [("source_file", "TEXT"), ("source_sheet", "TEXT"), ("source_row", "INTEGER")]:
         if c not in cols:
             con.execute(f"ALTER TABLE submission_values ADD COLUMN {c} {t}")
+    dcols = {r[1] for r in con.execute("PRAGMA table_info(drafts)")}
+    if "hwpx" not in dcols: con.execute("ALTER TABLE drafts ADD COLUMN hwpx BLOB")
     icols = {r[1] for r in con.execute("PRAGMA table_info(items)")}
     if "period" not in icols:
         con.execute("ALTER TABLE items ADD COLUMN period TEXT")
@@ -453,15 +462,22 @@ def reasons_for(indicator, center, base_date):
     con.close(); return [dict(r) for r in rows]
 
 # ---------- 초안·검토(6층) ----------
-def add_draft(submission_id, request_id, d: dict, hwpx_name=None, status="draft"):
+DRAFT_COLS = "id,submission_id,request_id,title,body,reasons_text,provenance_text,hwpx_name,status,created_at"   # hwpx(BLOB)는 목록에서 빼고 draft_hwpx()로 따로 읽는다
+
+def add_draft(submission_id, request_id, d: dict, hwpx_name=None, status="draft", hwpx_bytes: bytes | None = None):
+    """초안 저장. hwpx_bytes를 주면 회신 파일 본문도 기록 DB에 넣는다(컨테이너 재시작·서버 이전 때 out/ 폴더가 사라져도 내려받을 수 있게)."""
     con = connect()
-    cur = con.execute("INSERT INTO drafts(submission_id,request_id,title,body,reasons_text,provenance_text,hwpx_name,status,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                      (submission_id, request_id, d.get("제목"), d.get("본문"), d.get("차이사유"), d.get("산출근거"), hwpx_name, status, now()))
+    cur = con.execute("INSERT INTO drafts(submission_id,request_id,title,body,reasons_text,provenance_text,hwpx_name,status,created_at,hwpx) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                      (submission_id, request_id, d.get("제목"), d.get("본문"), d.get("차이사유"), d.get("산출근거"), hwpx_name, status, now(), hwpx_bytes))
     did = cur.lastrowid; con.commit(); con.close(); return did
+
+def draft_hwpx(draft_id) -> bytes | None:
+    con = connect(); r = con.execute("SELECT hwpx FROM drafts WHERE id=?", (draft_id,)).fetchone(); con.close()
+    return bytes(r[0]) if r and r[0] else None
 
 def list_drafts(status=None):
     con = connect()
-    q = "SELECT d.*, r.requester, r.title AS request_title, r.due_date FROM drafts d JOIN requests r ON r.id=d.request_id"
+    q = f"SELECT {','.join('d.' + c for c in DRAFT_COLS.split(','))}, r.requester, r.title AS request_title, r.due_date FROM drafts d JOIN requests r ON r.id=d.request_id"
     rows = con.execute(q + (" WHERE d.status=?" if status else "") + " ORDER BY d.id DESC", (status,) if status else ()).fetchall()
     con.close(); return [dict(r) for r in rows]
 
@@ -596,11 +612,9 @@ def all_items_with_requests():
 
 def reset():
     """기록 전체 삭제: 파일을 지우지 않고 모든 표를 비운다(WAL·복제가 파일을 잡고 있어도 안전). 지우기 전에 백업 사본을 남긴다."""
-    import shutil
     if DB_PATH.exists():
-        bdir = DB_PATH.parent / "backup"; bdir.mkdir(parents=True, exist_ok=True)
-        try: shutil.copy2(DB_PATH, bdir / f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}.db")
-        except OSError: pass
+        try: backup_now("before_reset")                       # 백업 API로 만든 사본(WAL에만 있던 최근 변경까지 포함)
+        except (OSError, sqlite3.DatabaseError): pass
     con = connect()
     tables = [r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall()]
     with con:
@@ -783,12 +797,22 @@ def snapshot_bytes() -> bytes:
     src.close(); return data
 
 def backup_dir():
-    d = DB_PATH.parent / "backup"; d.mkdir(parents=True, exist_ok=True); return d
+    d = DB_PATH.parent / "backup"; d.mkdir(parents=True, exist_ok=True)
+    try: os.chmod(d, 0o700)                                   # 공용 서버의 다른 계정이 사본을 읽지 못하게
+    except OSError: pass
+    return d
+
+BACKUP_KEEP = int(os.environ.get("APP_BACKUP_KEEP") or 10)      # 서버 안 자동 사본 보존 개수(민감한 기록이 쌓이지 않게 오래된 것은 지운다)
 
 def backup_now(tag: str = "manual"):
-    """서버 안 backup/ 폴더에 사본 파일을 만든다. 경로 반환."""
+    """서버 안 backup/ 폴더에 사본 파일을 만든다(오래된 사본은 BACKUP_KEEP개만 남기고 지움). 경로 반환."""
     p = backup_dir() / f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}_{tag}.db"
-    p.write_bytes(snapshot_bytes()); return p
+    p.write_bytes(snapshot_bytes())
+    old = sorted(backup_dir().glob("history_*.db"), key=lambda f: f.stat().st_mtime, reverse=True)[BACKUP_KEEP:]
+    for f in old:
+        try: f.unlink()
+        except OSError: pass
+    return p
 
 def list_backups(limit: int = 10) -> list[dict]:
     files = sorted(backup_dir().glob("history_*.db"), key=lambda f: f.stat().st_mtime, reverse=True)[:limit]
@@ -802,6 +826,11 @@ def restore_from_bytes(data: bytes, user: str = "") -> dict:
     if not data.startswith(b"SQLite format 3\x00"): raise ValueError("SQLite 데이터베이스 파일이 아닙니다.")
     with tempfile.TemporaryDirectory() as d:
         p = _P(d) / "upload.db"; p.write_bytes(data); src = sqlite3.connect(p)
+        try: ok = src.execute("PRAGMA integrity_check").fetchone()[0]
+        except sqlite3.DatabaseError as e: src.close(); raise ValueError(f"손상된 DB 파일입니다: {e}") from e
+        if ok != "ok": src.close(); raise ValueError("손상된 DB 파일입니다(integrity_check 실패).")
+        kinds = {r[0] for r in src.execute("SELECT DISTINCT type FROM sqlite_master")}
+        if kinds - {"table", "index"}: src.close(); raise ValueError("표·인덱스 외의 객체(트리거·뷰)가 든 파일은 복원하지 않습니다.")
         tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if not {"requests", "submissions"} <= tables: src.close(); raise ValueError("이 앱의 기록 DB가 아닙니다(requests·submissions 표가 없음).")
         counts = {t: src.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("requests", "submissions", "indicator_data", "ref_docs") if t in tables}
@@ -1009,3 +1038,16 @@ def indicator_catalog() -> list[dict]:
                           FROM submission_values v JOIN submissions s ON s.id=v.submission_id WHERE s.status='confirmed' AND v.indicator IS NOT NULL GROUP BY v.indicator ORDER BY v.indicator""").fetchall()
     out += [dict(r, source="과거 제출값") for r in past if r["indicator"] not in seen]
     con.close(); return out
+
+
+# ---------- AI 사용액(하루 상한) ----------
+def spend_add(day: str, usd: float) -> float:
+    """오늘 사용액에 더하고 누계를 돌려준다."""
+    con = connect()
+    con.execute("INSERT INTO llm_spend(day,usd,calls) VALUES(?,?,1) ON CONFLICT(day) DO UPDATE SET usd=usd+excluded.usd, calls=calls+1", (day, float(usd or 0)))
+    con.commit(); r = con.execute("SELECT usd FROM llm_spend WHERE day=?", (day,)).fetchone(); con.close()
+    return float(r[0]) if r else 0.0
+
+def spend_of(day: str) -> float:
+    con = connect(); r = con.execute("SELECT usd FROM llm_spend WHERE day=?", (day,)).fetchone(); con.close()
+    return float(r[0]) if r else 0.0

@@ -4,6 +4,9 @@ gatherUsageStats = false
 [server]
 headless = false
 address = "localhost"   # 같은 망의 다른 PC가 접속하지 못하게(혼자 쓰기). 여러 사람은 run_server.bat
+maxUploadSize = 50      # 올릴 수 있는 파일 한 개의 최대 크기(MB). 요구서·집계 엑셀·지침 PDF는 이 안에 든다(기본 200MB는 과함)
+enableXsrfProtection = true
+# 경로 접두가 붙는 리버스 프록시 뒤(예: https://intranet/ebs/)에서는 환경변수 STREAMLIT_SERVER_BASE_URL_PATH=ebs 를 준다
 
 [client]
 toolbarMode = "minimal"

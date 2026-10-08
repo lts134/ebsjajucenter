@@ -25,14 +25,23 @@ import db, llm, normalize, ui
 from screens.common import ctx, go, _build_info
 from screens import home, data, process, records, settings
 
+os.umask(0o077)                                                                     # 이 앱이 만드는 파일(기록 DB·회신·백업)은 실행 계정만 읽게(공용 서버의 다른 계정 차단)
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
 if os.environ.get("APP_PASSWORD") and not st.session_state.get("authed"):          # 외부 서버에 올릴 때의 최소 잠금. 사내망 전용이면 비워 둔다
     import hmac
+    from screens.common import auth_locked, auth_fail, auth_ok
+    try: _ip = st.context.ip_address or None                                        # 로컬 접속은 None. 프록시 뒤면 위조될 수 있어 세션별 횟수와 함께 쓴다
+    except Exception: _ip = None
     st.markdown("# 대외 요구자료 대응"); st.caption("접속 비밀번호를 입력하세요.")
+    _left = auth_locked(_ip, st.session_state)
+    if _left: st.error(f"비밀번호를 여러 번 틀려 {_left // 60 + 1}분 동안 잠겼습니다."); st.stop()
     pw = st.text_input("비밀번호", type="password", label_visibility="collapsed")
-    if pw and hmac.compare_digest(pw.encode("utf-8"), os.environ["APP_PASSWORD"].encode("utf-8")): st.session_state["authed"] = True; st.rerun()
-    elif pw: time.sleep(1.0); st.error("비밀번호가 맞지 않습니다.")
+    if pw and hmac.compare_digest(pw.encode("utf-8"), os.environ["APP_PASSWORD"].encode("utf-8")): auth_ok(_ip, st.session_state); st.session_state["authed"] = True; st.rerun()
+    elif pw:
+        _n, _delay = auth_fail(_ip, st.session_state); time.sleep(1.0 + _delay)
+        print(f"[auth] 비밀번호 실패 {_n}회 ip={_ip or '-'}", file=sys.stderr)              # 비밀번호 자체는 기록하지 않는다
+        st.error("비밀번호가 맞지 않습니다." + (" 5회 실패로 15분 동안 잠깁니다." if _n >= 5 else ""))
     st.stop()
 ctx.DEMO = os.environ.get("APP_DEMO", "") == "1"                  # 시연 파일 선택칸(샘플) 표시 여부. 실제 사용에서는 끔
 # ---- 접속자(세션)별 AI 설정: 키·모델·호출 기록은 이 브라우저 세션에만 속한다 ----

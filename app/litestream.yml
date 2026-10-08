@@ -1,8 +1,10 @@
-# SQLite 이력 파일을 Cloud Storage(또는 S3 호환 저장소)에 실시간 복제한다. 컨테이너가 꺼져도 다음 시작 때 복원되므로
-# Cloud Run처럼 디스크가 사라지는 환경에서도 이력이 유지된다. 복제 대상은 환경변수 LITESTREAM_REPLICA_URL(예: gcs://버킷/history).
+# Litestream 설정 예시(참고용). 컨테이너는 start_cloud.sh가 환경변수로 같은 내용을 만들어 쓴다(LITESTREAM_CONFIG로 이 파일을 직접 지정할 수도 있음).
+# SQLite 기록 파일을 객체 저장소에 실시간 복제한다. 컨테이너가 꺼져도 다음 시작 때 복원되므로 디스크가 사라지는 환경에서도 기록이 유지된다.
 dbs:
   - path: ${HISTORY_DB}
     replicas:
-      - url: ${LITESTREAM_REPLICA_URL}
+      - url: ${LITESTREAM_REPLICA_URL}   # gcs://버킷/경로 · s3://버킷/경로 · abs://계정/컨테이너/경로 · file:///경로
+        # endpoint: https://kr.object.ncloudstorage.com   # S3 호환(네이버 클라우드·MinIO)일 때만. 자격증명은 LITESTREAM_ACCESS_KEY_ID / LITESTREAM_SECRET_ACCESS_KEY
+        # force-path-style: true                         # MinIO 등 경로 방식 버킷
         sync-interval: 1s
         retention: 720h              # 스냅샷·WAL 보존 30일(기본 24시간) — 잘못 지운 뒤 되돌릴 여지

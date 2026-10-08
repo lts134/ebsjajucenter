@@ -3,7 +3,7 @@ import io, datetime as dt
 import pandas as pd
 import streamlit as st
 import db, extract, pii, normalize, llm, history_qa, ui, report
-from screens.common import OUT_DIR, ctx, run_ai, _q, ko, _requester_input, confirm_delete, VAL_KO, ITEM_KO
+from screens.common import ctx, run_ai, _q, ko, _requester_input, confirm_delete, VAL_KO, ITEM_KO, out_file
 
 # ================= 검토·승인 =================
 def page_review():
@@ -14,9 +14,10 @@ def page_review():
     if not drafts: st.info("아직 초안이 없습니다."); return
     for d in drafts:
         with st.expander(f"초안 #{d['id']} · {ko(d['status'])} · {d['requester'] or '요청 주체 미기재'} — {d['request_title'] or '(제목 없음)'} (기한 {d['due_date'] or '미기재'}) · {(d['created_at'] or '')[:16]}", expanded=d["status"] == "review_requested"):
-            st.markdown(f"**{d['title']}**"); st.text(d["body"]); st.caption("차이 사유"); st.text(d["reasons_text"]); st.caption("산출 근거"); st.text(d["provenance_text"])
-            f = OUT_DIR / (d["hwpx_name"] or "")
-            if d["hwpx_name"] and f.exists(): st.download_button("회신 HWPX", f.read_bytes(), file_name=d["hwpx_name"], key=f"dl_{d['id']}")
+            st.markdown(f"**{ui.safe_md(d['title'])}**"); st.text(d["body"]); st.caption("차이 사유"); st.text(d["reasons_text"]); st.caption("산출 근거"); st.text(d["provenance_text"])
+            f = out_file(d["hwpx_name"])                                                  # 기록 DB에 든 본문이 우선, 없으면 out/ 폴더(폴더 밖 경로는 열지 않음)
+            data_ = db.draft_hwpx(d["id"]) or (f.read_bytes() if f and f.exists() else None)
+            if data_: st.download_button("회신 HWPX", data_, file_name=d["hwpx_name"] or f"회신_{d['id']}.hwpx", key=f"dl_{d['id']}")
             for rv in db.reviews_for(d["id"]): st.markdown(f"- {rv['created_at'][:16]} {rv['reviewer']} **{ko(rv['decision'])}**: {rv['comment']}")
             if d["status"] == "review_requested":
                 cmt = st.text_input("검토 의견", key=f"cmt_{d['id']}")

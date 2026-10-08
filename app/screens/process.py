@@ -33,7 +33,7 @@ def step_read():
     if res.get("_error"): st.warning(f"AI 호출 오류로 규칙 기반 결과입니다: {res['_error']}")
     if res.get("_match_notes"): st.info("요구 이름과 보유 자료 이름이 달라 가진 자료에 맞춘 항목: " + " / ".join(res["_match_notes"]) + " — 다르면 아래 항목의 지표를 바꾸세요.", icon=":material/join_inner:")
     with st.container(border=True):
-        st.markdown(f"**{res.get('title') or '(제목 없음)'}**  \n요청 주체 **{res.get('requester') or '-'}** · 접수 {res.get('received_date') or '-'} · 제출기한 **{res.get('due_date') or '-'}** · 요구 항목 {len(res.get('items') or [])}건")
+        st.markdown(f"**{ui.safe_md(res.get('title') or '(제목 없음)')}**  \n요청 주체 **{ui.safe_md(res.get('requester') or '-')}** · 접수 {res.get('received_date') or '-'} · 제출기한 **{res.get('due_date') or '-'}** · 요구 항목 {len(res.get('items') or [])}건")
     sim_req = search.similar_requests(st.session_state["new_text"])
     if sim_req and sim_req[0]["score"] > 0.2:
         st.info("비슷한 과거 요구서: " + " / ".join(f"#{r['id']} {r['received_date']} {r['requester']} — {r['title']} (유사도 {r['score']})" for r in sim_req if r["score"] > 0.2))
@@ -41,7 +41,7 @@ def step_read():
     for it in res.get("items") or []:
         with st.container(border=True):
             mb = f" (인식 근거 '{it['matched_by']}')" if it.get("matched_by") else ""
-            st.markdown(f"**{it['item_text']}**")
+            st.markdown(f"**{ui.safe_md(it['item_text'])}**")
             hint = it.get("suggested") or it.get("indicator_hint")
             st.caption(f"지표 {it.get('indicator') or ('없음 · 모델 판단: ' + hint if hint else '사전에 없음')}{mb} · 기준일 {it.get('base_date') or '없음'} · 기간 {it.get('period') or '-'} · 단위 {it.get('unit') or '-'}")
             sg = suggest.suggest(it)
@@ -277,6 +277,6 @@ def step_draft():
     c2.download_button("제출 묶음 ZIP (회신+점검표+수치+근거)", zb.getvalue(), file_name=f"제출묶음_{req['id']}_{dt.date.today()}.zip")
     if c3.button("초안 저장하고 팀장 검토 요청", type="primary"):
         (OUT_DIR / fname).write_bytes(out)
-        did = db.add_draft(sid, req["id"], d, fname, status="review_requested")
+        did = db.add_draft(sid, req["id"], d, fname, status="review_requested", hwpx_bytes=out)
         st.session_state["step"] = 1
         st.success(f"초안 #{did}을 저장하고 검토를 요청했습니다. 팀장은 '검토·승인'에서 봅니다.")

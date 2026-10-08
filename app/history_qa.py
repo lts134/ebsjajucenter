@@ -23,7 +23,7 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"query": {"type": "string", "description": "예: '경남', '학교 밖', '2026', '취소'"}}}},
 ] + refdocs.TOOLS
 
-PERSON_KEYS = ("submitted_by", "entered_by", "reviewer")   # 직원 이름은 API로 보내지 않는다
+PERSON_KEYS = ("submitted_by", "entered_by", "reviewer", "assignee", "loaded_by", "uploaded_by", "sent_by", "created_by", "updated_by")   # 직원 이름은 API로 보내지 않는다
 
 def _strip(obj):
     """도구 결과에서 사람 이름 필드 제거(재귀)."""

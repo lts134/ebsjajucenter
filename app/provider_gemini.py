@@ -6,7 +6,7 @@ Gemini의 스키마는 OpenAPI 부분집합이라 additionalProperties·$schema 
 from __future__ import annotations
 import json, os, time, uuid
 import httpx
-from providers import Provider, SimpleMessage, SimpleUsage, TextBlock, ToolUseBlock, HttpError, iter_blocks, block_get, tool_names_by_id, MAX_RETRIES
+from providers import Provider, check_base_url, SimpleMessage, SimpleUsage, TextBlock, ToolUseBlock, HttpError, iter_blocks, block_get, tool_names_by_id, MAX_RETRIES
 
 DEFAULT_BASE = "https://generativelanguage.googleapis.com/v1beta"
 SCHEMA_KEYS = {"type", "description", "properties", "required", "items", "enum", "nullable", "format", "minItems", "maxItems", "anyOf"}
@@ -47,6 +47,7 @@ class GeminiProvider(Provider):
         # 공용 키(서버 환경변수)를 접속자가 바꾼 주소로 보내는 것을 막는다(키 유출 경로). 공용 키면 환경변수 주소나 기본 주소로만.
         if self.from_env.get("api_key") and not self.from_env.get("base_url") and b != (os.environ.get("GEMINI_BASE_URL") or DEFAULT_BASE).rstrip("/"):
             raise PermissionError("공용 API 키는 기본 주소로만 호출할 수 있습니다. 다른 주소를 쓰려면 설정 화면에 본인 키를 넣으세요.")
+        if b != DEFAULT_BASE.rstrip("/") and not self.from_env.get("base_url"): b = check_base_url(b)   # 접속자가 넣은 주소는 내부망 차단 검사
         return b
 
     def _client(self, timeout: float) -> httpx.Client:

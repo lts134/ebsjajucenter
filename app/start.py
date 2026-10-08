@@ -7,16 +7,16 @@ APP = Path(__file__).parent / "app.py"
 # import 이름 → pip 패키지 스펙
 REQUIRED = {
     "streamlit": "streamlit>=1.50",
-    "pandas": "pandas>=2.0",
-    "openpyxl": "openpyxl>=3.1",
-    "anthropic": "anthropic>=1.8",
-    "pypdf": "pypdf>=4.0",
-    "docx": "python-docx>=1.1",
-    "hwpx": "python-hwpx>=6.7",       # HWP(구형식 5.0) → HWPX 변환
-    "xlrd": "xlrd>=2.0",              # 구형 엑셀(.xls)
-    "json5": "json5>=0.9",            # 대시보드 저장 파일(HTML 안의 자바스크립트 데이터) 읽기
-    "httpx": "httpx>=0.27",           # OpenAI 호환·Gemini 공급자(HTTP)
-    "lxml": "lxml>=4.9",              # python-hwpx(HWP 변환)·이름만 .xls인 HTML 표 읽기
+    "pandas": "pandas>=2.0,<4",
+    "openpyxl": "openpyxl>=3.1,<4",
+    "anthropic": "anthropic>=1.11,<2",
+    "pypdf": "pypdf>=4.0,<7",
+    "docx": "python-docx>=1.1,<2",
+    "hwpx": "python-hwpx>=6.7,<7",       # HWP(구형식 5.0) → HWPX 변환
+    "xlrd": "xlrd>=2.0,<3",              # 구형 엑셀(.xls)
+    "json5": "json5>=0.9,<1",            # 대시보드 저장 파일(HTML 안의 자바스크립트 데이터) 읽기
+    "httpx": "httpx>=0.27,<1",           # OpenAI 호환·Gemini 공급자(HTTP)
+    "lxml": "lxml>=4.9,<7",              # python-hwpx(HWP 변환)·이름만 .xls인 HTML 표 읽기
 }
 
 def missing_modules():

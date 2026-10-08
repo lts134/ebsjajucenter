@@ -119,10 +119,16 @@ def page_settings():
         info = db.db_info(); tb = info["tables"]
         st.caption(f"기록 DB {info['size_kb']:,}KB · 마지막 변경 {info['modified']} · " + " · ".join(f"{k} {v:,}건" for k, v in tb.items() if v is not None)
                    + (" · 클라우드 복제 켜짐(Litestream)" if info["replica"] else " · 복제 없음(이 PC의 파일만)"))
+        admin_pw = os.environ.get("APP_ADMIN_PASSWORD") or os.environ.get("APP_PASSWORD") or ""; ok_pw = not admin_pw
+        if admin_pw:                                                                  # 기록 전체를 내려받거나 덮어쓰거나 지우는 일은 비밀번호를 다시 확인한다(열린 화면을 남이 쓰는 경우). APP_ADMIN_PASSWORD가 있으면 그 값(관리자만)
+            import hmac
+            pw2 = st.text_input("관리자 비밀번호 확인 — 백업 내려받기·복원·전체 삭제 때 필요" if os.environ.get("APP_ADMIN_PASSWORD") else "비밀번호 다시 확인 — 백업 내려받기·복원·전체 삭제 때 필요", type="password", key="bk_pw")
+            ok_pw = bool(pw2) and hmac.compare_digest(pw2.encode("utf-8"), admin_pw.encode("utf-8"))
+            if pw2 and not ok_pw: st.error("비밀번호가 맞지 않습니다.")
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**내려받기** — 지금 기록 전체를 한 파일로. 월 1회 사내 저장소에 보관하세요.")
-            if st.button("백업 파일 만들기", key="bk_make", icon=":material/archive:"): st.session_state["bk_bytes"] = (db.snapshot_bytes(), f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.db")
+            if st.button("백업 파일 만들기", key="bk_make", icon=":material/archive:", disabled=not ok_pw): st.session_state["bk_bytes"] = (db.snapshot_bytes(), f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.db")
             if st.session_state.get("bk_bytes"):
                 data_, name_ = st.session_state["bk_bytes"]; st.download_button(f"내려받기 ({len(data_) // 1024:,}KB)", data_, file_name=name_, key="bk_dl", type="primary", icon=":material/download:")
             bks = db.list_backups(5)
@@ -135,7 +141,7 @@ def page_settings():
             up_db = st.file_uploader("기록 DB 파일(.db)", type=["db", "sqlite", "sqlite3"], key="restore_up")
             if up_db is not None:
                 ok_ = st.checkbox("현재 기록을 이 파일 내용으로 덮어씁니다", key="restore_ok")
-                if st.button("복원", key="restore_go", type="primary", disabled=not ok_, icon=":material/restore:"):
+                if st.button("복원", key="restore_go", type="primary", disabled=not (ok_ and ok_pw), icon=":material/restore:"):
                     try:
                         r = db.restore_from_bytes(up_db.getvalue(), ctx.USER)
                         for k in ("case", "chat", "chat_msgs", "chat_job", "chat_carry"): st.session_state.pop(k, None)
@@ -154,7 +160,7 @@ def page_settings():
         st.caption("시연 파일 선택칸까지 화면에 보이게 하려면 `run_demo.bat`으로 실행(APP_DEMO=1).")
         st.divider()
         sure = st.checkbox("기록 전체를 삭제하는 데 동의합니다(되돌릴 수 없음)")
-        if st.button("기록 전체 삭제", disabled=not sure):
+        if st.button("기록 전체 삭제", disabled=not (sure and ok_pw)):
             db.reset(); st.session_state.clear(); st.rerun()
         if st.button("샘플 데이터·서식 파일 다시 만들기"):
             import importlib, make_sample_data

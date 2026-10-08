@@ -65,6 +65,7 @@ if (-not $repoExists) {
 }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $image = "$Region-docker.pkg.dev/$Project/$repoName/${Service}:$stamp"
+if ($AppPassword -and $AppPassword.Length -lt 10) { Fail "접속 비밀번호는 10자 이상이어야 합니다(영문·숫자 섞어서)." }
 $commit = (git rev-parse --short HEAD 2>$null); if (-not $commit) { $commit = "unknown" }
 @{ commit = "$commit"; built_at = (Get-Date -Format "yyyy-MM-dd HH:mm"); by = "$env:USERNAME" } | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 build_info.json   # 사이드바 '빌드' 표시용(저장소에는 넣지 않음)
 gcloud builds submit --tag $image --region $Region --timeout 1200 .
