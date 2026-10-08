@@ -14,7 +14,7 @@ def main() -> int:
     for mod, spec in (("ruff", "ruff"), ("pytest", "pytest")):
         if shutil.which(mod) is None and subprocess.run([sys.executable, "-m", mod, "--version"], capture_output=True).returncode != 0:
             print(f"[설치] {spec}"); subprocess.run([sys.executable, "-m", "pip", "install", "-q", spec])
-    env = dict(os.environ); env.setdefault("HISTORY_DB", str(HERE / "storage" / "check_history.db"))   # 실제 이력 DB 보호
+    env = dict(os.environ); env.setdefault("HISTORY_DB", str(HERE / "storage" / "check_history.db"))   # 실제 기록 DB 보호
     failed = []
     for name, cmd in STEPS:
         print(f"\n===== {name} =====", flush=True)

@@ -1,10 +1,10 @@
-"""대화형 에이전트: 의뢰서 한 장을 붙이고 "요구하는 것들 작성해 줘"라고 하면 끝까지 준비하고, 사람은 검수·승인만 한다.
+"""대화형 에이전트: 요구서 한 장을 붙이고 "요구하는 것들 작성해 줘"라고 하면 끝까지 준비하고, 사람은 검수·승인만 한다.
 
 구조
 - Case: 한 건의 작업 상태(요구서 원문·항목·자료 계획·가져온 값·대조·사유·초안·HWPX). 세션에 둔다.
 - 단계 함수(step_*): 기존 모듈(extract·plan·compare·assist·draft·hwpx_out)을 감싼 결정적 코드. 값은 계산하지 않고 가진 자료에서만 가져온다.
 - autopilot(): 키가 없거나 '그냥 다 해 줘'일 때 표준 순서로 전부 실행.
-- TOOLS/handlers(): Claude가 대화 중 골라 쓰는 도구. 단계 함수 + 조정(기준일 바꾸기·사유 적기·초안 고치기) + 이력 조회(history_qa).
+- TOOLS/handlers(): Claude가 대화 중 골라 쓰는 도구. 단계 함수 + 조정(기준일 바꾸기·사유 적기·초안 고치기) + 기록 조회(history_qa).
 원칙: 확정·승인은 사람만 한다(approve()). 에이전트는 준비하고 설명한다."""
 from __future__ import annotations
 import datetime as dt, re
@@ -27,7 +27,7 @@ class Case(dict):
     def bump(self):
         """초안·사유·값이 코드나 모델에 의해 새로 만들어졌음을 표시(판 번호). 화면 입력칸은 이 번호를 키에 넣어 이전 입력이 새 내용을 덮지 않게 한다."""
         self["rev"] = int(self.get("rev") or 0) + 1
-    def reset(self, keep=("dept_head", "phone")):
+    def reset(self, keep=("dept_head", "phone", "org", "company")):
         """새 작업 시작(같은 객체를 비워 세션 참조를 유지). 부서장·내선 같은 설정 값은 남긴다."""
         kept = {k: self.get(k) for k in keep if k in self}
         rev = int(self.get("rev") or 0) + 1
@@ -36,7 +36,7 @@ class Case(dict):
 # ---------------- 단계 ----------------
 def step_read(case: Case) -> dict:
     """요구서 원문 → 항목·지표·기준일·기간. 이미 읽었으면 그대로."""
-    if not case["request_text"]: raise ValueError("요구서가 없습니다. 의뢰서 파일을 붙이거나, 요청 내용을 말로 알려 주세요(describe_request).")
+    if not case["request_text"]: raise ValueError("요구서가 없습니다. 요구서 파일을 붙이거나, 요청 내용을 말로 알려 주세요(describe_request).")
     key = hash(case["request_text"])
     if case.get("described") and case["extracted"]: res, how = case["extracted"], "대화 입력(규칙)"      # 말로 받은 요구는 describe_request가 이미 구조화해 두었다(다시 읽으면 '미기재'가 값으로 들어감)
     elif case["extracted"] and case.get("read_key") == key: res, how = case["extracted"], case.get("read_how") or "이미 읽음"   # 같은 원문을 다시 추출하지 않는다(run_all·read_request 반복 호출)
@@ -56,7 +56,7 @@ def _clean_item(text: str) -> str:
 
 def describe_request(case: Case, requester: str | None = None, received_date: str | None = None, due_date: str | None = None, title: str | None = None,
                      items: list[str] | None = None, name: str = "대화로 받은 요구") -> dict:
-    """의뢰서 파일 없이 말로 받은 요구를 작업의 요구서로 만든다. 모르는 칸은 비워 둔다(지어내지 않음).
+    """요구서 파일 없이 말로 받은 요구를 작업의 요구서로 만든다. 모르는 칸은 비워 둔다(지어내지 않음).
     이미 적어 둔 요구가 있으면 말한 칸만 바꾼다. 등록된 뒤라면 기록(DB)의 머리 정보·항목도 같이 고친다. 계획 이후 단계는 다시 한다."""
     if case.get("approved"): case.reset()                                   # 확정이 끝난 작업에 새 요구가 오면 앞 건 기록을 고치지 않고 새 작업으로
     prev = case["extracted"] if (case.get("described") and case["extracted"]) else {}
@@ -77,6 +77,20 @@ def describe_request(case: Case, requester: str | None = None, received_date: st
             "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period"), "unit": it.get("unit")} for i, it in enumerate(res["items"])],
             "missing_header": [k for k, v in (("요청 주체", requester), ("접수일", received_date), ("기한", due_date)) if not v],
             "unknown_indicator": [it["item_text"] for it in res["items"] if not it.get("indicator")]}
+
+def set_header(case: Case, requester=None, received_date=None, due_date=None, title=None) -> dict:
+    """요청 주체·접수일·기한·제목만 고친다(항목·원문은 그대로). 등록돼 있으면 기록도 고친다. 초안·한글 파일은 다시 만들어야 반영된다."""
+    if not case["extracted"]: step_read(case)
+    nd = lambda v: (extract._norm_date(v) or (v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v)) else None)) if v else None
+    changed = {}
+    for k, v in (("requester", requester), ("received_date", nd(received_date)), ("due_date", nd(due_date)), ("title", title)):
+        if v not in (None, "") and case["extracted"].get(k) != v: case["extracted"][k] = v; changed[k] = v
+    if changed and case["request_id"]:
+        e = case["extracted"]; db.update_request(case["request_id"], e.get("requester"), e.get("received_date"), e.get("due_date"), e.get("title"))
+    if changed:
+        if case["draft"]: case["draft_stale"] = True
+        case["hwpx_stale"] = True; case.bump(); case.note("요청 정보 수정: " + ", ".join(changed))
+    return {"changed": changed, "registered": case["request_id"]}
 
 def _req_items(case: Case) -> tuple[dict, list[dict]]:
     """초안·HWPX가 쓰는 요구 머리 정보와 항목: 등록돼 있으면 기록에서, 아니면(등록 보류) 작업 상태에서."""
@@ -241,11 +255,12 @@ def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = 
     req, items = _req_items(case); d = case["draft"]; values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
     if template_bytes:
         fill = {"수신": req.get("requester") or "", "제목": d.get("제목", ""), "본문": d.get("본문", ""), "차이사유": d.get("차이사유", "") or "해당 없음",
-                "산출근거": d.get("산출근거", ""), "요구항목": "\n".join(f"{i + 1}. {it['item_text']}" for i, it in enumerate(items)), "발신": "한국교육방송공사", "담당자": ""}
+                "산출근거": d.get("산출근거", ""), "요구항목": "\n".join(f"{i + 1}. {it['item_text']}" for i, it in enumerate(items)), "발신": case.get("company") or "한국교육방송공사", "담당자": ""}
         rows = [{"no": i + 1, "indicator": r["indicator"], "center": r["center"], "base_date": r["base_date"], "value": r["value"]} for i, (_, r) in enumerate(values.iterrows())]
         out, kind = hwpx_out.render(template_bytes, fill, rows), "서식 치환"
     else:
-        out, kind = hwpx_build.build_reply(req, items, values, d, dict(case["reasons"]), case["compare"], dept_head=dept_head or case.get("dept_head", ""), phone=phone or case.get("phone", "")), "답변자료 양식"
+        out, kind = hwpx_build.build_reply(req, items, values, d, dict(case["reasons"]), case["compare"], dept_head=dept_head or case.get("dept_head", ""), phone=phone or case.get("phone", ""),
+                                           org=case.get("org") or "지역교육협력부"), "답변자료 양식"
         rows = values
     name = safe_filename(f"답변자료_{req.get('requester') or '요구'}_{dt.date.today()}" + (f"_요구{case['request_id']}" if case["request_id"] else "") + ".hwpx")
     case["hwpx"], case["hwpx_name"], case["hwpx_stale"] = out, name, False; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB, {kind})")
@@ -322,7 +337,7 @@ TOOLS = [
     {"name": "make_hwpx", "description": "회신 HWPX 파일을 만든다. 기본은 부서 '답변자료' 양식(제목·날짜·번호 항목·【확인】·본문·수치표·※ 근거), 설정에 자리표시자 서식이 있으면 그 서식.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "run_all", "description": "표준 순서로 전부 실행: 읽기→등록→계획→값 가져오기→대조→사유 후보→초안→HWPX. 사용자가 '작성해 줘' '다 해 줘'라고 하면 이것 하나로 시작한다. 사용자가 '등록은 하지 말고 파일만' 하면 register=false(승인 때 등록).",
      "input_schema": {"type": "object", "properties": {"register": {"type": "boolean", "description": "기록(DB)에 요구서를 등록할지. 기본 true"}}}},
-    {"name": "describe_request", "description": "의뢰서 파일 없이 사용자가 말로 알려 준 요구를 작업의 요구서로 만든다(또는 고친다). 사용자가 '○○ 요청이 들어왔어' 하면 즉시 이것으로 적고 run_all을 이어서 한다. 모르는 칸은 비워 둔다(묻기 전에 먼저 처리). items는 요구 항목을 한 줄씩, 기간·기준일·단위를 그대로 담아(예: '2025년 12월 ~ 2026년 8월 센터별 월별 등원율'). 날짜는 YYYY-MM-DD(오늘·내일 같은 말은 상태줄의 오늘 날짜로 계산).",
+    {"name": "describe_request", "description": "요구서 파일 없이 사용자가 말로 알려 준 요구를 작업의 요구서로 만든다(또는 고친다). 사용자가 '○○ 요청이 들어왔어' 하면 즉시 이것으로 적고 run_all을 이어서 한다. 모르는 칸은 비워 둔다(묻기 전에 먼저 처리). items는 요구 항목을 한 줄씩, 기간·기준일·단위를 그대로 담아(예: '2025년 12월 ~ 2026년 8월 센터별 월별 등원율'). 날짜는 YYYY-MM-DD(오늘·내일 같은 말은 상태줄의 오늘 날짜로 계산).",
      "input_schema": {"type": "object", "properties": {"requester": {"type": "string"}, "received_date": {"type": "string"}, "due_date": {"type": "string"}, "title": {"type": "string"},
                                                        "items": {"type": "array", "items": {"type": "string"}}}, "required": ["items"]}},
     {"name": "data_coverage", "description": "지표 데이터(담당자가 미리 넣어 둔 집계값 — 과거 제출 이력과 별개)의 보유 범위: 지표별 기준일 범위·센터 수·적재일. indicator를 주면 그 지표의 기준일 목록까지. '그 기간 자료가 있나' 판단은 이것으로.",
@@ -338,7 +353,7 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 담당자
 3. 자료 계획에서 판단이 갈리는 항목(기준일이 없거나 요구 기준일 자료가 없음)은 제안 이유를 그대로 전하고, 다른 기준일을 원하면 set_dates → pull_values → compare_with_past → write_draft → make_hwpx 순으로 다시 합니다.
 4. 자료가 없는 항목은 '지표 데이터에 없음 → 새로 산출 필요'라고 분명히 말하고 지어내지 않습니다. 자료가 있는지는 상태줄의 '지표 데이터 보유'와 data_coverage로 봅니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
 5. 사용자가 사유나 문안을 말하면 set_reason / edit_draft로 반영한 뒤 write_draft(사유를 바꾼 경우) → make_hwpx를 다시 합니다.
-6. 과거 이력 질문은 이력 조회 도구로 조회한 결과만 근거로 답합니다. 조회되지 않은 것은 '기록에 없음'. 같은 지표·기준일의 제출값이 서로 다른 센터가 보이면 diff_reasons(center 지정)로 기록된 사유를 찾아 그대로 인용하고, 없으면 '사유 기록 없음'. 답에는 요구번호(#id)·제출본번호·제출일·요청 기관을 적습니다.
+6. 과거 기록 질문은 기록 조회 도구로 조회한 결과만 근거로 답합니다. 조회되지 않은 것은 '기록에 없음'. 같은 지표·기준일의 제출값이 서로 다른 센터가 보이면 diff_reasons(center 지정)로 기록된 사유를 찾아 그대로 인용하고, 없으면 '사유 기록 없음'. 답에는 요구번호(#id)·제출본번호·제출일·요청 기관을 적습니다.
 7. 사업 자체에 대한 질문(이용 대상·비용·운영 시간·인원 구성·절차·근거 법령 등)은 search_docs로 참고 문서(지침·운영 매뉴얼)를 찾아 그 문구만 근거로 답하고 문서 이름과 쪽을 밝힙니다. 없으면 "참고 문서에 없습니다". 센터의 지역·유형·개소일·정원·주말 운영은 center_info / list_centers(센터 명부)로 답합니다.
 
 지켜야 할 것

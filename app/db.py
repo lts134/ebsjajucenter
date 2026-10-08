@@ -130,6 +130,14 @@ CREATE TABLE IF NOT EXISTS dispatches (        -- 발송 기록: 확정한 회�
     submission_id INTEGER, draft_id INTEGER,
     sent_at TEXT, sent_to TEXT, method TEXT, sent_by TEXT, note TEXT, created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS settings (          -- 조직 설정(부서장·내선·발신 표기): 접속 세션이 아니라 기록에 남는다
+    key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT
+);
+CREATE TABLE IF NOT EXISTS phrases (           -- 자주 쓰는 문구 서랍(차이 사유·지표 정의·안내문). 확정 때 쓴 사유가 자동으로 쌓인다
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT, text TEXT, created_by TEXT, created_at TEXT, last_used TEXT, use_count INTEGER DEFAULT 1,
+    UNIQUE(kind, text)
+);
 """
 
 _initialized = set()
@@ -350,7 +358,7 @@ def _int_or_none(v):
     except (TypeError, ValueError): return None
 
 def replace_values(submission_id, values) -> int:
-    """제출본의 값 전체 교체(이력 조회에서 표를 고쳐 저장할 때). 지표·센터·기준일·값이 비면 그 행은 버림."""
+    """제출본의 값 전체 교체(기록 조회에서 표를 고쳐 저장할 때). 지표·센터·기준일·값이 비면 그 행은 버림."""
     con = connect()
     con.execute("DELETE FROM submission_values WHERE submission_id=?", (submission_id,))
     rows = []
@@ -692,3 +700,103 @@ def dispatches_for(submission_id) -> list[dict]:
 
 def dispatched_request_ids() -> set:
     con = connect(); rows = con.execute("SELECT DISTINCT s.request_id FROM dispatches d JOIN submissions s ON s.id=d.submission_id").fetchall(); con.close(); return {r[0] for r in rows}
+
+# ---------- 조직 설정 ----------
+SETTING_DEFAULTS = {"dept_head": "", "dept_phone": "", "org_name": "지역교육협력부", "company": "한국교육방송공사"}
+
+def get_settings() -> dict:
+    """조직 설정(기록 DB) + 기본값. 부서장·내선이 비어 있으면 환경변수 DEPT_HEAD·DEPT_PHONE로 보충."""
+    con = connect(); rows = con.execute("SELECT key, value FROM settings").fetchall(); con.close()
+    out = dict(SETTING_DEFAULTS); out.update({r[0]: r[1] for r in rows if r[1] not in (None, "")})
+    for k, env in (("dept_head", "DEPT_HEAD"), ("dept_phone", "DEPT_PHONE")):
+        if not out.get(k): out[k] = os.environ.get(env, "")
+    return out
+
+def set_settings(values: dict, user: str = "") -> None:
+    con = connect()
+    with con:
+        con.executemany("INSERT INTO settings(key,value,updated_at,updated_by) VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                        [(k, str(v or "").strip(), now(), user) for k, v in values.items()])
+    con.close()
+
+# ---------- 자주 쓰는 문구 ----------
+def add_phrase(kind: str, text, user: str = "") -> int | None:
+    """문구 저장(같은 문구면 사용 횟수만 +1). 빈 문구는 무시."""
+    t = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not t: return None
+    con = connect()
+    with con:
+        con.execute("INSERT INTO phrases(kind,text,created_by,created_at,last_used,use_count) VALUES(?,?,?,?,?,1) ON CONFLICT(kind,text) DO UPDATE SET use_count=use_count+1, last_used=excluded.last_used",
+                    (kind, t, user, now(), now()))
+        pid = con.execute("SELECT id FROM phrases WHERE kind=? AND text=?", (kind, t)).fetchone()[0]
+    con.close(); return pid
+
+def list_phrases(kind: str | None = None, limit: int = 100) -> list[dict]:
+    con = connect()
+    rows = con.execute("SELECT * FROM phrases" + (" WHERE kind=?" if kind else "") + " ORDER BY use_count DESC, last_used DESC LIMIT ?", ((kind, limit) if kind else (limit,))).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def delete_phrase(pid) -> None:
+    con = connect(); con.execute("DELETE FROM phrases WHERE id=?", (pid,)); con.commit(); con.close()
+
+def phrase_candidates(kind: str = "사유", limit: int = 12) -> list[str]:
+    """서랍에 넣을 문구: 저장된 문구(많이 쓴 순) + 아직 저장되지 않은 최근 차이 사유."""
+    out = [p["text"] for p in list_phrases(kind, limit)]
+    if kind == "사유" and len(out) < limit:
+        con = connect()
+        rows = con.execute("SELECT reason FROM diff_reasons WHERE reason IS NOT NULL AND TRIM(reason) <> '' ORDER BY created_at DESC LIMIT 60").fetchall(); con.close()
+        for (r,) in rows:
+            t = re.sub(r"\s+", " ", r).strip()
+            if t and t not in out: out.append(t)
+            if len(out) >= limit: break
+    return out
+
+# ---------- 백업·복원 ----------
+def snapshot_bytes() -> bytes:
+    """일관된 사본: SQLite 백업 API로 임시 파일에 복사한 뒤 읽는다(WAL에만 있는 변경까지 포함)."""
+    import tempfile
+    from pathlib import Path as _P
+    src = connect()
+    with tempfile.TemporaryDirectory() as d:
+        p = _P(d) / "snapshot.db"; dst = sqlite3.connect(p); src.backup(dst); dst.close(); data = p.read_bytes()
+    src.close(); return data
+
+def backup_dir():
+    d = DB_PATH.parent / "backup"; d.mkdir(parents=True, exist_ok=True); return d
+
+def backup_now(tag: str = "manual"):
+    """서버 안 backup/ 폴더에 사본 파일을 만든다. 경로 반환."""
+    p = backup_dir() / f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M%S')}_{tag}.db"
+    p.write_bytes(snapshot_bytes()); return p
+
+def list_backups(limit: int = 10) -> list[dict]:
+    files = sorted(backup_dir().glob("history_*.db"), key=lambda f: f.stat().st_mtime, reverse=True)[:limit]
+    return [{"name": f.name, "size_kb": f.stat().st_size // 1024, "modified": dt.datetime.fromtimestamp(f.stat().st_mtime).strftime("%Y-%m-%d %H:%M")} for f in files]
+
+def restore_from_bytes(data: bytes, user: str = "") -> dict:
+    """올린 DB 파일로 기록을 통째로 되돌린다. 먼저 현재 기록을 backup/에 남기고, 백업 API로 페이지를 옮겨 쓴다
+    (파일을 바꿔치기하지 않으므로 WAL·클라우드 복제가 깨지지 않는다). 구버전 파일이면 스키마를 보완한다."""
+    import tempfile
+    from pathlib import Path as _P
+    if not data.startswith(b"SQLite format 3\x00"): raise ValueError("SQLite 데이터베이스 파일이 아닙니다.")
+    with tempfile.TemporaryDirectory() as d:
+        p = _P(d) / "upload.db"; p.write_bytes(data); src = sqlite3.connect(p)
+        tables = {r[0] for r in src.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"requests", "submissions"} <= tables: src.close(); raise ValueError("이 앱의 기록 DB가 아닙니다(requests·submissions 표가 없음).")
+        counts = {t: src.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("requests", "submissions", "indicator_data", "ref_docs") if t in tables}
+        before = backup_now("before_restore")
+        dst = connect(); src.backup(dst); dst.close(); src.close()
+    _initialized.discard(str(DB_PATH)); connect().close()          # 새 표·열이 없는 옛 파일이면 여기서 보완된다
+    _center_cache.update(ver=None, map={})
+    return {"counts": counts, "backup": before.name}
+
+def db_info() -> dict:
+    con = connect(); t = {}
+    for name, q in (("요구서", "SELECT COUNT(*) FROM requests"), ("제출본", "SELECT COUNT(*) FROM submissions"), ("지표 데이터", "SELECT COUNT(*) FROM indicator_data WHERE active=1"),
+                    ("참고 문서", "SELECT COUNT(*) FROM ref_docs"), ("발송 기록", "SELECT COUNT(*) FROM dispatches")):
+        try: t[name] = con.execute(q).fetchone()[0]
+        except sqlite3.DatabaseError: t[name] = None
+    con.close()
+    st_ = DB_PATH.stat() if DB_PATH.exists() else None
+    return {"path": str(DB_PATH), "size_kb": (st_.st_size // 1024) if st_ else 0, "modified": dt.datetime.fromtimestamp(st_.st_mtime).strftime("%Y-%m-%d %H:%M") if st_ else "-",
+            "tables": t, "replica": os.environ.get("LITESTREAM_REPLICA_URL", "")}

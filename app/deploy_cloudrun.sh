@@ -22,6 +22,7 @@ gcloud projects add-iam-policy-binding "$PROJECT" --member="serviceAccount:servi
 REPO="cloud-run-source-deploy"
 gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 || gcloud artifacts repositories create "$REPO" --repository-format=docker --location="$REGION"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/$SERVICE:$(date +%Y%m%d-%H%M%S)"
+printf '{"commit":"%s","built_at":"%s","by":"%s"}' "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" "$(date '+%Y-%m-%d %H:%M')" "${USER:-}" > build_info.json   # 사이드바 '빌드' 표시용
 gcloud builds submit --tag "$IMAGE" --region "$REGION" --timeout 1200 .
 # 접속 비밀번호 없이 공개 URL로 뜨는 일을 막는다: 서비스가 처음이거나 기존 서비스에 APP_PASSWORD가 없으면 반드시 받아야 한다
 if [ -z "${APP_PASSWORD:-}" ] && ! gcloud run services describe "$SERVICE" --region "$REGION" --format="value(spec.template.spec.containers[0].env)" 2>/dev/null | grep -q "APP_PASSWORD"; then

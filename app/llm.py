@@ -5,7 +5,7 @@
 configure()가 호출되지 않은 곳(check_llm.py 같은 CLI)은 환경변수(ANTHROPIC_API_KEY 등)와 모듈 전역 상태를 쓴다.
 
 - ask_json: JSON 스키마를 주면 구조화 출력으로 형식을 보장받고, 모델이 거부(400)하면 그 모델은 텍스트 파싱으로 자동 대체.
-- run_tools: 도구 호출 루프(⑧ 이력에 묻기).
+- run_tools: 도구 호출 루프(⑧ 기록에 묻기).
 - 재시도·타임아웃은 공급자(SDK)가 담당. 호출마다 모델·지연·토큰·추정 비용을 기록.
 AI는 수치를 계산하거나 사유를 추정하지 않는다는 원칙은 호출하는 쪽(extract/normalize/draft/assist)의 프롬프트가 지킨다."""
 import os, re, json, time, threading, datetime as dt

@@ -53,10 +53,10 @@ def main():
         time.sleep(6)
         with sync_playwright() as pw:
             b = pw.chromium.launch(**({"executable_path": EXE} if EXE else {}), args=["--lang=ko-KR"])
-            # 1) 녹화하지 않는 준비: 시연 데이터 넣기(7월 의원실 답변이 기억에 있는 상태로 시작)
+            # 1) 녹화하지 않는 준비: 시연 데이터 넣기(7월 의원실 답변이 기록에 있는 상태로 시작)
             prep = b.new_page(viewport={"width": W, "height": H}, locale="ko-KR")
             prep.goto(f"http://localhost:{PORT}"); settle(prep, 3000)
-            nav(prep, "설정"); prep.get_by_role("tab", name="시연·초기화").click(); settle(prep); click(prep, "시연 데이터 넣기"); prep.close()
+            nav(prep, "설정"); prep.get_by_role("tab", name="백업·초기화").click(); settle(prep); click(prep, "시연 데이터 넣기"); prep.close()
             # 2) 녹화 시작
             ctx = b.new_context(viewport={"width": W, "height": H}, locale="ko-KR", record_video_dir=str(vdir), record_video_size={"width": W, "height": H})
             page = ctx.new_page(); t0 = time.time()
@@ -65,7 +65,7 @@ def main():
             card(page, "2026 EBS AI Innovation Challenge · 트랙1 Now Agent", "EBS 대외 요구자료 대응 에이전트",
                  "국감·감사·교육부 요구자료에 \"언제, 누구에게, 어떤 근거로 답했는지\"를 기억하고\n다음 답변의 수치와 문서를 제출 전에 검증합니다.\n" + path_note, 7000)
             # 홈
-            cap(page, "홈 — 담당자가 하는 일은 셋입니다. 새 요구서 처리, 과거 답변 등록, 기록에 묻기. 지난 7월 의원실에 낸 답변 1건이 이미 기억에 있습니다.", 5000)
+            cap(page, "홈 — 담당자가 하는 일은 셋입니다. 새 요구서 처리, 과거 답변 등록, 기록에 묻기. 지난 7월 의원실에 낸 답변 1건이 이미 기록에 있습니다.", 5000)
             # 과거 답변 등록
             nav(page, "과거 답변 등록")
             cap(page, "과거 답변 등록 — 집계 엑셀이 없어도 됩니다. 실적표·회신 공문(HWP·HWPX·DOCX·PDF)을 종류 구분 없이 한 번에 올리면 표를 그대로 읽어 합칩니다.", 2500)
@@ -81,7 +81,7 @@ def main():
             scroll(page, 900); page.wait_for_timeout(5500)
             click(page, "등록하고 2단계로", 2500)
             # 2단계
-            cap(page, "2단계 수치 맞춰 보기 — 이번에 낼 집계값을 지난번 보낸 값과 같은 지표·센터·기준일끼리 맞춰 봅니다. 이 계산은 코드만 합니다.", 1500)
+            cap(page, "2단계 수치 맞춰 보기 — 이번에 낼 집계값을 지난번 제출값과 같은 지표·센터·기준일끼리 맞춰 봅니다. 이 계산은 코드만 합니다.", 1500)
             scroll(page, 500); page.wait_for_timeout(3000)
             cap(page, "짝 12건 중 차이 3건(센터C·G·K). 차이가 난 행에는 '추출시점·원자료 버전이 바뀜' 같은 단서가 붙습니다.", 4500)
             click(page, "문구 후보 받기", 2500)
@@ -106,16 +106,16 @@ def main():
             nav(page, "검토·승인")
             cap(page, "검토·승인 — 팀장이 수치·사유·초안을 보고 승인하거나 반려합니다. 누가 언제 승인했는지 기록에 남습니다.", 2500)
             page.get_by_label("검토 의견").first.fill("수치·사유 확인함. 제출 승인"); page.keyboard.press("Enter"); settle(page, 500); click(page, "승인", 3000)
-            # 이력 조회
-            nav(page, "이력 조회"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page)
-            cap(page, "이력 조회 — 요구 → 항목 → 보낸 값 → 차이 사유 → 초안 → 승인이 한 줄로 이어집니다.", 1000)
+            # 기록 조회
+            nav(page, "기록 조회"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page)
+            cap(page, "기록 조회 — 요구 → 항목 → 제출값 → 차이 사유 → 초안 → 승인이 한 줄로 이어집니다.", 1000)
             scroll(page, 500); page.wait_for_timeout(5000)
             # 현황
             nav(page, "현황")
             cap(page, "현황 — 기한(D-day)과 상태, 요청 주체별 건수, 반복해서 요구된 지표. 반복 지표는 미리 산출해 두는 표준 답변 후보입니다.", 5000)
-            # 이력에 묻기
-            nav(page, "이력에 묻기")
-            cap(page, "이력에 묻기 — \"감사실에 등원율 어떻게 냈지?\" 화면을 돌아다니지 않아도 기록에서 찾아 요구번호·제출일·값을 근거와 함께 답합니다.", 1500)
+            # 기록에 묻기
+            nav(page, "기록에 묻기")
+            cap(page, "기록에 묻기 — \"감사실에 등원율 어떻게 냈지?\" 화면을 돌아다니지 않아도 기록에서 찾아 요구번호·제출일·값을 근거와 함께 답합니다.", 1500)
             page.get_by_role("textbox", name="질문").fill("감사실에 등원율 어떻게 냈지?"); page.keyboard.press("Enter"); settle(page, 500)
             click(page, "물어보기", 3000); page.wait_for_timeout(4500)
             # 설정
@@ -123,7 +123,7 @@ def main():
             cap(page, "설정 — 접속자마다 자기 API 키를 세션에만 넣습니다(서버 저장 없음). 호출마다 모델·시간·비용이 기록됩니다. 키가 없으면 규칙 기반으로 같은 흐름이 돕니다.", 5000)
             card(page, "정리", "AI는 읽고·쓰고·점검하고·기억합니다. 수치 계산은 코드가, 사유와 승인은 사람이 합니다.",
                  "· 요구서 구조화 → 과거 제출 이력 자동 연결 → 수치 대조(코드) → 사유 후보(근거 있는 것만) → 공문체 초안·HWPX\n"
-                 "· Cloud Run에 올려 부서 전원이 같은 기억을 공유 · 이력은 Cloud Storage에 실시간 복제\n"
+                 "· Cloud Run에 올려 부서 전원이 같은 기록을 공유 · 이력은 Cloud Storage에 실시간 복제\n"
                  "· 데이터는 전부 가상(센터A~L) · 과거 회신 HWP 실파일 표 추출 확인 완료", 7000)
             dur = time.time() - t0
             ctx.close(); b.close()

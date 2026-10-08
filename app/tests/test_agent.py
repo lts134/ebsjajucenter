@@ -1,4 +1,4 @@
-"""대화형 에이전트의 결정적 단계(규칙 경로): 의뢰서 본문 → 읽기 → 등록 → 계획 → 값 → 대조 → 사유 → 초안 → HWPX → 승인."""
+"""대화형 에이전트의 결정적 단계(규칙 경로): 요구서 본문 → 읽기 → 등록 → 계획 → 값 → 대조 → 사유 → 초안 → HWPX → 승인."""
 from pathlib import Path
 import agent, compare
 
@@ -53,7 +53,7 @@ def test_handlers_and_tools_consistent(fresh_db):
     assert hs["set_reason"](indicator="등원율", center="센터G", base_date="2026-06-30", reason="x")["ok"]
     assert hs["edit_draft"](field="제목", text="바뀐 제목")["ok"] and case["draft"]["제목"] == "바뀐 제목" and case["hwpx"] is None
     assert hs["make_hwpx"]()["file_name"].endswith(".hwpx")
-    assert agent.is_do_it("이 의뢰서에서 요구하는 것들 작성해줘") and not agent.is_do_it("감사실에 언제 냈지?")
+    assert agent.is_do_it("이 요구서에서 요구하는 것들 작성해줘") and not agent.is_do_it("감사실에 언제 냈지?")
 
 
 def test_chat_turn_with_fake_model(fresh_db, monkeypatch):
@@ -78,7 +78,7 @@ def test_chat_turn_with_fake_model(fresh_db, monkeypatch):
     monkeypatch.setattr(llm, "_provider", lambda: fake)
     case = agent.Case(request_text=(SAMPLE / "새요구서_의원실_2026-09-15.txt").read_text(encoding="utf-8"), request_name="r.txt")
     seen = []
-    res = agent.chat_turn(case, [], "이 의뢰서에서 요구하는 것들 작성해 줘", TPL.read_bytes(), on_tool=lambda n, i, o: seen.append(n))
+    res = agent.chat_turn(case, [], "이 요구서에서 요구하는 것들 작성해 줘", TPL.read_bytes(), on_tool=lambda n, i, o: seen.append(n))
     assert res["text"].startswith("처리했습니다") and seen == ["run_all"] and case["draft"] and case["hwpx"]
     assert fake.calls[0]["system"] == agent.SYSTEM and {t["name"] for t in fake.calls[0]["tools"]} >= {"run_all", "set_dates", "indicator_history"}
     assert "[작업 상태]" in fake.calls[0]["messages"][0]["content"] and len(res["messages"]) == 4         # user, assistant(tool_use), user(tool_result), assistant(text)
@@ -88,7 +88,7 @@ def test_chat_turn_with_fake_model(fresh_db, monkeypatch):
 
 
 def test_describe_request_without_file_and_deferred_register(fresh_db):
-    """의뢰서 파일 없이 말로 받은 요구: 지시어를 뗀 항목 → 지표 데이터 범위로 기간 전부 → 등록 보류(no_register)로 초안·HWPX → 승인 때 등록."""
+    """요구서 파일 없이 말로 받은 요구: 지시어를 뗀 항목 → 지표 데이터 범위로 기간 전부 → 등록 보류(no_register)로 초안·HWPX → 승인 때 등록."""
     import calendar, docread
     db = fresh_db
     months = [f"{y}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 10)]]

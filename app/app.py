@@ -5,9 +5,9 @@
   홈              — 할 일·현황 한눈에, 세 가지 작업으로 바로 이동
   새 요구서 처리  — 1 요구서 읽기 → 2 수치 맞춰 보기 → 3 회신 초안 (한 흐름, 단계 표시)
   검토·승인       — 팀장이 초안을 승인·반려
-  과거 답변 등록  — 예전에 낸 요구서와 그때 보낸 값을 기억에 넣기
-  이력 조회 · 현황 · 이력에 묻기 · 설정
-역할 경계: AI는 읽기·문안·점검·기억 조회만. 수치 계산·대조는 코드, 사유·확정은 담당자."""
+  과거 답변 등록  — 예전에 낸 요구서와 그때 제출한 값을 기록에 넣기
+  기록 조회 · 현황 · 기록에 묻기 · 설정
+역할 경계: AI는 읽기·문안·점검·기록 조회만. 수치 계산·대조는 코드, 사유·확정은 담당자."""
 import os, io, re, sys, subprocess, datetime as dt, zipfile, json, threading, queue, time
 from pathlib import Path
 
@@ -44,8 +44,22 @@ st.session_state.setdefault("llm_cfg", {}); st.session_state.setdefault("llm_sta
 llm.configure(st.session_state["llm_cfg"], st.session_state["llm_state"], st.session_state["llm_log"])
 HAS_API = llm.available()
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _build_info() -> str:
+    """사이드바 '빌드' 표시: 배포 스크립트가 만든 build_info.json(커밋·시각) → 없으면 로컬 git → 없으면 빈 문자열. '배포가 반영됐나'를 화면에서 확인한다."""
+    try:
+        p = HERE / "build_info.json"
+        if p.exists():
+            j = json.loads(p.read_text(encoding="utf-8-sig")); return f"빌드 {j.get('built_at', '')} · {j.get('commit', '')}".strip(" ·")
+        out = subprocess.run(["git", "log", "-1", "--format=%h %cd", "--date=format:%Y-%m-%d %H:%M"], cwd=HERE, capture_output=True, text=True, timeout=3)
+        if out.returncode == 0 and out.stdout.strip(): h, _, d = out.stdout.strip().partition(" "); return f"빌드 {d} · {h} (로컬)"
+    except Exception: pass
+    return ""
+BUILD = _build_info()
+ORG = db.get_settings()                                            # 조직 설정(부서장·내선·발신 표기): 기록 DB, 환경변수는 보조
+
 NAV = [("업무", [("홈", "home"), ("새 요구서 처리", "description"), ("검토·승인", "task_alt")]),
-       ("기록", [("지표 데이터", "database"), ("참고 문서", "menu_book"), ("과거 답변 등록", "library_add"), ("이력 조회", "search"), ("현황", "monitoring"), ("이력에 묻기", "forum")]),
+       ("기록", [("지표 데이터", "database"), ("참고 문서", "menu_book"), ("과거 답변 등록", "library_add"), ("기록 조회", "search"), ("현황", "monitoring"), ("기록에 묻기", "forum")]),
        ("", [("설정", "settings")])]
 PAGE_NAMES = [n for _, items in NAV for n, _ in items]
 
@@ -69,7 +83,7 @@ with st.sidebar:
     USER = st.session_state.get("user_name") or "담당자"; REVIEWER = st.session_state.get("reviewer_name") or "팀장"
     u = llm.usage_summary() if HAS_API and llm.log() else None
     ui.sidefoot(USER, HAS_API, f"AI {llm.model_label()}" if HAS_API else "AI 연결 안 됨 · 규칙만 동작",
-                (f"이 세션 호출 {u['calls']}회 · 추정 ${u['cost_usd']:.3f}" + (f" · 캐시 읽기 {u['cache_read_tokens'] // 1000}k토큰" if u.get("cache_read_tokens") else "") if u else "") + ("<br>시연 모드(샘플 파일 선택칸 표시)" if DEMO else ""))
+                (f"이 세션 호출 {u['calls']}회 · 추정 ${u['cost_usd']:.3f}" + (f" · 캐시 읽기 {u['cache_read_tokens'] // 1000}k토큰" if u.get("cache_read_tokens") else "") if u else "") + ("<br>시연 모드(샘플 파일 선택칸 표시)" if DEMO else "") + (f"<br>{ui.esc(BUILD)}" if BUILD else ""))
 
 @st.cache_data(show_spinner=False, max_entries=20)
 def render_hwpx_cached(tpl_bytes: bytes, fill_json: str, rows_json: str) -> bytes:
@@ -294,10 +308,10 @@ def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
         if low.endswith(REQ_EXT):
             try: text = docread.read(name, data)
             except Exception as e: notes.append(f"'{name}'을 읽지 못했습니다: {e}"); continue
-            if case["request_id"] or case["draft"] or case.get("approved"):      # 새 의뢰서면 새 작업(앞 건의 기록은 그대로 남는다)
+            if case["request_id"] or case["draft"] or case.get("approved"):      # 새 요구서면 새 작업(앞 건의 기록은 그대로 남는다)
                 _new_case(say=False); case = st.session_state["case"]
             case["request_text"], case["request_name"] = text, name; case["uploads"].append(name)
-            notes.append(f"의뢰서 '{name}'을 받았습니다({len(text):,}자).")
+            notes.append(f"요구서 '{name}'을 받았습니다({len(text):,}자).")
         elif low.endswith(DASH_EXT):
             try: note, _ = _import_dashboard(data, name); notes.append(note); case["plans"] = []; case["values"] = None
             except Exception as e: notes.append(f"대시보드 저장 파일 '{name}'을 읽지 못했습니다: {e}")
@@ -318,19 +332,21 @@ def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
     return notes
 
 def _rule_reply(case: agent.Case, text: str, tpl: bytes | None) -> str:
-    """키 없을 때: 의뢰서가 있고 처리 지시면 표준 순서로 전부, 질문이면 키워드 검색, 그 외 안내."""
+    """키 없을 때: 요구서가 있고 처리 지시면 표준 순서로 전부, 질문이면 키워드 검색, 그 외 안내."""
     if case["request_text"] and agent.is_do_it(text):
         return "\n\n".join(agent.autopilot(case, tpl))
-    if agent.is_do_it(text) and normalize.normalize_all(text):                       # 의뢰서 없이 "센터별 등원율 요청이 들어왔어. 작성해 줘" → 말한 문장을 요구 항목으로
+    if agent.is_do_it(text) and normalize.normalize_all(text):                       # 요구서 없이 "센터별 등원율 요청이 들어왔어. 작성해 줘" → 말한 문장을 요구 항목으로
         agent.describe_request(case, items=[text])
-        return "\n\n".join(["의뢰서 파일이 없어 말씀하신 문장을 요구 항목으로 적었습니다(요청 주체·기한은 미기재)."] + agent.autopilot(case, tpl, register=not re.search(r"등록\s*(은|는)?\s*(빼|제외|말|하지)", text)))
+        return "\n\n".join(["요구서 파일이 없어 말씀하신 문장을 요구 항목으로 적었습니다(요청 주체·기한은 미기재)."] + agent.autopilot(case, tpl, register=not re.search(r"등록\s*(은|는)?\s*(빼|제외|말|하지)", text)))
+    if re.search(r"지표 데이터|무엇이 들어|뭐가 들어|뭐가 있|어떤 지표|보유 범위|들어 있", text):
+        return agent.coverage_line() + "\n\n자세한 범위와 적재 묶음은 '지표 데이터' 화면에서 볼 수 있습니다."
     kw = history_qa.keyword_search(text); doc_lines = refdocs.answer_lines(text)
     if kw["requests"] or kw["reasons"] or doc_lines:
         lines = [f"'{', '.join(kw['tokens'][:4])}'로 기록을 찾았습니다(키워드 검색, AI 연결 없음)."] if (kw["requests"] or kw["reasons"]) else []
         lines += [f"- 요구서 #{r['id']} {r['received_date']} {r['requester']} — {r['title']}" for r in kw["requests"][:8]]
         lines += [f"- 사유 기록: {x['center']} {x['indicator']} {x['base_date']}: {x['reason']}" for x in kw["reasons"][:5]]
         return "\n".join(lines + ([""] if lines and doc_lines else []) + doc_lines)
-    return "의뢰서(hwp·hwpx·pdf·docx·txt)를 붙이고 '요구하는 것들 작성해 줘'라고 하면 끝까지 준비합니다. 기록을 찾으려면 지표나 기관 이름을, 사업 내용을 물으려면 '운영 시간' '이용 대상'처럼 핵심어를 넣어 물어보세요(참고 문서가 등록돼 있어야 합니다). AI를 연결하면 자유로운 지시와 질문에 답합니다."
+    return "요구서(hwp·hwpx·pdf·docx·txt)를 붙이고 '요구하는 것들 작성해 줘'라고 하면 끝까지 준비합니다. 기록을 찾으려면 지표나 기관 이름을, 사업 내용을 물으려면 '운영 시간' '이용 대상'처럼 핵심어를 넣어 물어보세요(참고 문서가 등록돼 있어야 합니다). AI를 연결하면 자유로운 지시와 질문에 답합니다."
 
 def _case_label(case: agent.Case) -> str:
     """지금 작업 한 줄: '요구서 #12 · ○○ 의원실 · 제목 · 확정 완료'. 아무 작업도 없으면 빈 문자열."""
@@ -345,7 +361,7 @@ def _new_case(say: bool = True):
     case: agent.Case = st.session_state.get("case") or agent.Case(); prev = _case_label(case)
     case.reset(); st.session_state["case"] = case; st.session_state["chat_msgs"] = []
     if prev: st.session_state["chat_carry"] = f"직전 작업({prev})은 접었고 지금은 새 작업입니다. 앞 작업의 기록은 바꾸지 않습니다."
-    if say and prev: st.session_state.setdefault("chat", []).append({"role": "assistant", "text": f"— 새 요구 시작 — 이전 작업({prev})은 접었습니다. 의뢰서를 붙이거나 요구를 말씀해 주세요."})
+    if say and prev: st.session_state.setdefault("chat", []).append({"role": "assistant", "text": f"— 새 요구 시작 — 이전 작업({prev})은 접었습니다. 요구서를 붙이거나 요구를 말씀해 주세요."})
 
 def _approve_checks(case: agent.Case, req: dict, d: dict) -> list[tuple[str, str]]:
     """확정 전 확인 목록: (등급 bad·warn·info, 문장). 막는 것은 개인정보 패턴뿐이고 나머지는 알려만 준다."""
@@ -372,6 +388,7 @@ def _approve_now(case: agent.Case, tpl: bytes | None):
     if case.get("draft_stale") and case["draft"]: case["draft"]["차이사유"] = draft.reasons_text(case["reasons"]); case["draft_stale"] = False
     if case["hwpx"] is None or case.get("hwpx_stale"): agent.step_hwpx(case, tpl)
     out = agent.approve(case, USER, REVIEWER, OUT_DIR)
+    for v in case["reasons"].values(): db.add_phrase("사유", v, USER)                     # 쓴 사유는 문구 서랍에 쌓인다(다음 건에서 고를 수 있게)
     st.session_state["chat_msgs"] = []; st.session_state["chat_carry"] = f"직전 작업을 확정했습니다(제출본 #{out['submission_id']}, 초안 #{out['draft_id']}). 새 요구는 새 작업으로 처리합니다."
 
 def _send_card(case: agent.Case, req: dict):
@@ -381,7 +398,7 @@ def _send_card(case: agent.Case, req: dict):
     c1, c2 = st.columns([1.2, 1])
     with c1:
         if case["hwpx"]: st.download_button("회신 HWPX 받기", case["hwpx"], file_name=case["hwpx_name"], key=f"rv_dl_done_{sid}", icon=":material/download:", type="primary")
-        mail = draft.mail_text(req or {}, d, case["hwpx_name"], USER)
+        mail = draft.mail_text(req or {}, d, case["hwpx_name"], USER, org=f"{ORG['company']} {ORG['org_name']}".strip())
         st.text_input("메일 제목", mail["subject"], key=f"mail_subj_{sid}")
         st.text_area("메일 본문 — 복사해서 메일 프로그램에 붙이세요", mail["body"], height=170, key=f"mail_body_{sid}")
     with c2:
@@ -419,10 +436,18 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                 st.dataframe(m[["indicator", "center", "base_date", "old_value", "new_value", "diff", "판정", "단서"]].rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "지난번", "new_value": "이번", "diff": "차이"}), width="stretch", hide_index=True, height=min(60 + 35 * len(m), 320))
                 if len(diff):
                     st.markdown("**차이 사유** (제안이 채워져 있음 · 고치면 '초안 다시 쓰기'로 반영)")
+                    cands = db.phrase_candidates("사유") if not locked else []
                     for _, r in diff.iterrows():
                         k = (r["indicator"], r["center"], r["base_date"]); cur = case["reasons"].get(k, "") or ""
-                        new = st.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=cur, key=f"rv_reason_{k}_{rev}", disabled=locked)
-                        if new != cur: case["reasons"][k] = new; case["draft_stale"] = True
+                        a, b = st.columns([6, 1], vertical_alignment="bottom")
+                        new = a.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=cur, key=f"rv_reason_{k}_{rev}", disabled=locked)
+                        if new != cur: case["reasons"][k] = new; case["draft_stale"] = True; cur = new
+                        if not locked:
+                            with b.popover("문구", icon=":material/library_books:", width="stretch"):           # 자주 쓰는 사유 문구 서랍
+                                if cur.strip() and st.button("지금 문구를 서랍에 저장", key=f"rv_ph_save_{k}_{rev}", type="tertiary", icon=":material/bookmark_add:"): db.add_phrase("사유", cur, USER); st.toast("저장했습니다"); st.rerun()
+                                if not cands: st.caption("저장된 문구가 없습니다. 확정하면 쓴 사유가 자동으로 쌓이고, 설정 → 서식·사전에서 직접 넣을 수도 있습니다.")
+                                for j, t in enumerate(cands):
+                                    if st.button(t, key=f"rv_ph_{k}_{j}_{rev}", type="tertiary", width="stretch"): case["reasons"][k] = t; case["draft_stale"] = True; case.bump(); st.rerun()
                     if not locked:
                         c1, c2 = st.columns([1.6, 3], vertical_alignment="center")
                         if c1.button("사유 반영해 초안 다시 쓰기", key=f"rv_redraft_{rev}", type="primary" if case.get("draft_stale") else "secondary", icon=":material/edit_note:"):
@@ -457,7 +482,7 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
         n_vals = len(case["values"]) if case["values"] is not None else 0
         b1, b2, b3, b4 = st.columns([1.6, 1.5, 1.7, 1.6])
         with b1.popover("승인하고 확정", icon=":material/task_alt:", disabled=not n_vals, width="stretch", type="primary"):     # help 말풍선은 열린 팝오버를 가려 넣지 않는다
-            st.markdown("**확정 전 확인**"); st.caption("이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 제출본을 지웁니다.")
+            st.markdown("**확정 전 확인**"); st.caption("이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 기록 조회에서 제출본을 지웁니다.")
             for tone, t in checks: {"bad": st.error, "warn": st.warning, "info": st.info}[tone](t)
             if not checks: st.success("걸리는 것이 없습니다.")
             n_reason = sum(1 for v in case["reasons"].values() if str(v or "").strip())
@@ -473,21 +498,101 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
         if b4.button("단계 화면에서 자세히 고치기", key="rv_detail", type="tertiary"):
             st.session_state["target_request"] = case["request_id"]; go("새 요구서 처리", 2)
 
+def _todo_strip():
+    """홈 상단 '오늘 할 일': 기한 3일 이내(진행 중) · 확정(미발송) · 검토 대기 · 지난달 기준 지표 데이터. 기록이 하나도 없으면 그리지 않는다."""
+    ov = db.request_overview(); review = len(db.list_drafts("review_requested")); today = dt.date.today()
+    last_me = (today.replace(day=1) - dt.timedelta(days=1)).isoformat()
+    n_last = len({c["indicator"] for c in db.data_coverage() if c["base_date"] == last_me})
+    if not ov and not review and not n_last: return
+    dispatched = db.dispatched_request_ids(); soon = unsent = 0
+    for r in ov:
+        if r["n_confirmed"] > 0: unsent += r["id"] not in dispatched
+        else:
+            try: soon += 0 <= (dt.date.fromisoformat(str(r["due_date"])) - today).days <= 3
+            except ValueError: pass
+    c1, c2, c3, c4 = st.columns(4)
+    ui.kpi(c1, soon, "기한 3일 이내 · 진행 중", "warn" if soon else ""); ui.kpi(c2, unsent, "확정했지만 미발송", "warn" if unsent else "")
+    ui.kpi(c3, review, "팀장 검토 대기", "ok" if review else ""); ui.kpi(c4, n_last, f"지난달({last_me[:7]}) 기준 지표", "" if n_last else "bad")
+    b1, b2, b3, b4 = st.columns(4)
+    if b1.button("현황 보기", key="todo_status", type="tertiary", icon=":material/monitoring:"): go("현황")
+    if b2.button("미발송 건 보기", key="todo_unsent", type="tertiary", icon=":material/send:"): go("현황")
+    if b3.button("검토·승인 열기", key="todo_review", type="tertiary", icon=":material/task_alt:"): go("검토·승인")
+    if b4.button("지표 데이터 넣기" if not n_last else "지표 데이터 보기", key="todo_data", type="tertiary", icon=":material/database:"): go("지표 데이터")
+
+def _head_form(case: agent.Case, tpl: bytes | None, hist: list):
+    """칩 '요청 주체·기한 적기': 아는 칸만 적어 반영하면 머리 정보만 고치고 초안·한글 파일을 다시 만든다(모델 호출 없음)."""
+    req = db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})
+    with st.container(border=True):
+        st.markdown("**요청 주체·접수일·기한** — 아는 것만 적고 반영을 누르세요. 항목과 원문은 그대로 둡니다.")
+        c1, c2, c3, c4 = st.columns(4)
+        r_ = c1.text_input("요청 주체", (req or {}).get("requester") or "", key="chip_req", placeholder="예: ○○○ 의원실")
+        rd = c2.text_input("접수일", (req or {}).get("received_date") or "", key="chip_rd", placeholder="YYYY-MM-DD")
+        dd = c3.text_input("제출 기한", (req or {}).get("due_date") or "", key="chip_dd", placeholder="YYYY-MM-DD")
+        tt = c4.text_input("제목", (req or {}).get("title") or "", key="chip_tt")
+        a, b = st.columns([1, 6])
+        if a.button("반영", type="primary", key="chip_head_go"):
+            r = agent.set_header(case, r_ or None, rd or None, dd or None, tt or None); st.session_state["chip_head"] = False
+            if r["changed"]:
+                run_ai("초안·한글 파일 다시 만드는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "다시 만드는 중… (규칙 기반)")
+                hist.append({"role": "assistant", "text": "요청 정보를 반영했습니다: " + ", ".join(f"{k} {v}" for k, v in r["changed"].items()) + ". 초안과 한글 파일을 다시 만들었습니다."})
+                st.session_state["chat_carry"] = "담당자가 화면에서 요청 주체·기한을 고쳤고 초안·한글 파일은 다시 만들어졌습니다."
+            st.rerun()
+        if b.button("닫기", type="tertiary", key="chip_head_x"): st.session_state["chip_head"] = False; st.rerun()
+
+def _chips(case: agent.Case, hist: list, tpl: bytes | None, job) -> None:
+    """다음 행동 칩: 상황에 맞는 2~4개. 누르면 바로 실행(결정적 단계)하거나 대화 문장으로 보낸다. 모델 호출 없이 코드로 고른다."""
+    if job: return
+    if st.session_state.get("chip_head"): _head_form(case, tpl, hist); return
+    req = (db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})) or {}
+    opts: list[tuple[str, tuple]] = []
+    if case.get("approved"): opts += [("새 요구 시작", ("fn", _new_case)), ("현황 보기", ("go", "현황"))]
+    elif case["draft"]:
+        if not req.get("requester") or not req.get("due_date"): opts.append(("요청 주체·기한 적기", ("head", None)))
+        if case.get("draft_stale"): opts.append(("사유 반영해 초안 다시 쓰기", ("redraft", None)))
+        if not case.get("foresee"): opts.append(("예상 질문 보기", ("foresee", None)))
+        if case["compare"] is not None and int((case["compare"]["판정"] == "차이").sum()) and HAS_API: opts.append(("차이 난 행 설명", ("chat", "차이 난 센터마다 지난번 값·이번 값·채워진 사유를 짧게 정리해 줘")))
+        if not case["request_id"]: opts.append(("기록에 등록", ("register", None)))
+    elif case["request_text"]: opts.append(("요구하는 것들 전부 작성", ("chat", "이 요구서에서 요구하는 것들 작성해 줘")))
+    else:
+        opts.append(("지표 데이터에 뭐가 있나", ("chat", "지표 데이터에 어떤 지표가 어느 기간까지 들어 있어?")))
+        if db.list_requests(): opts.append(("최근 요구서 보기", ("go", "기록 조회")))
+        if db.list_ref_docs(): opts.append(("운영 시간 찾기", ("chat", "센터 운영 시간은 어떻게 되지?")))
+    if not opts: return
+    key = f"chips_{case.get('rev', 0)}_{len(hist)}_{st.session_state.get('chips_n', 0)}"
+    pick = st.pills("다음 행동", [l for l, _ in opts], key=key, label_visibility="collapsed")
+    if not pick: return
+    st.session_state["chips_n"] = st.session_state.get("chips_n", 0) + 1                   # 다음 실행에서 칩 선택을 비운다
+    kind, arg = dict(opts)[pick]
+    if kind == "chat": st.session_state["chat_pending"] = (arg, []); st.rerun()
+    elif kind == "go": go(arg)
+    elif kind == "fn": arg(); st.rerun()
+    elif kind == "head": st.session_state["chip_head"] = True; st.rerun()
+    elif kind == "redraft": run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
+    elif kind == "foresee": run_ai("예상 후속 질문 뽑는 중", lambda: agent.step_foresee(case), "보통 20~30초", "예측 중… (규칙 기반)"); st.rerun()
+    elif kind == "register":
+        case["no_register"] = False; r = agent.step_register(case)
+        hist.append({"role": "assistant", "text": f"요구서 #{r['request_id']}로 기록에 등록했습니다."}); st.session_state["chat_carry"] = f"담당자가 화면에서 요구서를 기록에 등록했습니다(#{r['request_id']})."; st.rerun()
+
 def page_chat():
     ui.page_title(f"{USER}님, 무엇을 할까요", "", "홈")
     case: agent.Case = st.session_state.setdefault("case", agent.Case())
     hist: list = st.session_state.setdefault("chat", []); st.session_state.setdefault("chat_msgs", [])
-    tpl = _template_bytes(); case["dept_head"] = st.session_state.get("dept_head", os.environ.get("DEPT_HEAD", "")); case["phone"] = st.session_state.get("dept_phone", os.environ.get("DEPT_PHONE", ""))
+    tpl = _template_bytes(); case.update(dept_head=ORG["dept_head"], phone=ORG["dept_phone"], org=ORG["org_name"], company=ORG["company"])
     job = st.session_state.get("chat_job")                      # 처리 중이던 작업(화면이 다시 실행돼도 결과를 잃지 않게 세션에 둔다)
+    if not HAS_API and st.session_state.get("ai_banner_seen"):
+        c1, c2 = st.columns([6, 1], vertical_alignment="center")
+        with c1: ui.status_line(False, "AI 연결 안 됨 · 규칙 기반으로 동작합니다(요구서 읽기·초안 정확도 낮음)")
+        if c2.button("설정으로", key="home_settings", type="tertiary"): go("설정")
+    _todo_strip()
     if not hist:
         with st.container(border=True):
-            st.markdown("**의뢰서를 붙이고 말하면 됩니다.** 예: \"이 의뢰서에서 요구하는 것들 작성해 줘\"  \n요구 항목을 읽고 → 가진 자료(지표 데이터·과거 제출값)에서 기준일을 정해 값을 모으고 → 과거 제출값과 맞춰 보고 → 차이 사유 후보를 채우고 → 회신 초안과 HWPX를 만듭니다. 사람은 아래 검수 화면에서 확인하고 승인합니다.")
-            st.caption("집계 엑셀이나 통합 대시보드 저장 파일(.html)을 함께 붙이면 지표 데이터에 넣고 씁니다. 과거 이력은 그냥 물어보면 됩니다: \"감사실에 등원율 언제 어떤 값으로 냈지?\" 사업 자체 질문(\"운영 시간은?\")은 '참고 문서'에 지침·매뉴얼을 올려 두면 그 문구로 답합니다." + ("" if HAS_API else "  \nAI 연결이 없어 지금은 정해진 순서로 처리하고 질문은 키워드 검색으로 답합니다."))
+            st.markdown("**요구서를 붙이고 말하면 됩니다.** 예: \"이 요구서에서 요구하는 것들 작성해 줘\"  \n요구 항목을 읽고 → 가진 자료(지표 데이터·과거 제출값)에서 기준일을 정해 값을 모으고 → 과거 제출값과 맞춰 보고 → 차이 사유 후보를 채우고 → 회신 초안과 HWPX를 만듭니다. 사람은 아래 검수 화면에서 확인하고 승인합니다.")
+            st.caption("집계 엑셀이나 통합 대시보드 저장 파일(.html)을 함께 붙이면 지표 데이터에 넣고 씁니다. 과거 기록은 그냥 물어보면 됩니다: \"감사실에 등원율 언제 어떤 값으로 냈지?\" 사업 자체 질문(\"운영 시간은?\")은 '참고 문서'에 지침·매뉴얼을 올려 두면 그 문구로 답합니다." + ("" if HAS_API else "  \nAI 연결이 없어 지금은 정해진 순서로 처리하고 질문은 키워드 검색으로 답합니다."))
             if DEMO:
                 c1, c2 = st.columns([1, 3])
-                if c1.button("시연: 의뢰서 붙여 시작", key="chat_demo", icon=":material/play_arrow:"):
+                if c1.button("시연: 요구서 붙여 시작", key="chat_demo", icon=":material/play_arrow:"):
                     p = SAMPLE / "새요구서_의원실_2026-09-15.txt"
-                    st.session_state["chat_pending"] = ("이 의뢰서에서 요구하는 것들 작성해 줘", [(p.name, p.read_bytes())]); st.rerun()
+                    st.session_state["chat_pending"] = ("이 요구서에서 요구하는 것들 작성해 줘", [(p.name, p.read_bytes())]); st.rerun()
                 c2.caption("가상의 9/15 의원실 요구서를 붙이고 작성을 요청합니다. 먼저 설정 → 시연 데이터 넣기, 지표 데이터에 샘플 적재를 해 두면 결과가 풍부합니다.")
     else:
         label = _case_label(case)
@@ -501,7 +606,8 @@ def page_chat():
             st.markdown(ui.safe_md(m["text"]))
             if m.get("files"): st.caption("첨부: " + ", ".join(m["files"]))
     if case["draft"]: _review_panel(case, tpl)
-    prompt = st.chat_input("처리 중입니다… 끝나면 다시 입력할 수 있습니다" if job else "의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple",
+    _chips(case, hist, tpl, job)
+    prompt = st.chat_input("처리 중입니다… 끝나면 다시 입력할 수 있습니다" if job else "요구서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple",
                            file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv", "html", "htm"], key="chat_in", disabled=bool(job))
     pending = st.session_state.pop("chat_pending", None)
     if job is None:
@@ -511,14 +617,14 @@ def page_chat():
         if not text and not files: return
         notes = _attach(case, files); case = st.session_state["case"]
         hist.append({"role": "user", "text": text or "(파일 첨부)", "files": [n for n, _ in files]})
-        if not text: text = "이 의뢰서에서 요구하는 것들 작성해 줘" if any(n.lower().endswith(REQ_EXT) for n, _ in files) else "붙인 파일을 확인해 줘"   # 말 없이 집계 파일만 붙이면 확인만 한다
+        if not text: text = "이 요구서에서 요구하는 것들 작성해 줘" if any(n.lower().endswith(REQ_EXT) for n, _ in files) else "붙인 파일을 확인해 줘"   # 말 없이 집계 파일만 붙이면 확인만 한다
         msgs = list(st.session_state.get("chat_msgs") or []); carry = st.session_state.pop("chat_carry", None)
         if len(msgs) > agent.HISTORY_MAX_BLOCKS: carry = agent.carry_note(case, hist, carry); msgs = []     # 긴 대화는 요약 한 줄로 새로 시작(중간을 자르지 않는다)
         job = {"text": text, "notes": notes, "msgs": msgs, "carry": carry}; st.session_state["chat_job"] = job
     case = st.session_state["case"]
     try:
         if HAS_API:
-            res = run_ai("처리 중", lambda: agent.chat_turn(case, job["msgs"], job["text"], tpl, notes=job["notes"], carry=job.get("carry")), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다", job=job)
+            res = run_ai("처리 중", lambda: agent.chat_turn(case, job["msgs"], job["text"], tpl, notes=job["notes"], carry=job.get("carry")), "요구서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다", job=job)
             st.session_state["chat_msgs"] = res["messages"]; reply = res["text"] or "(답이 비어 있습니다)"
         else:
             reply = run_ai("처리 중", lambda: _rule_reply(case, job["text"], tpl), "", "처리 중… (규칙 기반)")
@@ -604,7 +710,7 @@ def page_data():
 
 # ================= 참고 문서 =================
 def page_refdocs():
-    ui.page_title("참고 문서", "사업 지침·운영 매뉴얼·FAQ를 올려 두면, 대화나 '이력에 묻기'에서 사업 자체에 대한 질문에 그 문구를 근거로(문서·쪽 표시) 답합니다.", "기록")
+    ui.page_title("참고 문서", "사업 지침·운영 매뉴얼·FAQ를 올려 두면, 대화나 '기록에 묻기'에서 사업 자체에 대한 질문에 그 문구를 근거로(문서·쪽 표시) 답합니다.", "기록")
     c1, c2 = st.columns([1.1, 1])
     with c1:
         st.markdown("### 올리기")
@@ -629,7 +735,7 @@ def page_refdocs():
     with c2:
         st.markdown("### 등록된 문서")
         docs = db.list_ref_docs()
-        if not docs: st.info("아직 없습니다. 지침·운영 매뉴얼 PDF를 올려 두세요. 문서 자체는 이 서버의 이력 DB에만 저장됩니다.")
+        if not docs: st.info("아직 없습니다. 지침·운영 매뉴얼 PDF를 올려 두세요. 문서 자체는 이 서버의 기록 DB에만 저장됩니다.")
         for d in docs:
             a, b = st.columns([5, 1])
             a.markdown(f"**{d['title']}**  \n{d['file_name']} · {d['pages']}쪽 · 조각 {d['n_chunks']}개 · {d['uploaded_at'][:10]} · {d['uploaded_by']}" + (f" · {d['note']}" if d['note'] else ""))
@@ -640,7 +746,7 @@ def page_refdocs():
 
 # ================= 과거 답변 등록 =================
 def page_register():
-    ui.page_title("과거 답변 등록", "예전 요구서와 그때 보낸 값을 넣어 두면, 다음에 같은 수치를 물을 때 '언제 누구에게 얼마로 답했는지'가 자동으로 붙습니다.", "기록")
+    ui.page_title("과거 답변 등록", "예전 요구서와 그때 제출한 값을 넣어 두면, 다음에 같은 수치를 물을 때 '언제 누구에게 얼마로 답했는지'가 자동으로 붙습니다.", "기록")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("### 1. 그때 받은 요구서")
@@ -649,9 +755,9 @@ def page_register():
             res, how = analyze_with_status(req_text)
             st.session_state.update(reg_extract=res, reg_how=how, reg_text=req_text, reg_name=req_name)
     with col2:
-        st.markdown("### 2. 그때 보낸 값")
+        st.markdown("### 2. 그때 제출한 값")
         st.caption("집계 엑셀, 그때 보낸 회신 공문(hwp·hwpx·docx·pdf), 직접 입력 중 무엇이든 됩니다. 파일 종류를 가리지 않고 여러 개를 한 번에 올리면 전부 합쳐 저장됩니다.")
-        vdf, vname = value_sources("reg_val", "그때 보낸 값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
+        vdf, vname = value_sources("reg_val", "그때 제출한 값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
         if vdf is not None:
             st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=200, width="stretch")
             srcs = list(dict.fromkeys(f"{f}{' / ' + str(sh) if sh else ''}" for f, sh in zip(vdf["source_file"], vdf["source_sheet"], strict=True)))
@@ -671,8 +777,8 @@ def page_register():
                                                  "base_date": "기준일", "period": "기간", "unit": "단위"})
         if res.get("_error"): st.warning(f"AI 호출 오류로 규칙 기반 결과입니다: {res['_error']}")
         submitted_date = st.text_input("그때 제출한 날짜", due or "")
-        if vdf is None: st.info("보낸 값 없이 요구서만 저장할 수도 있습니다(나중에 대조 기준으로는 쓰이지 않음).")
-        if st.button("기억에 저장", type="primary"):
+        if vdf is None: st.info("제출값 없이 요구서만 저장할 수도 있습니다(나중에 대조 기준으로는 쓰이지 않음).")
+        if st.button("기록에 저장", type="primary"):
             rid = db.add_request(requester, received, due, title, st.session_state["reg_text"], st.session_state["reg_name"], items_df.to_dict("records"))
             vals = vdf.to_dict("records") if vdf is not None else []
             sid = db.add_submission(rid, submitted_date, USER, vname, "confirmed", "과거 제출본 등록", vals)
@@ -682,7 +788,7 @@ def page_register():
         rid, sid, n = st.session_state["reg_last"]
         c1, c2 = st.columns([4, 1.4])
         c1.success(f"저장했습니다. 요구서 #{rid}, 제출본 #{sid}, 값 {n}건. 다음에 같은 지표·기준일을 물으면 자동으로 찾아 줍니다.")
-        if c2.button("잘못 넣었어요 — 되돌리기", key="reg_undo", icon=":material/undo:", help="방금 저장한 요구서·값을 지웁니다. 나중에 고치려면 이력 조회에서 수정·삭제할 수 있습니다."):
+        if c2.button("잘못 넣었어요 — 되돌리기", key="reg_undo", icon=":material/undo:", help="방금 저장한 요구서·값을 지웁니다. 나중에 고치려면 기록 조회에서 수정·삭제할 수 있습니다."):
             db.delete_request(rid); st.session_state.pop("reg_last"); st.toast(f"요구서 #{rid} 삭제됨"); st.rerun()
 
 # ================= 새 요구서 처리 (1→2→3) =================
@@ -745,7 +851,7 @@ def step_read():
 
 def step_compare():
     st.markdown("### 수치 맞춰 보기")
-    st.caption("이번에 낼 수치를 지난번에 보낸 값과 맞춰 봅니다. 맞춰 보는 계산은 코드가 하고, 차이가 난 이유는 담당자가 적습니다.")
+    st.caption("이번에 낼 수치를 지난번 제출값과 맞춰 봅니다. 맞춰 보는 계산은 코드가 하고, 차이가 난 이유는 담당자가 적습니다.")
     reqs = db.list_requests(); subs = db.list_submissions()
     if not reqs:
         st.warning("등록된 요구서가 없습니다. 1단계에서 요구서를 등록하세요."); return
@@ -763,7 +869,7 @@ def step_compare():
             for p_ in db.past_values_for(pl["indicator"], pl["dates"][-1])[:1]: hit_sids[p_["submission_id"]] = hit_sids.get(p_["submission_id"], 0) + 1
     with st.container(border=True):
         st.markdown("**자료 계획** — 항목마다 가진 자료(지표 데이터 → 과거 제출값)를 보고 어느 기준일 값을 낼지 제안합니다. 기준일이 없는 항목은 요구 문구(월별·최근 3년…)와 자료 범위로 판단합니다. 확인하고 고치면 됩니다.")
-        if not items: st.caption("이 요구서에 항목이 없습니다. 이력 조회에서 항목을 넣거나 1단계에서 다시 읽으세요.")
+        if not items: st.caption("이 요구서에 항목이 없습니다. 기록 조회에서 항목을 넣거나 1단계에서 다시 읽으세요.")
         chosen: dict[int, list[str]] = {}
         for i, (it, pl) in enumerate(zip(items, plans, strict=True)):
             with st.container(border=True):
@@ -801,7 +907,7 @@ def step_compare():
     # 2) 지난번 값: 기록에서 가장 많이 맞은 제출본을 기본 선택
     c1, c2 = st.columns(2)
     with c2:
-        st.markdown("**지난번에 보낸 값**")
+        st.markdown("**지난번 제출값**")
         if not subs:
             st.info("아직 등록된 과거 답변이 없습니다. '과거 답변 등록'에서 먼저 넣으면 맞춰 볼 수 있습니다. 지금은 이번 수치만 확정하고 넘어갈 수 있습니다."); old_df, s = None, None
         else:
@@ -887,7 +993,7 @@ def step_draft():
     items = db.get_items(req["id"])
     sid, vals = db.latest_confirmed_values(req["id"])
     values = pd.DataFrame(vals) if vals else pd.DataFrame(columns=VAL_COLS)
-    if sid: st.caption(f"확정 수치: 제출본 #{sid} · {len(values)}건")
+    if sid: st.caption(f"확정한 수치: 제출본 #{sid} · {len(values)}건")
     else: st.warning("이 요구서에 확정된 수치가 없습니다. 2단계에서 먼저 확정하세요. 지금 만들면 수치 자리는 [확인 필요]가 됩니다.")
     reasons_raw = {}
     for _, v in values.iterrows():
@@ -910,7 +1016,7 @@ def step_draft():
     cov = draft.coverage_check(items, d, values)
     n_ok, n_flag, n_miss = int((cov["판정"] == "충족").sum()), int((cov["판정"] == "미확인 표시").sum()), int((cov["판정"] == "누락").sum())
     if n_miss: st.warning(f"충족 {n_ok} · [확인 필요] {n_flag} · 누락 {n_miss} — 누락 항목은 초안에 언급이 없습니다. 본문을 보완하세요.")
-    elif n_flag: st.info(f"충족 {n_ok} · [확인 필요] {n_flag} — 확정 수치가 없는 항목은 [확인 필요]로 남아 있습니다.")
+    elif n_flag: st.info(f"충족 {n_ok} · [확인 필요] {n_flag} — 확정한 수치가 없는 항목은 [확인 필요]로 남아 있습니다.")
     else: st.success(f"모든 요구 항목 충족({n_ok}건)")
     with st.expander("항목별 판정"): st.dataframe(cov, width="stretch", hide_index=True)
     if HAS_API and st.button("AI로 한 번 더 점검 (누락·불일치·단정 표현)"):
@@ -933,7 +1039,7 @@ def step_draft():
     tpl_bytes = up_tpl.getvalue() if up_tpl else (tpl.read_bytes() if tpl else None)
     if not tpl_bytes: return
     st.caption("서식의 자리표시자: " + ", ".join(hwpx_out.placeholders(tpl_bytes)))
-    fill = {"수신": req["requester"] or "", "발신": "EBS 지역교육협력부", "제목": d["제목"],
+    fill = {"수신": req["requester"] or "", "발신": f"{ORG['company']} {ORG['org_name']}".strip(), "제목": d["제목"],
             "요구항목": "\n".join(f"{i}. {it['item_text']}" for i, it in enumerate(items, 1)),
             "본문": d["본문"], "차이사유": d["차이사유"], "산출근거": d["산출근거"], "담당자": USER}
     rows = [{"no": i + 1, "indicator": v["indicator"], "center": v["center"], "base_date": v["base_date"], "value": v["value"]} for i, (_, v) in enumerate(values.iterrows())]
@@ -945,7 +1051,7 @@ def step_draft():
     zb = io.BytesIO()
     with zipfile.ZipFile(zb, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(fname, out); zf.writestr("정합성점검표.xlsx", ckb.getvalue())
-        vb = io.BytesIO(); pii.excel_safe(values).to_excel(vb, index=False); zf.writestr("확정수치.xlsx", vb.getvalue())
+        vb = io.BytesIO(); pii.excel_safe(values).to_excel(vb, index=False); zf.writestr("확정_제출값.xlsx", vb.getvalue())
         zf.writestr("근거_사유_메타.json", json.dumps({"요구": req, "제출본": sid, "차이 사유": {" | ".join(k): v for k, v in reasons_raw.items()}, "산출 근거": prov, "초안": d,
                                                   "예상 후속 질문": fs[1] if fs and fs[0] == req["id"] else None, "생성일": str(dt.date.today())}, ensure_ascii=False, indent=2, default=str))
     c2.download_button("제출 묶음 ZIP (회신+점검표+수치+근거)", zb.getvalue(), file_name=f"제출묶음_{req['id']}_{dt.date.today()}.zip")
@@ -975,7 +1081,7 @@ def page_review():
                 if c2.button("반려", key=f"no_{d['id']}"): db.add_review(d["id"], REVIEWER, "rejected", cmt); st.rerun()
                 if c3.button("의견만", key=f"c_{d['id']}"): db.add_review(d["id"], REVIEWER, "comment", cmt); st.rerun()
 
-# ================= 이력 조회 =================
+# ================= 기록 조회 =================
 def confirm_delete(label: str, key: str, what: str) -> bool:
     """두 단계 삭제: 확인 체크 → 삭제 버튼. 체크해야 버튼이 나타난다. 눌리면 True."""
     c1, c2 = st.columns([3, 1.2])
@@ -1003,7 +1109,7 @@ def request_editor(r: dict):
             st.session_state.pop(f"editing_{r['id']}", None); st.rerun()
 
 def page_history():
-    ui.page_title("이력 조회", "요구서마다 항목 → 보낸 값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다. 잘못 넣은 것은 여기서 고치거나 지웁니다.", "기록")
+    ui.page_title("기록 조회", "요구서마다 항목 → 제출값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다. 잘못 넣은 것은 여기서 고치거나 지웁니다.", "기록")
     reqs = db.list_requests()
     kw = st.text_input("찾기 (요청 주체·제목·항목·본문)", placeholder="예: 등원율, 의원실, 2026-06-30")
     if kw.strip():
@@ -1027,7 +1133,7 @@ def page_history():
             for s_ in db.list_submissions(rid):
                 sid = s_["id"]
                 with st.container(border=True):
-                    st.markdown(f"**보낸 값 #{sid}** · {s_['submitted_date']} · {ko(s_['status'])} · {s_['file_name']} · {s_['note'] or ''}")
+                    st.markdown(f"**제출값 #{sid}** · {s_['submitted_date']} · {ko(s_['status'])} · {s_['file_name']} · {s_['note'] or ''}")
                     vals = pd.DataFrame(db.get_values(sid))
                     if len(vals):
                         ed = st.data_editor(vals.drop(columns=["id", "submission_id"]).rename(columns=VAL_KO), num_rows="dynamic", width="stretch", height=min(60 + 35 * len(vals), 320), key=f"vals_{sid}")
@@ -1036,15 +1142,15 @@ def page_history():
                             n = db.replace_values(sid, ed.rename(columns=inv).to_dict("records")); st.toast(f"제출본 #{sid} 값 {n}건 저장"); st.rerun()
                         c2.caption("표에서 바로 고친 뒤 '값 저장'. 행 삭제는 행을 선택하고 Delete.")
                     else: st.caption("값 없음(요구서만 저장된 제출본)")
-                    if confirm_delete(f"보낸 값 #{sid}", f"del_sub_{sid}", "값·차이 사유·이 제출본으로 만든 초안이 함께 지워집니다"):
-                        info = db.delete_submission(sid); st.toast(f"보낸 값 #{sid} 삭제 — 값 {info['values']}건, 초안 {info['drafts']}건"); st.rerun()
+                    if confirm_delete(f"제출값 #{sid}", f"del_sub_{sid}", "값·차이 사유·이 제출본으로 만든 초안이 함께 지워집니다"):
+                        info = db.delete_submission(sid); st.toast(f"제출값 #{sid} 삭제 — 값 {info['values']}건, 초안 {info['drafts']}건"); st.rerun()
             for d in [x for x in db.list_drafts() if x["request_id"] == rid]:
                 c1, c2 = st.columns([5, 1])
                 c1.markdown(f"초안 #{d['id']} · {ko(d['status'])} · {d['hwpx_name'] or '-'} · {d['created_at'][:16]}")
                 if c2.button("초안 삭제", key=f"del_draft_{d['id']}", type="tertiary", icon=":material/delete:"):
                     db.delete_draft(d["id"]); st.toast(f"초안 #{d['id']} 삭제"); st.rerun()
             st.divider()
-            if confirm_delete(f"요구서 #{rid}", f"del_req_{rid}", "항목·보낸 값·차이 사유·초안·검토 기록이 전부 지워지며 되돌릴 수 없습니다"):
+            if confirm_delete(f"요구서 #{rid}", f"del_req_{rid}", "항목·제출값·차이 사유·초안·검토 기록이 전부 지워지며 되돌릴 수 없습니다"):
                 info = db.delete_request(rid); st.toast(f"요구서 #{rid} 삭제 — 제출본 {info['submissions']}건, 초안 {info['drafts']}건"); st.rerun()
 
 # ================= 현황 =================
@@ -1078,9 +1184,9 @@ def page_status():
     with c1: st.markdown("### 요청 주체별"); st.dataframe(pd.DataFrame(by_req).rename(columns={"requester": "요청 주체", "n_requests": "요구 건수", "n_items": "항목 수", "first_date": "최초", "last_date": "최근"}), width="stretch", hide_index=True)
     with c2: st.markdown("### 반복 요구 지표"); st.dataframe(pd.DataFrame(by_ind).rename(columns={"indicator": "지표", "n_times": "요구 횟수", "n_requesters": "요청 주체 수", "base_dates": "기준일들"}).fillna("-"), width="stretch", hide_index=True); st.caption("여러 번 요구된 지표는 미리 산출해 두면 좋습니다.")
 
-# ================= 이력에 묻기 =================
+# ================= 기록에 묻기 =================
 def page_ask():
-    ui.page_title("이력에 묻기", "말로 물으면 기록을 찾아 근거(요구번호·제출일·기관)와 함께 답합니다. 평균·증감 같은 계산은 하지 않습니다."
+    ui.page_title("기록에 묻기", "말로 물으면 기록을 찾아 근거(요구번호·제출일·기관)와 함께 답합니다. 평균·증감 같은 계산은 하지 않습니다."
                   + ("" if HAS_API else " 지금은 AI 연결이 없어 키워드 검색으로 동작합니다."), "기록")
     examples = ["감사실에 등원율을 언제 어떤 값으로 냈지?", "2026-06-30 기준 등원율을 제출한 기관과 날짜를 전부 보여줘", "센터C 등원율이 달라진 사유로 뭐라고 적었나", "기한이 가장 가까운 요구서는?"]
     q = st.text_input("질문", placeholder=examples[0], key="qa_q")
@@ -1118,11 +1224,11 @@ def page_ask():
 def page_settings():
     import providers
     ui.page_title("설정", "AI 연결, 서식, 시연용 데이터와 초기화.", "설정")
-    tab_ai, tab_data, tab_demo = st.tabs(["AI 연결", "서식·사전", "시연·초기화"])
+    tab_ai, tab_data, tab_demo = st.tabs(["AI 연결", "서식·사전", "백업·초기화"])
     with tab_ai:
         st.markdown("키는 이 브라우저 세션에만 보관되고 파일에 저장되지 않습니다. 탭을 닫으면 사라집니다. 혼자 쓰는 PC라면 `set_key.bat`으로 한 번 저장해 두면 매번 넣지 않아도 됩니다.")
         if st.session_state.pop("cfg_clear", False):            # '키 지우기' 다음 실행: 입력칸(위젯) 값도 비운다(칸이 그려지기 전에 지워야 한다)
-            for k in [k for k in st.session_state if str(k).startswith("cfg_") and k not in ("cfg_dept_head", "cfg_dept_phone")]: del st.session_state[k]
+            for k in [k for k in st.session_state if str(k).startswith("cfg_") and k not in ("cfg_dept_head", "cfg_dept_phone", "cfg_org_name", "cfg_company")]: del st.session_state[k]
         cfg = st.session_state["llm_cfg"]
         pnames = providers.names()
         prov_name = st.selectbox("공급자", pnames, index=pnames.index(cfg.get("provider")) if cfg.get("provider") in pnames else 0,
@@ -1170,10 +1276,22 @@ def page_settings():
             with st.expander("이 세션 호출 기록"): st.dataframe(pd.DataFrame(llm.log()), width="stretch", height=160, hide_index=True)
     with tab_data:
         st.markdown("**회신 서식**: `templates/` 폴더의 HWPX. 실제 부서 서식을 한글에서 열어 {{수신}} {{제목}} {{본문}} {{row.center}} 같은 자리표시자를 넣고 저장하면 그대로 쓰입니다.")
-        st.markdown("**회신 문서(답변자료) 양식** — 대화 처리의 HWPX는 '○○ 의원실 답변자료 / 날짜 / 번호 항목 / 【확인 : 부서장 ☎ 내선】 / 본문 / 수치표 / ※ 산출 근거' 틀로 만들어집니다. 【확인】 줄에 들어갈 값을 적어 두세요(세션에만 저장).")
-        c1, c2 = st.columns(2)
-        st.session_state["dept_head"] = c1.text_input("부서장 이름", st.session_state.get("dept_head", os.environ.get("DEPT_HEAD", "")), key="cfg_dept_head")
-        st.session_state["dept_phone"] = c2.text_input("내선 번호", st.session_state.get("dept_phone", os.environ.get("DEPT_PHONE", "")), key="cfg_dept_phone")
+        st.markdown("**조직 설정** — 답변자료의 【확인 : 부서장 ☎ 내선】 줄, 발신 표기, 메일 문안에 쓰입니다. 기록 DB에 저장되어 접속자 모두에게 적용됩니다(환경변수 DEPT_HEAD·DEPT_PHONE은 비어 있을 때의 보조값).")
+        c1, c2, c3, c4 = st.columns(4)
+        o_head = c1.text_input("부서장 이름", ORG["dept_head"], key="cfg_dept_head"); o_phone = c2.text_input("내선 번호", ORG["dept_phone"], key="cfg_dept_phone")
+        o_org = c3.text_input("부서명(발신)", ORG["org_name"], key="cfg_org_name"); o_co = c4.text_input("기관명", ORG["company"], key="cfg_company")
+        if st.button("조직 설정 저장", key="cfg_org_save", type="primary", icon=":material/save:"):
+            db.set_settings({"dept_head": o_head, "dept_phone": o_phone, "org_name": o_org or "지역교육협력부", "company": o_co or "한국교육방송공사"}, USER); st.toast("저장했습니다"); st.rerun()
+        st.divider()
+        st.markdown("**자주 쓰는 문구** — 검수 화면의 사유 입력칸 옆 '문구'에서 고를 수 있습니다. 확정할 때 쓴 사유는 자동으로 쌓이고, 많이 쓴 순으로 보입니다.")
+        pk = st.selectbox("종류", ["사유", "정의", "안내"], key="ph_kind")
+        a, b = st.columns([5, 1], vertical_alignment="bottom"); new_t = a.text_input("새 문구", key="ph_new", placeholder="예: 출결 사후 보정 반영(재산출)")
+        if b.button("추가", key="ph_add", disabled=not new_t.strip(), icon=":material/add:"): db.add_phrase(pk, new_t, USER); st.rerun()
+        for ph in db.list_phrases(pk, 100):
+            x, y = st.columns([6, 1], vertical_alignment="center"); x.caption(f"{ph['text']} · {ph['use_count']}회" + (f" · {str(ph['last_used'])[:10]}" if ph.get("last_used") else ""))
+            if y.button("지우기", key=f"ph_del_{ph['id']}", type="tertiary", icon=":material/delete:"): db.delete_phrase(ph["id"]); st.rerun()
+        st.divider()
+        st.markdown("**회신 문서(답변자료) 양식** — 대화 처리의 HWPX는 '○○ 의원실 답변자료 / 날짜 / 번호 항목 / 【확인 : 부서장 ☎ 내선】 / 본문 / 수치표 / ※ 산출 근거' 틀로 만들어집니다.")
         up_tpl2 = st.file_uploader("대신 쓸 자리표시자 서식(HWPX, {{수신}} {{본문}} {{row.center}} …)", type=["hwpx"], key="tpl_custom_up", help="올리면 답변자료 양식 대신 이 서식에 채웁니다. 비우면 기본 양식.")
         if up_tpl2: st.session_state["tpl_custom"] = up_tpl2.getvalue(); st.caption("자리표시자: " + ", ".join(hwpx_out.placeholders(up_tpl2.getvalue())))
         elif st.session_state.get("tpl_custom") and st.button("자리표시자 서식 쓰지 않기(기본 양식으로)", key="tpl_custom_clear"): st.session_state.pop("tpl_custom"); st.rerun()
@@ -1181,8 +1299,36 @@ def page_settings():
         st.markdown("**지표 동의어 사전**: `normalize.py`의 CANON. 요구서의 표현이 달라도 같은 지표로 묶는 기준입니다. **데이터 카탈로그**: `suggest.py`의 CATALOG.")
         st.markdown("**추출 품질 점검**: 터미널에서 `python check_llm.py` → `storage/llm_check_날짜.md`.")
     with tab_demo:
-        st.markdown("심사·시연용. 가상의 센터 12곳 데이터를 기억에 넣습니다. 실제 기록이 있는 DB에는 쓰지 마세요.")
-        if st.button("시연 데이터 넣기 (과거 요구서 1건 + 그때 보낸 값 12건)"):
+        st.markdown("### 백업·복원")
+        info = db.db_info(); tb = info["tables"]
+        st.caption(f"기록 DB {info['size_kb']:,}KB · 마지막 변경 {info['modified']} · " + " · ".join(f"{k} {v:,}건" for k, v in tb.items() if v is not None)
+                   + (" · 클라우드 복제 켜짐(Litestream)" if info["replica"] else " · 복제 없음(이 PC의 파일만)"))
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**내려받기** — 지금 기록 전체를 한 파일로. 월 1회 사내 저장소에 보관하세요.")
+            if st.button("백업 파일 만들기", key="bk_make", icon=":material/archive:"): st.session_state["bk_bytes"] = (db.snapshot_bytes(), f"history_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.db")
+            if st.session_state.get("bk_bytes"):
+                data_, name_ = st.session_state["bk_bytes"]; st.download_button(f"내려받기 ({len(data_) // 1024:,}KB)", data_, file_name=name_, key="bk_dl", type="primary", icon=":material/download:")
+            bks = db.list_backups(5)
+            if bks:
+                age = (dt.datetime.now() - dt.datetime.strptime(bks[0]["modified"], "%Y-%m-%d %H:%M")).days
+                (st.warning if age > 30 else st.caption)(f"서버 안 자동 사본 {len(bks)}개 · 최근 {bks[0]['modified']}({age}일 전)" + (" — 30일이 지났습니다. 백업 파일을 내려받아 보관하세요." if age > 30 else ""))
+            else: st.caption("서버 안 자동 사본 없음(복원·초기화 때 자동으로 생깁니다).")
+        with c2:
+            st.markdown("**복원** — 내려받았던 .db 파일로 기록을 되돌립니다. 덮어쓰기 전 현재 기록은 자동으로 사본을 남깁니다.")
+            up_db = st.file_uploader("기록 DB 파일(.db)", type=["db", "sqlite", "sqlite3"], key="restore_up")
+            if up_db is not None:
+                ok_ = st.checkbox("현재 기록을 이 파일 내용으로 덮어씁니다", key="restore_ok")
+                if st.button("복원", key="restore_go", type="primary", disabled=not ok_, icon=":material/restore:"):
+                    try:
+                        r = db.restore_from_bytes(up_db.getvalue(), USER)
+                        for k in ("case", "chat", "chat_msgs", "chat_job", "chat_carry"): st.session_state.pop(k, None)
+                        st.success("복원했습니다: " + ", ".join(f"{k} {v:,}건" for k, v in r["counts"].items()) + f". 이전 기록 사본: {r['backup']}")
+                    except Exception as e: st.error(f"복원하지 못했습니다: {e}")
+        st.divider()
+        st.markdown("### 시연 데이터")
+        st.markdown("심사·시연용. 가상의 센터 12곳 데이터를 기록에 넣습니다. 실제 기록이 있는 DB에는 쓰지 마세요.")
+        if st.button("시연 데이터 넣기 (과거 요구서 1건 + 그때 제출한 값 12건)"):
             text = (SAMPLE / "요구서_01_의원실_2026-07-01.txt").read_text(encoding="utf-8")
             res = extract.rule_based(text); res["items"] = normalize.normalize_items(res["items"])
             rid = db.add_request(res["requester"], res["received_date"], res["due_date"], res["title"], text, "요구서_01_의원실_2026-07-01.txt", res["items"])
@@ -1203,6 +1349,7 @@ def page_settings():
                 st.info("서식 원본이 상위 폴더에 없어 templates/의 기존 샘플을 그대로 씁니다.")
 
 PAGES = {"홈": page_chat, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data, "참고 문서": page_refdocs,
-         "이력 조회": page_history, "현황": page_status, "이력에 묻기": page_ask, "설정": page_settings}
-if not HAS_API and page != "설정": ui.ai_banner(lambda: go("설정"))
+         "기록 조회": page_history, "현황": page_status, "기록에 묻기": page_ask, "설정": page_settings}
+if not HAS_API and page != "설정" and not st.session_state.get("ai_banner_seen"):      # 큰 배너는 세션에서 한 번만, 이후는 사이드바 표시와 홈의 한 줄
+    ui.ai_banner(lambda: go("설정")); st.session_state["ai_banner_seen"] = True
 PAGES[page]()

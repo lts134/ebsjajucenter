@@ -37,7 +37,7 @@ def test_pii_particle_boundaries_and_dates():
 
 
 def test_is_do_it_questions_are_not_commands():
-    assert agent.is_do_it("이 의뢰서에서 요구하는 것들 작성해 줘") and agent.is_do_it("회신 초안 만들어") and agent.is_do_it("처리해줘")
+    assert agent.is_do_it("이 요구서에서 요구하는 것들 작성해 줘") and agent.is_do_it("회신 초안 만들어") and agent.is_do_it("처리해줘")
     assert not agent.is_do_it("회신 기한이 언제야?") and not agent.is_do_it("감사실에 등원율 언제 냈지") and not agent.is_do_it("센터 현황 보여 줘")
 
 
@@ -111,8 +111,8 @@ def test_carry_note_and_chat_turn_context(monkeypatch):
     note = agent.carry_note(case, [{"role": "assistant", "text": "회신 초안을 썼습니다.  \n확인해 주세요."}], "직전 작업을 접었습니다.")
     assert note.startswith("직전 작업을 접었습니다.") and "마지막 답: 회신 초안을 썼습니다. 확인해 주세요." in note and "값 3건 가져옴" in note
     monkeypatch.setattr(agent.llm, "run_tools_conv", lambda msgs, *a, **k: {"text": msgs[-1]["content"], "trace": [], "turns": 0, "messages": msgs})
-    r = agent.chat_turn(case, [], "다음 요구", None, notes=["의뢰서 'x.hwpx'을 받았습니다."], carry="직전 작업 확정 완료")
-    assert "[이전 대화 요약] 직전 작업 확정 완료" in r["text"] and "[첨부 처리] 의뢰서" in r["text"] and r["text"].rstrip().endswith("다음 요구") and agent.HISTORY_MAX_BLOCKS >= 20
+    r = agent.chat_turn(case, [], "다음 요구", None, notes=["요구서 'x.hwpx'을 받았습니다."], carry="직전 작업 확정 완료")
+    assert "[이전 대화 요약] 직전 작업 확정 완료" in r["text"] and "[첨부 처리] 요구서" in r["text"] and r["text"].rstrip().endswith("다음 요구") and agent.HISTORY_MAX_BLOCKS >= 20
 
 
 def test_mail_text_is_code_generated():

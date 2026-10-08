@@ -1,4 +1,4 @@
-"""테스트 공통: 앱 폴더를 import 경로에 넣고, 이력 DB를 임시 파일로 돌린다(실제 storage/history.db를 건드리지 않음)."""
+"""테스트 공통: 앱 폴더를 import 경로에 넣고, 기록 DB를 임시 파일로 돌린다(실제 storage/history.db를 건드리지 않음)."""
 import os, sys
 from pathlib import Path
 APP = Path(__file__).resolve().parents[1]

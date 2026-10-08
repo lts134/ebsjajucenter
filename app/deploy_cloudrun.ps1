@@ -65,6 +65,8 @@ if (-not $repoExists) {
 }
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
 $image = "$Region-docker.pkg.dev/$Project/$repoName/${Service}:$stamp"
+$commit = (git rev-parse --short HEAD 2>$null); if (-not $commit) { $commit = "unknown" }
+@{ commit = "$commit"; built_at = (Get-Date -Format "yyyy-MM-dd HH:mm"); by = "$env:USERNAME" } | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 build_info.json   # 사이드바 '빌드' 표시용(저장소에는 넣지 않음)
 gcloud builds submit --tag $image --region $Region --timeout 1200 .
 if ($LASTEXITCODE -ne 0) { Fail "컨테이너 빌드 실패. 위 로그 링크의 마지막 부분을 확인하세요." }
 

@@ -65,7 +65,7 @@ def main():
             page = b.new_page(viewport={"width": 1440, "height": 900}, locale="ko-KR")
             page.goto(f"http://localhost:{PORT}"); settle(page, 3000)
             # 설정 → 시연 데이터
-            nav(page, "설정"); page.get_by_role("tab", name="시연·초기화").click(); settle(page); click(page, "시연 데이터 넣기")
+            nav(page, "설정"); page.get_by_role("tab", name="백업·초기화").click(); settle(page); click(page, "시연 데이터 넣기")
             page.get_by_role("tab", name="AI 연결").click(); settle(page); shot(page, "09_설정.png", 1500)
             # 홈
             nav(page, "홈"); shot(page, "00_홈.png", 1500)
@@ -95,9 +95,9 @@ def main():
             # 검토·승인 → 승인
             nav(page, "검토·승인"); shot(page, "05_검토승인.png")
             page.get_by_label("검토 의견").first.fill("수치·사유 확인함. 제출 승인"); page.keyboard.press("Enter"); settle(page, 600); click(page, "승인")
-            nav(page, "이력 조회"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page); shot(page, "06_이력조회.png")
+            nav(page, "기록 조회"); page.get_by_test_id("stExpander").first.locator("summary").click(); settle(page); shot(page, "06_이력조회.png")
             nav(page, "현황"); shot(page, "07_현황통계.png")
-            nav(page, "이력에 묻기"); page.get_by_role("textbox", name="질문").fill("감사실에 등원율 어떻게 냈지?"); page.keyboard.press("Enter"); settle(page, 600)
+            nav(page, "기록에 묻기"); page.get_by_role("textbox", name="질문").fill("감사실에 등원율 어떻게 냈지?"); page.keyboard.press("Enter"); settle(page, 600)
             click(page, "물어보기", 3000); shot(page, "08_이력에묻기.png")
             b.close()
     finally:
