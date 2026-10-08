@@ -405,7 +405,8 @@ def page_chat():
     if not text: text = "붙인 파일을 확인해 줘" if not case["request_text"] else "이 의뢰서에서 요구하는 것들 작성해 줘"
     try:
         if HAS_API:
-            res = run_ai("처리 중", lambda: agent.chat_turn(case, st.session_state["chat_msgs"], text, tpl), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다")
+            msgs = list(st.session_state.get("chat_msgs") or [])            # 세션 값은 여기서 꺼낸다(run_ai는 작업 스레드에서 돌아 세션에 접근 못 함)
+            res = run_ai("처리 중", lambda: agent.chat_turn(case, msgs, text, tpl), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다")
             st.session_state["chat_msgs"] = res["messages"]; reply = res["text"] or "(답이 비어 있습니다)"
         else:
             reply = run_ai("처리 중", lambda: _rule_reply(case, text, tpl), "", "처리 중… (규칙 기반)")

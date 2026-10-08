@@ -122,4 +122,25 @@ assert reply and "HWPX" in reply[0], [m.value[:80] for m in at.markdown][-6:]
 assert any(b.label == "승인하고 확정" for b in at.button), [b.label for b in at.button][:20]
 case = at.session_state["case"]; assert case["values"] is not None and case["draft"] and case["hwpx"]
 button(at, "승인하고 확정"); assert at.session_state["case"].get("approved"); print("대화 홈 → 검수 → 승인 OK")
+# 대화 홈 — AI 경로(가짜 모델): run_ai가 작업 스레드에서 돌 때 세션 저장소를 건드리지 않는지(KeyError 재발 방지)
+import llm, providers
+class _U: input_tokens = 10; output_tokens = 5
+class _T:
+    def __init__(s, t): s.type, s.text = "text", t
+class _M:
+    def __init__(s, content, stop="end_turn"): s.content, s.stop_reason, s.usage = content, stop, _U()
+class _FakeProv(providers.AnthropicProvider):
+    def __init__(s): super().__init__({"api_key": "sk-test"})
+    def ready(s): return True
+    def create_message(s, **kw):
+        if not kw.get("tools"): raise RuntimeError("fake")
+        return _M([_T("요청을 확인했습니다. 의뢰서를 붙여 주시면 바로 준비하겠습니다.")])
+_orig = llm._provider; llm._provider = lambda: _FakeProv()
+try:
+    at = AppTest.from_file(APP, default_timeout=120); at.session_state["nav"] = "홈"
+    at.session_state["chat_pending"] = ("센터별 등원율 자료에 대한 요청이 들어왔어", [])
+    at.run(); assert not at.exception, at.exception
+    assert any("요청을 확인했습니다" in m.value for m in at.markdown), [m.value[:60] for m in at.markdown][-5:]
+    assert len(at.session_state["chat_msgs"]) == 2; print("대화 홈 AI 경로(가짜 모델) OK")
+finally: llm._provider = _orig
 print("DONE")
