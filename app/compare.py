@@ -2,6 +2,7 @@
 import io, os, re
 from pathlib import Path
 import pandas as pd
+from html.parser import HTMLParser
 
 UNIT_SUFFIX = r"(?:명|개소|개|건|원|회|시간|일|점|천원|백만원|억원|％)"
 KEY = ["indicator", "center", "base_date"]
@@ -32,11 +33,73 @@ def decode_text(data: bytes) -> str:
         except UnicodeDecodeError as e: last = e
     raise ValueError(f"글자 인코딩을 판별하지 못했습니다(시도: {', '.join(ENCODINGS)}). ({last})")
 
+class _HtmlTables(HTMLParser):
+    """표준 라이브러리만으로 <table>을 격자로. 깨진 HTML(닫히지 않은 태그, 머리말 없는 조각)도 읽고 rowspan·colspan을 펼친다.
+    사내 시스템이 '.xls'로 내려 주는 HTML 표가 대상이라 외부 파서(lxml·html5lib)에 기대지 않는다."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tables: list[list[list]] = []; self._stack: list[dict] = []
+    def _cur(self): return self._stack[-1] if self._stack else None
+    def handle_starttag(self, tag, attrs):
+        t = tag.lower(); a = dict(attrs)
+        if t == "table":
+            self._stack.append({"rows": [], "row": None, "cell": None, "span": {}})   # span: 열 번호 → (남은 행 수, 값)
+        elif (cur := self._cur()) is None: return
+        elif t == "tr":
+            self._end_row(cur); cur["row"] = []
+        elif t in ("td", "th"):
+            if cur["row"] is None: cur["row"] = []
+            self._end_cell(cur)
+            while len(cur["row"]) in cur["span"]:                              # 위 행에서 내려온 병합 셀 자리 채우기
+                col = len(cur["row"]); left, val = cur["span"][col]; cur["row"].append(val)
+                if left - 1 > 0: cur["span"][col] = (left - 1, val)
+                else: del cur["span"][col]
+            cur["cell"] = {"text": [], "colspan": int(a.get("colspan") or 1), "rowspan": int(a.get("rowspan") or 1)}
+        elif t == "br" and cur["cell"] is not None: cur["cell"]["text"].append(" ")
+    def handle_endtag(self, tag):
+        t = tag.lower(); cur = self._cur()
+        if cur is None: return
+        if t in ("td", "th"): self._end_cell(cur)
+        elif t == "tr": self._end_row(cur)
+        elif t == "table":
+            self._end_row(cur); self._stack.pop()
+            if cur["rows"]: self.tables.append(cur["rows"])
+    def handle_data(self, data):
+        cur = self._cur()
+        if cur is not None and cur["cell"] is not None: cur["cell"]["text"].append(data)
+    def _end_cell(self, cur):
+        c = cur["cell"]
+        if c is None: return
+        val = re.sub(r"\s+", " ", "".join(c["text"])).strip() or None
+        col0 = len(cur["row"])
+        for k in range(c["colspan"]):
+            cur["row"].append(val if k == 0 else None)                           # 가로 병합: 첫 칸만 값(머리글 합치기는 tabular가 처리)
+            if c["rowspan"] > 1: cur["span"][col0 + k] = (c["rowspan"] - 1, val if k == 0 else None)
+        cur["cell"] = None
+    def _end_row(self, cur):
+        self._end_cell(cur)
+        if cur["row"] is not None:
+            while len(cur["row"]) in cur["span"]:                                # 행 끝에 남은 세로 병합 자리
+                col = len(cur["row"]); left, val = cur["span"][col]; cur["row"].append(val)
+                if left - 1 > 0: cur["span"][col] = (left - 1, val)
+                else: del cur["span"][col]
+            if any(v is not None for v in cur["row"]): cur["rows"].append(cur["row"])
+            cur["row"] = None
+    def close(self):
+        super().close()
+        while self._stack:                                                       # 닫히지 않은 <table>
+            cur = self._stack.pop(); self._end_row(cur)
+            if cur["rows"]: self.tables.append(cur["rows"])
+
 def html_tables(data: bytes) -> list[pd.DataFrame]:
-    """HTML 안의 <table>을 전부 격자(머리글 해석 없음)로."""
-    try: return pd.read_html(io.StringIO(decode_text(data)), header=None)
-    except ValueError as e:
-        raise ValueError(f"HTML에서 표를 찾지 못했습니다: {e}") from e
+    """HTML 안의 <table>을 전부 격자(머리글 해석 없음, 병합 셀 펼침)로. 숫자 글자는 그대로 두고 뒤 단계(clean_number)가 해석."""
+    parser = _HtmlTables(); parser.feed(decode_text(data)); parser.close()
+    out = []
+    for rows in parser.tables:
+        w = max(len(r) for r in rows)
+        out.append(pd.DataFrame([r + [None] * (w - len(r)) for r in rows]))
+    if not out: raise ValueError("HTML에서 표를 찾지 못했습니다.")
+    return out
 
 def excel_file(data: bytes, kind: str) -> pd.ExcelFile:
     if kind == "xls":

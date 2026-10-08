@@ -214,3 +214,19 @@ def test_xls_actually_tab_text():
     data = "\n".join("\t".join(str(v) for v in r) for r in LONG_ROWS).encode("cp949"); up = _Up("월별상담횟수_261008.xls", data)
     assert compare.sheet_kind(up.name, data) == "text" and compare.list_sheets(up) == []
     df = compare.load_values(up); assert len(df) == 2 and df["value"].tolist() == [60.3, 59.4]
+
+
+def test_html_tables_broken_markup_and_spans():
+    """사내 시스템 내려받기 흉내: <html> 없음, 닫히지 않은 tr/td, 병합 머리글(colspan·rowspan), 쉼표 숫자, euc-kr."""
+    html = ("<meta http-equiv=Content-Type content='text/html; charset=euc-kr'>"
+            "<table border=1><tr><td rowspan=2>구분<td colspan=2>개소<td rowspan=2>등록 학생 수"
+            "<tr><td>운영<td>준비"
+            "<tr><td>센터A<td>1<td>0<td>1,188"
+            "<tr><td>센터B<td>1<td>1<td>95</table>")
+    tables = compare.html_tables(html.encode("euc-kr"))
+    assert len(tables) == 1
+    rows = [[None if (isinstance(v, float) and pd.isna(v)) else v for v in r] for r in tables[0].values.tolist()]
+    assert rows[0] == ["구분", "개소", None, "등록 학생 수"] and rows[1] == ["구분", "운영", "준비", "등록 학생 수"]
+    assert rows[2] == ["센터A", "1", "0", "1,188"] and rows[3][0] == "센터B"
+    g = tabular.read_grid(_Up("월별관리인원_교육청_20261008.xls", html.encode("euc-kr")))
+    info = tabular.analyze(g); assert info.shape == "wide" and info.center_col == 0 and set(info.value_cols) >= {1, 2, 3}
