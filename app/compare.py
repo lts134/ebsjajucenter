@@ -17,21 +17,39 @@ def _bytes(file) -> bytes:
 XLS_OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 def sheet_kind(name: str, data: bytes) -> str:
-    """파일 이름이 아니라 내용으로 종류를 판별한다. 'xlsx' | 'xls'(구형 바이너리) | 'html'(이름만 .xls인 HTML 표 — 사내 시스템 내려받기에 흔함) | 'text'(CSV·탭 구분)."""
+    """파일 이름이 아니라 내용으로 종류를 판별한다. 'xlsx' | 'xls'(구형 바이너리) | 'html'(이름만 .xls인 HTML 표·웹 보관 파일(MHTML) — 사내 시스템 내려받기에 흔함) | 'text'(CSV·탭 구분)."""
     lower = name.lower()
     if data[:4] == b"PK\x03\x04": return "xlsx"
     if data[:8] == XLS_OLE_MAGIC: return "xls"
-    head = data[:6000].lower()
-    if b"<table" in head or b"<html" in head or b"<body" in head: return "html"
+    try: head = decode_text(data[:20000]).lower()
+    except ValueError: head = data[:20000].decode("latin-1").lower()
+    if "urn:schemas-microsoft-com:office:spreadsheet" in head or "<workbook" in head: return "xmlss"
+    if "<table" in head or "<html" in head or "<body" in head or "<tr" in head or "mime-version" in head or "content-type: multipart" in head: return "html"
     if lower.endswith((".xlsx", ".xlsm")): return "xlsx"
     return "text"                                   # 진짜 .xls는 항상 OLE 머리말이 있으므로, 없으면 텍스트(탭·쉼표 구분)로 본다
 
 def decode_text(data: bytes) -> str:
+    """UTF-16(BOM 또는 널 바이트가 많음) → utf-8-sig → cp949 → utf-8 → euc-kr 순으로 해독."""
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"): return data.decode("utf-16")
+    if len(data) >= 64 and data[:400].count(b"\x00") > len(data[:400]) // 4:
+        for enc in ("utf-16-le", "utf-16-be"):
+            try: return data.decode(enc)
+            except UnicodeDecodeError: pass
     last = None
     for enc in ENCODINGS:
         try: return data.decode(enc)
         except UnicodeDecodeError as e: last = e
     raise ValueError(f"글자 인코딩을 판별하지 못했습니다(시도: {', '.join(ENCODINGS)}). ({last})")
+
+def _unwrap_mhtml(data: bytes) -> bytes | None:
+    """웹 보관 파일(MHTML, 'Single File Web Page')이면 안의 text/html 부분들을 풀어 이어 붙인다(quoted-printable·base64 해제)."""
+    head = data[:4000].lower()
+    if b"mime-version" not in head and b"multipart/related" not in head and b"content-transfer-encoding" not in head: return None
+    import email
+    msg = email.message_from_bytes(data)
+    parts = [p.get_payload(decode=True) for p in msg.walk() if p.get_content_type() == "text/html"]
+    parts = [p for p in parts if p]
+    return b"\n".join(parts) if parts else None
 
 class _HtmlTables(HTMLParser):
     """표준 라이브러리만으로 <table>을 격자로. 깨진 HTML(닫히지 않은 태그, 머리말 없는 조각)도 읽고 rowspan·colspan을 펼친다.
@@ -42,18 +60,17 @@ class _HtmlTables(HTMLParser):
     def _cur(self): return self._stack[-1] if self._stack else None
     def handle_starttag(self, tag, attrs):
         t = tag.lower(); a = dict(attrs)
-        if t == "table":
+        if t == "table" or (t in ("tr", "td", "th") and not self._stack):              # <table> 없이 <tr>부터 오는 조각도 표로
             self._stack.append({"rows": [], "row": None, "cell": None, "span": {}})   # span: 열 번호 → (남은 행 수, 값)
-        elif (cur := self._cur()) is None: return
-        elif t == "tr":
+            if t == "table": return
+        cur = self._cur()
+        if cur is None: return
+        if t == "tr":
             self._end_row(cur); cur["row"] = []
         elif t in ("td", "th"):
             if cur["row"] is None: cur["row"] = []
             self._end_cell(cur)
-            while len(cur["row"]) in cur["span"]:                              # 위 행에서 내려온 병합 셀 자리 채우기
-                col = len(cur["row"]); left, val = cur["span"][col]; cur["row"].append(val)
-                if left - 1 > 0: cur["span"][col] = (left - 1, val)
-                else: del cur["span"][col]
+            self._fill_span(cur)
             cur["cell"] = {"text": [], "colspan": int(a.get("colspan") or 1), "rowspan": int(a.get("rowspan") or 1)}
         elif t == "br" and cur["cell"] is not None: cur["cell"]["text"].append(" ")
     def handle_endtag(self, tag):
@@ -67,38 +84,80 @@ class _HtmlTables(HTMLParser):
     def handle_data(self, data):
         cur = self._cur()
         if cur is not None and cur["cell"] is not None: cur["cell"]["text"].append(data)
+    def _fill_span(self, cur):
+        while len(cur["row"]) in cur["span"]:                                        # 위 행에서 내려온 병합 셀 자리 채우기
+            col = len(cur["row"]); left, val = cur["span"][col]; cur["row"].append(val)
+            if left - 1 > 0: cur["span"][col] = (left - 1, val)
+            else: del cur["span"][col]
     def _end_cell(self, cur):
         c = cur["cell"]
         if c is None: return
         val = re.sub(r"\s+", " ", "".join(c["text"])).strip() or None
         col0 = len(cur["row"])
         for k in range(c["colspan"]):
-            cur["row"].append(val if k == 0 else None)                           # 가로 병합: 첫 칸만 값(머리글 합치기는 tabular가 처리)
+            cur["row"].append(val if k == 0 else None)                               # 가로 병합: 첫 칸만 값(머리글 합치기는 tabular가 처리)
             if c["rowspan"] > 1: cur["span"][col0 + k] = (c["rowspan"] - 1, val if k == 0 else None)
         cur["cell"] = None
     def _end_row(self, cur):
         self._end_cell(cur)
         if cur["row"] is not None:
-            while len(cur["row"]) in cur["span"]:                                # 행 끝에 남은 세로 병합 자리
-                col = len(cur["row"]); left, val = cur["span"][col]; cur["row"].append(val)
-                if left - 1 > 0: cur["span"][col] = (left - 1, val)
-                else: del cur["span"][col]
+            self._fill_span(cur)
             if any(v is not None for v in cur["row"]): cur["rows"].append(cur["row"])
             cur["row"] = None
     def close(self):
         super().close()
-        while self._stack:                                                       # 닫히지 않은 <table>
+        while self._stack:                                                           # 닫히지 않은 <table>
             cur = self._stack.pop(); self._end_row(cur)
             if cur["rows"]: self.tables.append(cur["rows"])
 
+SS_NS = "urn:schemas-microsoft-com:office:spreadsheet"
+
+def spreadsheetml_sheets(data: bytes) -> list[tuple[str, list[list]]]:
+    """XML Spreadsheet 2003(SpreadsheetML, 사내 시스템이 '.xls'로 내려 주는 형식) → [(시트명, 격자)]. ss:Index 건너뜀·MergeAcross·MergeDown을 펼친다."""
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(data)
+    q = lambda tag: f"{{{SS_NS}}}{tag}"
+    out = []
+    for ws in root.iter(q("Worksheet")):
+        name = ws.get(q("Name")) or f"Sheet{len(out) + 1}"
+        rows: list[list] = []; pending: dict[int, tuple[int, object]] = {}            # 세로 병합: 열 → (남은 행 수, 값)
+        for tbl in ws.iter(q("Table")):
+            r_i = 0
+            for row in tbl.iter(q("Row")):
+                idx = row.get(q("Index"))
+                r_i = int(idx) if idx else r_i + 1
+                while len(rows) < r_i - 1: rows.append([])                          # 비어 있는 행
+                cells: list = []; c_i = 0
+                for cell in row.findall(q("Cell")):
+                    cidx = cell.get(q("Index"))
+                    c_i = int(cidx) if cidx else c_i + 1
+                    while len(cells) < c_i - 1:
+                        col = len(cells)
+                        if col in pending:
+                            left, val = pending[col]; cells.append(val); pending[col] = (left - 1, val) if left - 1 > 0 else pending.pop(col) and None
+                        else: cells.append(None)
+                    d = cell.find(q("Data")); val = ("".join(d.itertext()).strip() if d is not None else None) or None
+                    across = int(cell.get(q("MergeAcross")) or 0); down = int(cell.get(q("MergeDown")) or 0)
+                    for k in range(across + 1):
+                        cells.append(val if k == 0 else None)
+                        if down > 0: pending[c_i - 1 + k] = (down, val if k == 0 else None)
+                    c_i += across
+                rows.append(cells)
+        out.append((name, rows))
+    return out
+
 def html_tables(data: bytes) -> list[pd.DataFrame]:
     """HTML 안의 <table>을 전부 격자(머리글 해석 없음, 병합 셀 펼침)로. 숫자 글자는 그대로 두고 뒤 단계(clean_number)가 해석."""
-    parser = _HtmlTables(); parser.feed(decode_text(data)); parser.close()
+    inner = _unwrap_mhtml(data)
+    text = decode_text(inner if inner else data)
+    parser = _HtmlTables(); parser.feed(text); parser.close()
     out = []
     for rows in parser.tables:
         w = max(len(r) for r in rows)
         out.append(pd.DataFrame([r + [None] * (w - len(r)) for r in rows]))
-    if not out: raise ValueError("HTML에서 표를 찾지 못했습니다.")
+    if not out:
+        head = re.sub(r"\s+", " ", text[:400]).strip()
+        raise ValueError(f"HTML에서 표를 찾지 못했습니다. 파일 앞부분: 「{head}」 — 이 글을 개발자에게 전달하면 형식을 맞출 수 있습니다.")
     return out
 
 def excel_file(data: bytes, kind: str) -> pd.ExcelFile:
@@ -113,6 +172,8 @@ def list_sheets(file) -> list[str]:
     if not name.lower().endswith((".xlsx", ".xls", ".xlsm", ".csv", ".txt")): return []
     kind = sheet_kind(name, data)
     if kind in ("xlsx", "xls"): return excel_file(data, kind).sheet_names
+    if kind == "xmlss":
+        names = [n for n, _ in spreadsheetml_sheets(data)]; return names if len(names) > 1 else []
     if kind == "html":
         n = len(html_tables(data)); return [f"표 {i + 1}" for i in range(n)] if n > 1 else []
     return []

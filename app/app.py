@@ -106,17 +106,30 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None, b
     c1, c2, c3 = st.columns([1.3, 2, 1])
     center_col = c1.multiselect("1. 센터(행 이름) 열", cols, default=[c for c in c_default if c in cols], format_func=label, key=f"{key}_cc")
     value_cols = c2.multiselect("2. 값 열", [c for c in cols if c not in center_col], default=[c for c in v_default if c not in center_col], format_func=label, key=f"{key}_vc")
-    base_date = c3.text_input("3. 기준일 (필수)", d_default, placeholder="2026-06-30", key=f"{key}_bd",
-                              help="이 표의 값이 '언제 기준' 수치인지. 표 제목·주석에 '… 기준' 날짜가 있으면 자동으로 채워집니다. 지난번 값과 같은 기준일이어야 맞춰 볼 수 있습니다.")
-    if not base_date.strip(): c3.error("기준일을 넣어야 다음으로 넘어갑니다.")
+    dated = [c for c in value_cols if c in info.col_dates]; undated = [c for c in value_cols if c not in info.col_dates]
+    if dated:                                                  # 월별 펼침 표: 열 머리글의 월이 그 열의 기준일
+        ds = sorted({info.col_dates[c] for c in dated})
+        bd_label, bd_help = ("3. 기준일 (월이 없는 열에 적용)" if undated else "3. 기준일 (열마다 자동)"), \
+            f"월이 적힌 열 {len(dated)}개는 그 월의 말일이 기준일이 됩니다({ds[0]} ~ {ds[-1]}). " + ("월이 없는 열(" + ", ".join(label(c) for c in undated[:4]) + ")에만 이 기준일이 쓰입니다." if undated else "이 칸은 쓰이지 않습니다.")
+    else:
+        bd_label, bd_help = "3. 기준일 (필수)", "이 표의 값이 '언제 기준' 수치인지. 표 제목·주석에 '… 기준' 날짜가 있으면 자동으로 채워집니다. 지난번 값과 같은 기준일이어야 맞춰 볼 수 있습니다."
+    base_date = c3.text_input(bd_label, d_default, placeholder="2026-06-30", key=f"{key}_bd", help=bd_help, disabled=bool(dated) and not undated)
+    if not base_date.strip() and (undated or not dated): c3.error("기준일을 넣어야 다음으로 넘어갑니다.")
+    if dated: st.caption(f"열 머리글의 월을 기준일로 씁니다: {ds[0]} ~ {ds[-1]} ({len(ds)}개월, 열 {len(dated)}개). 같은 이름의 열은 한 지표로 묶이고 월만 달라집니다.")
     names = dict(sug["value_cols"]) if sug and sug.get("value_cols") else {}
-    ind_df = pd.DataFrame([{"열": label(c), "지표명": names.get(c) or tabular.default_indicator(label(c))} for c in value_cols])
+    # 지표명은 '월을 뺀 머리글'별로 한 번만 정한다(월별 표에서 열 20개를 하나씩 고치지 않게)
+    groups: dict[str, list[int]] = {}
+    for c in value_cols: groups.setdefault(info.col_indicator(c), []).append(c)
+    ind_df = pd.DataFrame([{"열": (g_ if len(cs) == 1 else f"{g_} ({len(cs)}개 열)"), "지표명": names.get(cs[0]) or tabular.default_indicator(g_)} for g_, cs in groups.items()])
     if len(ind_df):
         ind_df = st.data_editor(ind_df, hide_index=True, width="stretch", key=f"{key}_ind", disabled=["열"],
                                 column_config={"지표명": st.column_config.TextColumn("저장될 지표명 (사전에 있으면 정규 지표명이 기본값)")})
-    drop_totals = st.checkbox("합계·소계·평균 행 제외", value=True, key=f"{key}_dt", help=f"제외 대상 행: {[grid.row_offset + r for r in info.total_rows] or '없음'}")
+    blank_rows = [r for r in info.data_rows if center_col and not any(tabular.text(grid.cell(r, c)) for c in center_col)]
+    drop_totals = st.checkbox("합계·소계·평균 행 제외", value=True, key=f"{key}_dt",
+                              help=f"제외 대상 행: {[grid.row_offset + r for r in info.total_rows] or '없음'}" + (f" · 센터 이름이 빈 행 {len(blank_rows)}개(상위 구분의 소계로 보임)는 항상 제외" if blank_rows else ""))
+    if blank_rows: st.caption(f"센터 이름이 빈 행 {len(blank_rows)}개는 상위 구분(예: 교육청)의 소계로 보고 넣지 않습니다. 센터별 값만 저장됩니다.")
     try:
-        indicators = {c: str(n).strip() for c, n in zip(value_cols, ind_df["지표명"].tolist(), strict=True)} if len(ind_df) else {}
+        indicators = {c: str(n).strip() for (g_, cs), n in zip(groups.items(), ind_df["지표명"].tolist(), strict=True) for c in cs} if len(ind_df) else {}
         return tabular.wide_to_long(grid, info, center_col, value_cols, base_date.strip(), indicators, drop_totals, source_version_default)
     except ValueError as e:
         st.warning(str(e)); return None

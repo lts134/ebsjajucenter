@@ -19,6 +19,19 @@ TOTAL_RE = re.compile(r"^(합\s*계|소\s*계|총\s*계|계|전\s*체|총\s*합|
 CENTER_HDR_RE = re.compile(r"센터|시\s*·?\s*군\s*·?\s*구|기관|지역|구\s*분|지자체|시\s*·?\s*도|학교|운영기관|센터명")
 DATE_RE = re.compile(r"'?\d{2,4}\s*[.\-/년]\s*\d{1,2}\s*[.\-/월]\s*\d{1,2}\.?")
 NOTE_RE = re.compile(r"^(※|\*|주\s*[:)]|출처|자료\s*:)")
+MONTH_RE = re.compile(r"(?<!\d)((?:19|20)\d{2}|\d{2})\s*[.\-/년]\s*(0?[1-9]|1[0-2])\s*월?\.?(?!\s*[.\-/]?\s*\d)")   # 2025.12 · 2025-12 · 2025년 12월 · 25.12 (일자가 이어지면 날짜이므로 제외)
+
+def month_end(year: int, month: int) -> str:
+    import calendar
+    return f"{year:04d}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"
+
+def month_in(text_: str) -> tuple[str, str] | None:
+    """글 속의 월 표기 하나 → (월말 날짜, 월 표기를 뺀 나머지 글). 없으면 None."""
+    m = MONTH_RE.search(text_ or "")
+    if not m: return None
+    y = int(m.group(1)); y = y + 2000 if y < 100 else y
+    rest = re.sub(r"\s+", " ", (text_[:m.start()] + " " + text_[m.end():])).strip(" -·/")
+    return month_end(y, int(m.group(2))), rest
 UNIT_RE = re.compile(r"\(\s*(%|명|개|개소|원|천원|백만원|억원|건|회|시간|일)\s*\)")
 MAX_HEADER_ROWS = 3
 
@@ -67,6 +80,12 @@ def read_grid(file, sheet: str | int | None = None) -> Grid:
         xl = compare.excel_file(data, kind)
         sheet_name = sheet if sheet is not None else xl.sheet_names[0]
         df = xl.parse(sheet_name, header=None)
+    elif kind == "xmlss":                                 # XML Spreadsheet 2003(사내 시스템 내려받기)
+        sheets = compare.spreadsheetml_sheets(data)
+        if not sheets: raise ValueError("XML 스프레드시트에 시트가 없습니다.")
+        pick = next((sh for sh in sheets if sh[0] == sheet), sheets[sheet] if isinstance(sheet, int) and sheet < len(sheets) else sheets[0])
+        w = max((len(r) for r in pick[1]), default=0)
+        df, sheet_name = pd.DataFrame([r + [None] * (w - len(r)) for r in pick[1]]), (pick[0] if len(sheets) > 1 else "")
     elif kind == "html":                                  # 이름만 .xls인 HTML 표(사내 시스템 내려받기)
         tables = compare.html_tables(data)
         idx = (int(str(sheet).split()[-1]) - 1) if isinstance(sheet, str) and sheet.startswith("표 ") else (sheet if isinstance(sheet, int) else 0)
@@ -144,7 +163,12 @@ class TableInfo:
     center_cols: list[int] = field(default_factory=list)      # 둘 이상이면 이어 붙여 센터명(예: 시·도 + 시·군·구, 연도 + 세부항목)
     value_cols: list[int] = field(default_factory=list)
     total_rows: list[int] = field(default_factory=list)
+    col_dates: dict[int, str] = field(default_factory=dict)     # 머리글에 월이 있는 열: 열 번호 → 월말 기준일('2025.12 진행' → 2025-12-31)
     def col_label(self, j: int) -> str: return self.header[j] if j < len(self.header) and self.header[j] else f"열{j + 1}"
+    def col_indicator(self, j: int) -> str:
+        """지표명 기본값용 머리글: 월 표기를 뺀 나머지('2025.12 진행' → '진행')."""
+        m = month_in(self.col_label(j)) if j in self.col_dates else None
+        return (m[1] if m and m[1] else self.col_label(j))
 
 def _norm_header(h: str) -> str: return re.sub(r"\s+", " ", h).strip()
 
@@ -162,11 +186,13 @@ def _looks_like_header(cells: list) -> bool:
             if not (v == int(v) and (1900 <= v <= 2100 or 1 <= v <= 12)): return False
     return True
 
+def _is_month(c) -> bool: return isinstance(c, str) and MONTH_RE.fullmatch(c.strip()) is not None
+
 def _row_kind(cells: list) -> str:
     nb = [c for c in cells if not is_blank(c)]
     if not nb: return "blank"
     if len(nb) == 1 and not is_num(nb[0]) and (len(cells) >= 3 or NOTE_RE.match(text(nb[0]))): return "single"
-    if any(is_num(c) or is_date(c) for c in nb): return "data"
+    if any((is_num(c) and not _is_month(c)) or is_date(c) for c in nb): return "data"
     return "text"
 
 def analyze(grid: Grid) -> TableInfo:
@@ -227,6 +253,14 @@ def analyze(grid: Grid) -> TableInfo:
         pref = [m for m in ms if "기준" in src[m.end():m.end() + 6] or "기준" in src[max(0, m.start() - 6):m.start()]]
         d = _norm_date((pref or ms)[0].group(0))
         if d: info.base_date_hint = d; break
+    for j, h in enumerate(info.header):                        # 열 머리글의 월 → 열별 기준일(월별 펼침 표)
+        mi = month_in(h) if h and not h.startswith("열") else None
+        if mi: info.col_dates[j] = mi[0]
+    if not info.base_date_hint and info.title:                  # 제목의 '2025.12 ~ 2026.09' 같은 기간은 끝 월을 기준일 후보로
+        months = [m for m in MONTH_RE.finditer(info.title)]
+        if months:
+            y = int(months[-1].group(1)); y = y + 2000 if y < 100 else y
+            info.base_date_hint = month_end(y, int(months[-1].group(2)))
     # 5) 모양 판정
     mapped = {_norm_header(h): ALIASES.get(_norm_header(h)) for h in info.header}
     if all(req in mapped.values() for req in REQUIRED):
@@ -297,21 +331,25 @@ def long_table(grid: Grid, info: TableInfo) -> pd.DataFrame:
     return compare.finalize(df, grid.source_file, grid.source_sheet)
 
 def wide_to_long(grid: Grid, info: TableInfo, center_col, value_cols: list[int], base_date: str,
-                 indicators: dict[int, str] | None = None, drop_totals: bool = True, source_version: str | None = None) -> pd.DataFrame:
+                 indicators: dict[int, str] | None = None, drop_totals: bool = True, source_version: str | None = None,
+                 col_dates: dict[int, str] | None = None) -> pd.DataFrame:
     """가로 펼침 표 → 한 줄 한 값. center_col: 열 번호 하나 또는 여러 개(이어 붙여 센터명). indicators: 값 열 번호 → 지표명(없으면 default_indicator).
-    값은 그대로 옮기고 계산하지 않는다."""
+    col_dates: 열 번호 → 기준일(월별 펼침 표. 없는 열은 base_date). 값은 그대로 옮기고 계산하지 않는다."""
     ccols = [c for c in (center_col if isinstance(center_col, (list, tuple)) else [center_col]) if c is not None]
     if not ccols: raise ValueError("센터(행 이름) 열을 고르세요.")
     if not value_cols: raise ValueError("값 열을 하나 이상 고르세요.")
-    if not base_date: raise ValueError("기준일을 입력하세요(예: 2026-08-30). 표 제목에 '… 기준'이 있으면 자동으로 채워집니다.")
+    col_dates = dict(col_dates if col_dates is not None else info.col_dates)
+    if not base_date and any(j not in col_dates for j in value_cols):
+        raise ValueError("기준일을 입력하세요(예: 2026-08-30). 표 제목에 '… 기준'이 있으면 자동으로 채워집니다." +
+                         (" 월이 적힌 열은 그 월말이 기준일이 되고, 월이 없는 열(예: 전체 합계)에만 이 기준일이 쓰입니다." if col_dates else ""))
     indicators = indicators or {}
-    names = {j: (indicators.get(j) or default_indicator(info.col_label(j))) for j in value_cols}
-    seen: dict[str, int] = {}
-    for j in value_cols:                                     # 같은 이름의 값 열이 둘 이상이면(예: 사업별 '편성액' 반복) 열 번호를 붙여 구분
-        seen[names[j]] = seen.get(names[j], 0) + 1
-    dup_names = {n for n, k in seen.items() if k > 1}
+    names = {j: (indicators.get(j) or default_indicator(info.col_indicator(j))) for j in value_cols}
+    seen: dict[tuple, int] = {}
+    for j in value_cols:                                     # 같은 지표명·같은 기준일인 값 열이 둘 이상이면(예: 사업별 '편성액' 반복) 열 번호를 붙여 구분
+        k_ = (names[j], col_dates.get(j, base_date)); seen[k_] = seen.get(k_, 0) + 1
+    dup = {k_ for k_, n in seen.items() if n > 1}
     for j in value_cols:
-        if names[j] in dup_names: names[j] = f"{names[j]} ({j + 1}열)"
+        if (names[j], col_dates.get(j, base_date)) in dup: names[j] = f"{names[j]} ({j + 1}열)"
     recs = []
     for r in info.data_rows:
         parts = [text(grid.cell(r, c)) for c in ccols]
@@ -322,7 +360,7 @@ def wide_to_long(grid: Grid, info: TableInfo, center_col, value_cols: list[int],
             v = grid.cell(r, j)
             if is_blank(v): continue
             recs.append({"indicator": names[j], "center": center,
-                         "base_date": base_date, "value": v, "source_row": grid.row_offset + r,
+                         "base_date": col_dates.get(j, base_date), "value": v, "source_row": grid.row_offset + r,
                          "source_version": source_version})
     if not recs: raise ValueError("변환된 값이 없습니다. 센터 열·값 열 선택을 확인하세요.")
     return compare.finalize(pd.DataFrame(recs), grid.source_file, grid.source_sheet)

@@ -230,3 +230,61 @@ def test_html_tables_broken_markup_and_spans():
     assert rows[2] == ["센터A", "1", "0", "1,188"] and rows[3][0] == "센터B"
     g = tabular.read_grid(_Up("월별관리인원_교육청_20261008.xls", html.encode("euc-kr")))
     info = tabular.analyze(g); assert info.shape == "wide" and info.center_col == 0 and set(info.value_cols) >= {1, 2, 3}
+
+
+def test_html_tables_utf16_mhtml_and_bare_rows():
+    body = "<table><tr><td>지표명</td><td>센터명</td><td>기준일</td><td>값</td></tr><tr><td>등원율</td><td>센터A</td><td>2026-06-30</td><td>60.3</td></tr></table>"
+    # UTF-16LE(BOM) HTML
+    data = ("\ufeff<html><body>" + body + "</body></html>").encode("utf-16")
+    assert compare.sheet_kind("a.xls", data) == "html" and len(compare.load_values(_Up("a.xls", data))) == 1
+    # MHTML(웹 보관 파일, quoted-printable)
+    import quopri
+    qp = quopri.encodestring(("<html><body>" + body + "</body></html>").encode("utf-8")).decode("ascii")
+    mht = ("MIME-Version: 1.0\nContent-Type: multipart/related; boundary=\"--=_B\"\n\n----=_B\nContent-Type: text/html; charset=\"utf-8\"\n"
+           "Content-Transfer-Encoding: quoted-printable\n\n" + qp + "\n----=_B--\n").encode("utf-8")
+    assert compare.sheet_kind("b.xls", mht) == "html" and compare.load_values(_Up("b.xls", mht))["value"].tolist() == [60.3]
+    # <table> 없이 <tr>만 있는 조각
+    bare = body.replace("<table>", "").replace("</table>", "").encode("cp949")
+    assert compare.sheet_kind("c.xls", bare) == "html" and len(compare.html_tables(bare)) == 1
+    # 표가 정말 없으면 앞부분을 보여 주는 오류
+    with pytest.raises(ValueError, match="파일 앞부분"): compare.html_tables("<html><body><p>표 없음</p></body></html>".encode("utf-8"))
+
+
+def _xmlss(rows_xml: str, name="센터별") -> bytes:
+    return ('<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?>'
+            '<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">'
+            f'<Worksheet ss:Name="{name}"><Table>' + rows_xml + '</Table></Worksheet></Workbook>').encode("utf-8")
+
+def _cell(v, **attrs):
+    a = "".join(f' ss:{k}="{val}"' for k, val in attrs.items())
+    t = "Number" if isinstance(v, (int, float)) else "String"
+    return f'<Cell{a}><Data ss:Type="{t}">{v}</Data></Cell>' if v is not None else f"<Cell{a}/>"
+
+def test_spreadsheetml_monthly_wide_table():
+    """사내 시스템 '.xls'(XML Spreadsheet 2003) 월별 펼침 표: 제목(기간) + 2줄 머리글(월 MergeAcross) + 교육청/센터 열 + 교육청 소계 행(센터 빈칸)."""
+    rows = [f'<Row>{_cell("교육청 - 센터별 진행/하차 인원 (2025.12 ~ 2026.02)", MergeAcross=7)}</Row>',
+            f'<Row>{_cell("교육청", MergeDown=1)}{_cell("센터", MergeDown=1)}{_cell("전체진행", MergeDown=1)}{_cell("2025.12", MergeAcross=1)}{_cell("2026.01", MergeAcross=1)}{_cell("2026.02", MergeAcross=1)}</Row>',
+            f'<Row>{_cell("진행", Index=4)}{_cell("하차")}{_cell("진행")}{_cell("하차")}{_cell("진행")}{_cell("하차")}</Row>',
+            f'<Row>{_cell("A교육청")}{_cell("가센터")}{_cell(66)}{_cell(0)}{_cell(0)}{_cell(34)}{_cell(0)}{_cell(41)}{_cell(30)}</Row>',
+            f'<Row>{_cell("A교육청")}{_cell("나센터")}{_cell(10)}{_cell(1)}{_cell(2)}{_cell(3)}{_cell(4)}{_cell(5)}{_cell(6)}</Row>',
+            f'<Row>{_cell("A교육청")}{_cell(None)}{_cell(76)}{_cell(1)}{_cell(2)}{_cell(37)}{_cell(4)}{_cell(46)}{_cell(36)}</Row>']
+    data = _xmlss("".join(rows)); up = _Up("월별진행하차인원_교육청_20261008.xls", data)
+    assert compare.sheet_kind(up.name, data) == "xmlss" and compare.list_sheets(up) == []
+    g = tabular.read_grid(up); info = tabular.analyze(g)
+    assert info.shape == "wide" and info.header_rows == [1, 2] and info.base_date_hint == "2026-02-28"
+    assert [info.col_label(c) for c in range(3, 9)] == ["2025.12 진행", "2025.12 하차", "2026.01 진행", "2026.01 하차", "2026.02 진행", "2026.02 하차"]
+    assert info.col_dates[3] == "2025-12-31" and info.col_dates[8] == "2026-02-28" and 2 not in info.col_dates
+    assert info.col_indicator(3) == "진행" and info.col_indicator(2) == "전체진행"
+    df = tabular.wide_to_long(g, info, info.center_cols or [1], [2, 3, 4, 5, 6, 7, 8], info.base_date_hint, {3: "진행 인원", 4: "하차 인원", 5: "진행 인원", 6: "하차 인원", 7: "진행 인원", 8: "하차 인원"})
+    assert sorted(df["indicator"].unique()) == ["전체진행", "진행 인원", "하차 인원"] and sorted(df["base_date"].unique()) == ["2025-12-31", "2026-01-31", "2026-02-28"]
+    assert df["center"].nunique() == 2                                  # 센터가 빈 소계 행은 들어가지 않음
+    row = df[(df["indicator"] == "진행 인원") & (df["center"].str.contains("가센터")) & (df["base_date"] == "2026-02-28")]; assert row["value"].iloc[0] == 41
+    assert df[df["indicator"] == "전체진행"]["base_date"].unique().tolist() == ["2026-02-28"]   # 월 없는 열은 표 기준일(제목 기간의 끝)
+    # 월 없는 열이 있는데 기준일이 비면 안내, 월 열만 고르면 기준일 없이도 됨
+    with pytest.raises(ValueError, match="월이 없는 열"): tabular.wide_to_long(g, info, [1], [2, 3], "")
+    assert len(tabular.wide_to_long(g, info, [1], [3, 4], "")) == 4
+
+def test_month_token_rules():
+    assert tabular.month_in("2025.12 진행") == ("2025-12-31", "진행") and tabular.month_in("25.02") == ("2025-02-28", "")
+    assert tabular.month_in("2026년 1월 등원율") == ("2026-01-31", "등원율") and tabular.month_in("2026.6.30 기준") is None   # 일자가 있으면 월 표기가 아님
+    assert tabular._row_kind(["교육청", "센터", "2025.12", None, "2026.01"]) == "text" and tabular._row_kind(["센터A", 1, 2]) == "data"
