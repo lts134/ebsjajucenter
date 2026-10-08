@@ -56,11 +56,12 @@ def provenance_by_indicator(values: pd.DataFrame) -> dict:
         out[str(ind)] = d
     return out
 
-def mail_text(req: dict, d: dict, hwpx_name: str | None, user: str, org: str = "EBS 지역교육협력부") -> dict:
-    """확정 뒤 담당자가 메일 프로그램에 붙여 쓰는 문안(코드 생성, 수치 없음). org는 조직 설정의 발신 표기. {"subject", "body"}"""
+def mail_text(req: dict, d: dict, hwpx_name: str | None, user: str, org: str = "EBS 지역교육협력부", greeting: str | None = None) -> dict:
+    """확정 뒤 담당자가 메일 프로그램에 붙여 쓰는 문안(코드 생성, 수치 없음). org는 조직 설정의 발신 표기, greeting은 톤 설정의 인사말 틀. {"subject", "body"}"""
     title = d.get("제목") or req.get("title") or "요구자료"
     who = req.get("requester") or "[확인 필요: 요청 주체]"
-    body = (f"{who} 담당자님께\n\n요청하신 「{title}」 관련 자료를 붙임과 같이 보내드립니다.\n"
+    head = (greeting or "{requester} 담당자님께").replace("{requester}", who)
+    body = (f"{head}\n\n요청하신 「{title}」 관련 자료를 붙임과 같이 보내드립니다.\n"
             f"수치의 기준일·정의·산출 근거는 붙임 문서의 각 항목 아래에 적었습니다. 확인 후 추가로 필요한 자료가 있으면 알려 주시기 바랍니다.\n\n"
             f"붙임: {hwpx_name or '회신 자료'} 1부.\n\n{org} {user} 드림")
     return {"subject": f"[회신] {title}", "body": body}
@@ -103,21 +104,54 @@ def rule_draft(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict
         lines.append(f"{i + 1}. {text}: " + " ".join(parts))
     return {"제목": title, "본문": "\n".join(lines), "차이사유": reasons_text(reasons), "산출근거": provenance_text(provenance_by_indicator(values), provenance)}
 
+# 요청 주체 유형별 회신 톤(설정에서 고칠 수 있는 기본값). style은 모델 초안 프롬프트에 붙는 문체 지침, doc_label은 문서 제목 접미, show_confirm은 【확인】 줄 표시.
+DEFAULT_PRESETS = {
+    "의원실": {"doc_label": "답변자료", "show_confirm": True, "mail_greeting": "{requester} 담당자님께",
+             "style": "의원실 보좌진이 읽는 답변자료입니다. 정중한 공문체(~합니다)로, 항목마다 무엇을 요구했는지 먼저 확인하고 자료 범위와 기준일을 분명히 적습니다."},
+    "감사": {"doc_label": "제출자료", "show_confirm": True, "mail_greeting": "{requester} 담당자님께",
+           "style": "감사 대응 제출자료입니다. 사실만 간결하게(~합니다), 항목마다 산출 기준·출처·기준일을 밝히고 평가·해석·전망 문장은 쓰지 않습니다."},
+    "교육부": {"doc_label": "회신자료", "show_confirm": True, "mail_greeting": "{requester} 담당자님께",
+            "style": "상급 기관 회신자료입니다. 공문체(~합니다)로 요구 항목 순서를 그대로 따르고, 근거 자료명과 기준일을 항목마다 적습니다."},
+    "언론": {"doc_label": "설명자료", "show_confirm": False, "mail_greeting": "{requester} 기자님께",
+           "style": "언론 설명자료입니다. 쉬운 말로 짧게 쓰고 전문 용어는 풀어 씁니다. 수치 해석·전망·비교 평가는 쓰지 않습니다."},
+    "기타": {"doc_label": "답변자료", "show_confirm": True, "mail_greeting": "{requester} 담당자님께", "style": ""},
+}
+PRESET_FIELDS = ["doc_label", "show_confirm", "style", "mail_greeting"]
+_KIND_RE = [("의원실", r"의원|의원실|국회|위원회"), ("감사", r"감사"), ("교육부", r"교육부|교육청|교육지원청"), ("언론", r"신문|방송|기자|언론|뉴스|일보")]
+
+def kind_of(requester: str | None, dict_kind: str | None = None) -> str:
+    """요청 주체 유형: 요청 주체 사전의 유형이 있으면 그것, 없으면 이름의 낱말로 추정, 모르면 기타."""
+    if dict_kind in DEFAULT_PRESETS: return dict_kind
+    name = str(requester or "")
+    for kind, pat in _KIND_RE:
+        if re.search(pat, name): return kind
+    return "기타"
+
+def preset_for(kind: str, overrides: dict | None = None) -> dict:
+    """유형의 톤 설정(기본값 위에 설정 화면의 수정값을 덮음)."""
+    base = dict(DEFAULT_PRESETS.get(kind) or DEFAULT_PRESETS["기타"]); base["kind"] = kind if kind in DEFAULT_PRESETS else "기타"
+    ov = (overrides or {}).get(base["kind"]) or {}
+    for k in PRESET_FIELDS:
+        if ov.get(k) not in (None, ""): base[k] = ov[k]
+    base["show_confirm"] = bool(base.get("show_confirm", True)); return base
+
 SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 회신 문안 작성 보조입니다. 공문체(~합니다/~입니다, 번호 문단)로 씁니다.
 원칙: 입력으로 받은 수치·사유·근거만 사용합니다. 수치를 새로 계산·요약·추정하지 않고(평균·증감도 계산하지 않음), 사유를 지어내지 않습니다.
 데이터가 없는 항목은 본문에 '[확인 필요]'로 남깁니다. 단정적 평가('우수', '개선됨')를 넣지 않습니다."""
 
-def llm_draft(req, items, values, reasons, provenance, checklist=None) -> dict:
-    """모델은 제목·본문만 쓴다. 값 행은 보내지 않고(표가 보여 준다) 항목별 요약·대조 건수·지표별 근거만 보낸다. 차이사유·산출근거 칸은 코드가 만든다."""
-    prov_by_ind = provenance_by_indicator(values)
+def llm_draft(req, items, values, reasons, provenance, checklist=None, tone: dict | None = None) -> dict:
+    """모델은 제목·본문만 쓴다. 값 행은 보내지 않고(표가 보여 준다) 항목별 요약·대조 건수·지표별 근거만 보낸다. 차이사유·산출근거 칸은 코드가 만든다. tone은 요청 주체 유형별 문체 지침."""
+    prov_by_ind = provenance_by_indicator(values); tone = tone or {}
     payload = {"요구": pii.redact_obj({k: req.get(k) for k in ("requester", "received_date", "due_date", "title")}),
                "요구 항목(번호·원문·가진 자료 요약)": pii.redact_obj(item_summaries(items, values)),
                "담당자가 입력한 차이 사유(원문 그대로 인용 가능)": pii.redact_obj({" ".join(k): v for k, v in reasons.items() if v}),
                "과거 제출값 대조(코드 판정, 건수)": compare_counts(checklist) or "대조 결과 없음 — 차이 유무를 언급하지 말 것",
                "산출 근거(지표별, 참고용)": prov_by_ind or provenance}
     n_items = len(unique_texts(items))
-    prompt = (f"아래 데이터로 회신 문안의 제목과 본문을 작성하세요. 이 문안은 '답변자료' 양식에 들어갑니다: 양식이 항목 번호 제목(1. 2. …)과 수치 표, 산출 근거, 차이 주석, 붙임, '끝.'을 따로 붙이므로 본문에는 각 항목의 **설명 문장만** 씁니다.\n"
-              f"본문 규칙: 요구 항목 {n_items}개에 맞춰 '1.'부터 '{n_items}.'까지만 번호를 쓰고(항목 안의 문장에는 번호·기호를 붙이지 않음), 항목마다 1~3문장. "
+    label = tone.get("doc_label") or "답변자료"
+    prompt = (f"아래 데이터로 회신 문안의 제목과 본문을 작성하세요. 이 문안은 '{label}' 양식에 들어갑니다: 양식이 항목 번호 제목(1. 2. …)과 수치 표, 산출 근거, 차이 주석, 붙임, '끝.'을 따로 붙이므로 본문에는 각 항목의 **설명 문장만** 씁니다.\n"
+              + (f"문체 지침(요청 주체 유형 {tone.get('kind')}): {tone['style']}\n" if tone.get("style") else "")
+              + f"본문 규칙: 요구 항목 {n_items}개에 맞춰 '1.'부터 '{n_items}.'까지만 번호를 쓰고(항목 안의 문장에는 번호·기호를 붙이지 않음), 항목마다 1~3문장. "
               "수치는 '아래 표와 같습니다'로 안내하고 센터 이름·값·평균·건수 비교를 쓰지 않습니다(값은 보내지 않았고 표가 보여 줍니다). 기준일 범위와 센터 수는 요약에 있는 그대로만 적을 수 있습니다. "
               "자료가 없는 지표는 '[확인 필요]'로 남깁니다. 값이 0이거나 비어 있는 이유, 증감의 원인을 추측하지 않습니다. "
               "대조 결과는 건수만 언급할 수 있고('일치' 건수가 있을 때만 '일치'를 말함), '과거 제출값 없음'·'값 누락'은 언급하지 않습니다. 담당자 사유가 있으면 그 문구만 인용합니다. "
@@ -127,9 +161,9 @@ def llm_draft(req, items, values, reasons, provenance, checklist=None) -> dict:
     d = llm.ask_json(prompt, SYSTEM, 8000, purpose="회신 초안", schema=schema)
     return {"제목": str(d.get("제목", "") or ""), "본문": str(d.get("본문", "") or ""), "차이사유": reasons_text(reasons), "산출근거": provenance_text(prov_by_ind, provenance)}
 
-def make_draft(req, items, values, reasons, provenance, checklist=None) -> tuple[dict, str]:
+def make_draft(req, items, values, reasons, provenance, checklist=None, tone: dict | None = None) -> tuple[dict, str]:
     if llm.available():
-        try: return llm_draft(req, items, values, reasons, provenance, checklist), f"Claude API ({llm.model_label()})"
+        try: return llm_draft(req, items, values, reasons, provenance, checklist, tone), f"Claude API ({llm.model_label()})"
         except Exception as e:
             d = rule_draft(req, items, values, reasons, provenance); d["_error"] = f"{type(e).__name__}: {e}"; return d, "규칙 기반(API 오류로 대체)"
     return rule_draft(req, items, values, reasons, provenance), "규칙 기반(API 키 없음)"

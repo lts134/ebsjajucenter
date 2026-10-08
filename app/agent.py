@@ -27,7 +27,7 @@ class Case(dict):
     def bump(self):
         """초안·사유·값이 코드나 모델에 의해 새로 만들어졌음을 표시(판 번호). 화면 입력칸은 이 번호를 키에 넣어 이전 입력이 새 내용을 덮지 않게 한다."""
         self["rev"] = int(self.get("rev") or 0) + 1
-    def reset(self, keep=("dept_head", "phone", "org", "company")):
+    def reset(self, keep=("dept_head", "phone", "org", "company")):            # tone_kind는 건마다 다르므로 남기지 않는다
         """새 작업 시작(같은 객체를 비워 세션 참조를 유지). 부서장·내선 같은 설정 값은 남긴다."""
         kept = {k: self.get(k) for k in keep if k in self}
         rev = int(self.get("rev") or 0) + 1
@@ -223,15 +223,22 @@ def set_reason(case: Case, indicator: str, center: str, base_date: str, reason: 
     k = (indicator, center, base_date); case["reasons"][k] = reason.strip(); case["draft_stale"] = True; case.bump()      # 초안은 두고 '다시 쓰기 필요' 표시만
     case.note(f"사유 입력: {center} {indicator} {base_date}"); return {"ok": True, "key": " | ".join(k), "reason": reason.strip(), "note": "초안 다시 쓰기(write_draft) → 한글 파일 다시 만들기(make_hwpx) 순으로 하면 반영됩니다."}
 
+def tone_for(case: Case, req: dict | None = None) -> dict:
+    """이 작업의 회신 톤: 담당자가 고른 유형(tone_kind) → 요청 주체 사전의 유형 → 이름으로 추정. 설정 화면의 수정값을 덮어 쓴다."""
+    req = req if req is not None else (_req_items(case)[0] if (case["request_id"] or case["extracted"]) else {})
+    name = (req or {}).get("requester")
+    kind = case.get("tone_kind") or draft.kind_of(name, db.requester_kind(name) if name else None)
+    tone = draft.preset_for(kind, db.get_tone_presets()); case["tone"] = tone; return tone
+
 def step_draft(case: Case) -> dict:
-    """확정 전 수치와 사유만으로 회신 초안. 없는 항목은 [확인 필요]."""
+    """확정 전 수치와 사유만으로 회신 초안. 없는 항목은 [확인 필요]. 문체는 요청 주체 유형의 톤 설정을 따른다."""
     if not case["request_id"] and not case.get("no_register"): step_register(case)
     if case["values"] is None: step_pull(case)
-    req, items = _req_items(case)
+    req, items = _req_items(case); tone = tone_for(case, req)
     values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
     prov = draft.provenance_by_indicator(values)                                                       # 지표별 근거(첫 행 하나만 쓰던 것을 대체)
     ck = compare.checklist(case["compare"], case["reasons"]).to_dict("records") if case["compare"] is not None else None
-    d, how = draft.make_draft(req, items, values, dict(case["reasons"]), prov, ck)
+    d, how = draft.make_draft(req, items, values, dict(case["reasons"]), prov, ck, tone)
     case["draft"], case["draft_how"], case["checklist"], case["prov"], case["draft_stale"] = d, how, ck, prov, False; case.bump()
     cov = draft.coverage_check(items, d, values); case["coverage"] = cov
     n_ok = int((cov["판정"] == "충족").sum()) if "판정" in cov else None
@@ -261,8 +268,9 @@ def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = 
         rows = [{"no": i + 1, "indicator": r["indicator"], "center": r["center"], "base_date": r["base_date"], "value": r["value"]} for i, (_, r) in enumerate(values.iterrows())]
         out, kind = hwpx_out.render(template_bytes, fill, rows), "서식 치환"
     else:
+        tone = case.get("tone") or tone_for(case, req)
         out, kind = hwpx_build.build_reply(req, items, values, d, dict(case["reasons"]), case["compare"], dept_head=dept_head or case.get("dept_head", ""), phone=phone or case.get("phone", ""),
-                                           org=case.get("org") or "지역교육협력부"), "답변자료 양식"
+                                           org=case.get("org") or "지역교육협력부", doc_label=tone.get("doc_label") or "답변자료", show_confirm=bool(tone.get("show_confirm", True))), f"{tone.get('doc_label') or '답변자료'} 양식"
         rows = values
     name = safe_filename(f"답변자료_{req.get('requester') or '요구'}_{dt.date.today()}" + (f"_요구{case['request_id']}" if case["request_id"] else "") + ".hwpx")
     case["hwpx"], case["hwpx_name"], case["hwpx_stale"] = out, name, False; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB, {kind})")

@@ -137,6 +137,9 @@ CREATE TABLE IF NOT EXISTS requesters (        -- 요청 주체 사전: 표준 �
 CREATE TABLE IF NOT EXISTS indicator_dict (    -- 지표 사전·데이터 카탈로그(화면에서 편집). 비어 있으면 코드의 기본값(normalize.CANON·suggest.CATALOG)을 쓴다
     canon TEXT PRIMARY KEY, aliases TEXT, source TEXT, owner TEXT, note TEXT, updated_at TEXT
 );
+CREATE TABLE IF NOT EXISTS tone_presets (      -- 요청 주체 유형별 회신 톤(문서 제목 접미·확인 줄·문체 지침·메일 인사말). 비어 있으면 draft.DEFAULT_PRESETS
+    kind TEXT PRIMARY KEY, doc_label TEXT, show_confirm INTEGER, style TEXT, mail_greeting TEXT, updated_at TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (          -- 조직 설정(부서장·내선·발신 표기): 접속 세션이 아니라 기록에 남는다
     key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, updated_by TEXT
 );
@@ -966,3 +969,32 @@ def missing_centers(indicator: str, base_date: str) -> list[str]:
     have = {center_key(r[0]) for r in con.execute("SELECT center FROM indicator_data WHERE active=1 AND indicator=? AND base_date=?", (indicator, base_date)).fetchall()}
     names = [r[0] for r in con.execute("SELECT name FROM centers WHERE COALESCE(status,'') NOT LIKE '%취소%' ORDER BY center_id").fetchall()]
     con.close(); return [n for n in names if center_key(n) not in have]
+
+# ---------- 회신 톤 설정 ----------
+def get_tone_presets() -> dict:
+    """{유형: {doc_label, show_confirm, style, mail_greeting}} — 설정 화면에서 고친 값만(기본값은 draft.DEFAULT_PRESETS)."""
+    con = connect(); rows = con.execute("SELECT * FROM tone_presets").fetchall(); con.close()
+    return {r["kind"]: {"doc_label": r["doc_label"], "show_confirm": None if r["show_confirm"] is None else bool(r["show_confirm"]), "style": r["style"], "mail_greeting": r["mail_greeting"]} for r in rows}
+
+def save_tone_presets(rows: list[dict]) -> int:
+    con = connect()
+    with con:
+        con.execute("DELETE FROM tone_presets")
+        n = 0
+        for r in rows:
+            kind = str(r.get("kind") or "").strip()
+            if not kind: continue
+            con.execute("INSERT OR REPLACE INTO tone_presets(kind,doc_label,show_confirm,style,mail_greeting,updated_at) VALUES(?,?,?,?,?,?)",
+                        (kind, _s(r.get("doc_label")), None if r.get("show_confirm") is None else int(bool(r.get("show_confirm"))), _s(r.get("style")), _s(r.get("mail_greeting")), now())); n += 1
+    con.close(); return n
+
+def requester_kind(name) -> str | None:
+    """요청 주체 사전에 적힌 유형(이름·별칭으로 찾음). 없으면 None."""
+    if not name: return None
+    canon = canonical_requester(name)
+    con = connect(); r = con.execute("SELECT kind FROM requesters WHERE name=?", (canon,)).fetchone(); con.close()
+    return r[0] if r and r[0] else None
+
+def list_dispatches() -> list[dict]:
+    con = connect(); rows = con.execute("SELECT d.*, s.request_id FROM dispatches d JOIN submissions s ON s.id=d.submission_id ORDER BY d.sent_at, d.id").fetchall(); con.close()
+    return [dict(r) for r in rows]

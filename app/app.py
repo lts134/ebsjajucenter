@@ -23,7 +23,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, hwpx_build, llm, assist, history_qa, tabular, ui, plan, agent, dashboard_import, refdocs
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, hwpx_build, llm, assist, history_qa, tabular, ui, plan, agent, dashboard_import, refdocs, report
 
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
@@ -410,7 +410,7 @@ def _send_card(case: agent.Case, req: dict):
     c1, c2 = st.columns([1.2, 1])
     with c1:
         if case["hwpx"]: st.download_button("회신 HWPX 받기", case["hwpx"], file_name=case["hwpx_name"], key=f"rv_dl_done_{sid}", icon=":material/download:", type="primary")
-        mail = draft.mail_text(req or {}, d, case["hwpx_name"], USER, org=f"{ORG['company']} {ORG['org_name']}".strip())
+        mail = draft.mail_text(req or {}, d, case["hwpx_name"], USER, org=f"{ORG['company']} {ORG['org_name']}".strip(), greeting=(case.get("tone") or {}).get("mail_greeting"))
         st.text_input("메일 제목", mail["subject"], key=f"mail_subj_{sid}")
         st.text_area("메일 본문 — 복사해서 메일 프로그램에 붙이세요", mail["body"], height=170, key=f"mail_body_{sid}")
     with c2:
@@ -478,7 +478,16 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                 if case.get("draft_stale"): c2.warning("사유가 바뀌었습니다. 초안을 다시 써야 회신 본문에 반영됩니다(확정 때는 사유 칸만 자동 반영).", icon=":material/sync_problem:")
         with st.expander("③ 회신 초안" + (" — 다시 쓰기 필요" if case.get("draft_stale") else ""), expanded=True):
             d = case["draft"] or {}
-            st.caption(f"생성 방식: {case.get('draft_how', '')} · 고치면 'HWPX 다시 만들기'로 반영됩니다(확정할 때는 자동으로 다시 만듭니다).")
+            tone = case.get("tone") or agent.tone_for(case, req); kinds = list(draft.DEFAULT_PRESETS)
+            tc1, tc2, tc3 = st.columns([1.1, 3.2, 1.4], vertical_alignment="center")
+            pick = tc1.selectbox("회신 유형", kinds, index=kinds.index(tone["kind"]) if tone["kind"] in kinds else 0, key=f"rv_tone_{rev}", disabled=locked,
+                                 help="요청 주체 유형에 따라 문서 제목(답변자료·제출자료·설명자료)·확인 줄·문체 지침이 달라집니다. 설정 → 서식·사전에서 고칩니다.")
+            if pick != tone["kind"] and not locked:
+                case["tone_kind"] = pick; agent.tone_for(case, req); case["draft_stale"] = bool(case["draft"]); case["hwpx_stale"] = True; case.bump(); st.rerun()
+            tc2.caption(f"'{tone['doc_label']}' 양식" + ("" if tone.get("show_confirm", True) else " · 【확인】 줄 없음") + (f" · 문체: {tone['style'][:70]}…" if tone.get("style") else " · 문체 지침 없음") + f" · 생성 방식: {case.get('draft_how', '')}")
+            if not locked and case.get("draft_stale") and tc3.button("초안 다시 쓰기", key=f"rv_redraft2_{rev}", type="primary", icon=":material/edit_note:"):
+                run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
+            st.caption("고치면 'HWPX 다시 만들기'로 반영됩니다(확정할 때는 자동으로 다시 만듭니다).")
             def field(label, key, widget, **kw):
                 new = widget(label, d.get(key, "") or "", key=f"rv_{key}_{rev}", disabled=locked, **kw)
                 if new != (d.get(key, "") or ""): d[key] = new; case["hwpx_stale"] = True
@@ -493,6 +502,11 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                 with st.expander("항목별 판정"): st.dataframe(cov, width="stretch", hide_index=True)
             hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(str(d.get(k, "")), f"초안 {k}")]
             if hits: st.error(f"초안에 개인정보로 보이는 패턴 {len(hits)}건 — 승인 전 삭제·가명 처리"); st.dataframe(pd.DataFrame(hits), width="stretch", hide_index=True)
+            if case["draft"] and st.toggle("문서 미리보기 — 한글을 열지 않고 지금 내용으로 답변자료 모양을 봅니다(치수는 근사치)", key=f"rv_preview_{rev}"):
+                _, items_ = agent._req_items(case)
+                model = hwpx_build.build_model(req, items_, v if v is not None else None, d, dict(case["reasons"]), m, dept_head=case.get("dept_head", ""), phone=case.get("phone", ""),
+                                               org=case.get("org") or "지역교육협력부", doc_label=tone.get("doc_label") or "답변자료", show_confirm=bool(tone.get("show_confirm", True)))
+                st.html(f'<div style="max-height:600px;overflow:auto;padding:6px 2px">{hwpx_build.preview_html(model)}</div>')
         with st.expander("④ 예상 질문" + (f" — {len(case['foresee'][0])}건" if case.get("foresee") else ""), expanded=bool(case.get("foresee"))):
             if st.button("예상 질문 보기", key=f"rv_foresee_{rev}"):
                 run_ai("예상 후속 질문 뽑는 중", lambda: agent.step_foresee(case), "보통 20~30초", "예측 중… (규칙 기반)"); st.rerun()
@@ -1255,6 +1269,19 @@ def page_status():
     c1, c2 = st.columns(2)
     with c1: st.markdown("### 요청 주체별"); st.dataframe(pd.DataFrame(by_req).rename(columns={"requester": "요청 주체", "n_requests": "요구 건수", "n_items": "항목 수", "first_date": "최초", "last_date": "최근"}), width="stretch", hide_index=True); st.caption("표기가 갈라져 보이면 설정 → 서식·사전의 요청 주체 사전에 별칭을 넣고 '기록에 표기 통일 적용'.")
     with c2: st.markdown("### 반복 요구 지표"); st.dataframe(pd.DataFrame(by_ind).rename(columns={"indicator": "지표", "n_times": "요구 횟수", "n_requesters": "요청 주체 수", "base_dates": "기준일들"}).fillna("-"), width="stretch", hide_index=True); st.caption("여러 번 요구된 지표는 미리 산출해 두면 좋습니다.")
+    st.markdown("### 월간 리포트")
+    st.caption("한 달의 접수·확정·발송 건수와 소요일을 기록에서 단순 집계합니다(지표 값은 포함하지 않음). 요약문은 복사해 보고 메일에, 엑셀은 회의 자료에 붙이면 됩니다.")
+    months = report.months_available(); mo = st.selectbox("월", months, key="rep_month")
+    rp = report.monthly(mo); L = rp["lead"]
+    r1, r2, r3, r4, r5 = st.columns(5)
+    ui.kpi(r1, rp["received"], "접수"); ui.kpi(r2, rp["confirmed"], "확정"); ui.kpi(r3, rp["sent"], "발송"); ui.kpi(r4, rp["open_end"], "월말 진행 중", "warn" if rp["open_end"] else ""); ui.kpi(r5, rp["overdue_end"], "월말 기한 경과", "bad" if rp["overdue_end"] else "")
+    q1, q2 = st.columns(2)
+    with q1:
+        st.dataframe(pd.DataFrame(rp["by_requester"], columns=["요청 주체", "접수 건수"]), width="stretch", hide_index=True, height=min(60 + 35 * max(len(rp["by_requester"]), 1), 240))
+        st.caption(f"접수→확정 평균 {L['접수→확정']['평균'] if L['접수→확정']['평균'] is not None else '-'}일({L['접수→확정']['건수']}건) · 확정→발송 평균 {L['확정→발송']['평균'] if L['확정→발송']['평균'] is not None else '-'}일({L['확정→발송']['건수']}건)")
+    with q2: st.dataframe(pd.DataFrame(rp["by_indicator"], columns=["지표", "요구 횟수"]), width="stretch", hide_index=True, height=min(60 + 35 * max(len(rp["by_indicator"]), 1), 240))
+    st.text_area("보고용 요약(복사해서 쓰세요)", report.to_text(rp), height=170, key=f"rep_txt_{mo}")
+    st.download_button("월간 리포트 엑셀", report.to_excel(rp), file_name=f"월간리포트_{mo}.xlsx", key=f"rep_xlsx_{mo}", icon=":material/download:")
 
 # ================= 기록에 묻기 =================
 def _records_ask():
@@ -1382,6 +1409,17 @@ def page_settings():
             normalize.load_from_db(); st.toast(f"지표 {n}개를 저장했습니다"); st.rerun()
         if d2.button("코드 기본값으로 되돌리기", key="dict_reset"): db.save_indicator_dict([]); normalize.reset_defaults(); st.rerun()
         d3.caption(f"지금 적용 중: 지표 {len(normalize.CANON)}개" + (" (화면에서 편집한 사전)" if db.get_indicator_dict() else " (코드 기본값)") + ". 지표를 지우면 그 지표로 분류되던 항목은 '사전에 없음'이 됩니다.")
+        st.divider()
+        st.markdown("**회신 톤(요청 주체 유형별)** — 문서 제목 접미, 【확인】 줄 표시, AI 초안의 문체 지침, 메일 인사말. 유형은 요청 주체 사전의 유형을 먼저 보고, 없으면 이름(의원·감사·교육부·기자…)으로 추정합니다. 검수 화면에서 건마다 바꿀 수도 있습니다.")
+        ov_t = db.get_tone_presets()
+        tdf = pd.DataFrame([{"유형": k, "문서 제목": draft.preset_for(k, ov_t)["doc_label"], "확인 줄": draft.preset_for(k, ov_t)["show_confirm"], "문체 지침(AI 초안)": draft.preset_for(k, ov_t)["style"], "메일 인사말": draft.preset_for(k, ov_t)["mail_greeting"]} for k in draft.DEFAULT_PRESETS])
+        ted = st.data_editor(tdf, width="stretch", key="tone_editor", disabled=["유형"], hide_index=True,
+                             column_config={"확인 줄": st.column_config.CheckboxColumn("확인 줄"), "문체 지침(AI 초안)": st.column_config.TextColumn("문체 지침(AI 초안)", width="large")})
+        t1, t2, t3 = st.columns([1.2, 1.6, 4])
+        if t1.button("톤 저장", key="tone_save", type="primary", icon=":material/save:"):
+            db.save_tone_presets([{"kind": r["유형"], "doc_label": r["문서 제목"], "show_confirm": bool(r["확인 줄"]), "style": r["문체 지침(AI 초안)"], "mail_greeting": r["메일 인사말"]} for r in ted.to_dict("records")]); st.toast("저장했습니다"); st.rerun()
+        if t2.button("톤 기본값으로", key="tone_reset"): db.save_tone_presets([]); st.rerun()
+        t3.caption("{requester}는 요청 주체 이름으로 바뀝니다. 문체 지침은 AI 초안에만 쓰이고 규칙 초안의 문장은 바뀌지 않습니다.")
         st.divider()
         st.markdown("**회신 문서(답변자료) 양식** — 대화 처리의 HWPX는 '○○ 의원실 답변자료 / 날짜 / 번호 항목 / 【확인 : 부서장 ☎ 내선】 / 본문 / 수치표 / ※ 산출 근거' 틀로 만들어집니다.")
         up_tpl2 = st.file_uploader("대신 쓸 자리표시자 서식(HWPX, {{수신}} {{본문}} {{row.center}} …)", type=["hwpx"], key="tpl_custom_up", help="올리면 답변자료 양식 대신 이 서식에 채웁니다. 비우면 기본 양식.")

@@ -107,3 +107,55 @@ def test_data_matrix_missing_centers_signature(fresh_db):
     assert db.signature() != s0
     assert db.data_matrix() == [{"indicator": "등원율", "base_date": "2026-06-30", "n": 1}, {"indicator": "등원율", "base_date": "2026-07-31", "n": 1}]
     assert db.missing_centers("등원율", "2026-07-31") == ["EBS 담양 센터"]                  # 취소된 센터는 세지 않고, 표기가 달라도 있는 것은 있는 것
+
+
+def test_tone_presets_and_kind(fresh_db):
+    import draft
+    db = fresh_db
+    assert draft.kind_of("○○○ 의원실(교육위원회)") == "의원실" and draft.kind_of("감사실") == "감사" and draft.kind_of("교육부 평생교육과") == "교육부" and draft.kind_of("△△일보 기자") == "언론" and draft.kind_of("시민단체") == "기타"
+    assert draft.kind_of("시민단체", "감사") == "감사" and draft.kind_of("감사실", "이상한값") == "감사"
+    p = draft.preset_for("언론"); assert p["doc_label"] == "설명자료" and p["show_confirm"] is False and p["kind"] == "언론"
+    assert db.get_tone_presets() == {} and draft.preset_for("의원실", db.get_tone_presets())["doc_label"] == "답변자료"
+    db.save_tone_presets([{"kind": "의원실", "doc_label": "답변서", "show_confirm": False, "style": "짧게", "mail_greeting": "{requester} 귀중"}, {"kind": "", "doc_label": "x"}])
+    ov = db.get_tone_presets(); p2 = draft.preset_for("의원실", ov); assert p2["doc_label"] == "답변서" and p2["show_confirm"] is False and p2["style"] == "짧게"
+    m = draft.mail_text({"requester": "○○○ 의원실"}, {"제목": "t"}, "a.hwpx", "u", greeting=p2["mail_greeting"]); assert m["body"].startswith("○○○ 의원실 귀중")
+    db.save_tone_presets([]); assert draft.preset_for("의원실", db.get_tone_presets())["doc_label"] == "답변자료"
+
+
+def test_build_model_preview_and_tone_in_hwpx(fresh_db):
+    import pandas as pd, hwpx_build, docread, datetime as dt
+    db = fresh_db
+    values = pd.DataFrame([{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 60.3, "definition": "d", "calc_period": "2026-06", "extract_date": "2026-09-10", "source_version": "v2"}])
+    req = {"requester": "△△일보", "title": "t"}; items = [{"item_text": "센터별 등원율 <표>", "indicator": "등원율", "base_date": "2026-06-30"}]
+    d = {"제목": "제목", "본문": "1. 아래 표와 같습니다.", "산출근거": "정의: d"}
+    model = hwpx_build.build_model(req, items, values, d, {}, None, dept_head="홍", phone="1", doc_label="설명자료", show_confirm=False, today=dt.date(2026, 10, 8))
+    kinds = [b["kind"] for b in model]
+    assert kinds[:3] == ["title", "date", "subtitle"] and "confirm" not in kinds and "table" in kinds and kinds[-2:] == ["attach_title", "attach"] and model[0]["text"] == "△△일보 설명자료"
+    html = hwpx_build.preview_html(model)
+    assert "&lt;표&gt;" in html and "<table>" in html and "설명자료" in html and "<script" not in html and "60.3" in html
+    out = hwpx_build.build_reply(req, items, values, d, doc_label="설명자료", show_confirm=False); text = docread.read("x.hwpx", out)
+    assert text.startswith("△△일보 설명자료") and "【확인" not in text
+    # 에이전트 경로: 요청 주체 사전의 유형 → 톤, 담당자 선택이 우선
+    db.upsert_requester("△△일보", [], "언론"); db.add_data_batch([{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 60.3}], "u", "x")
+    import agent
+    case = agent.Case(); agent.describe_request(case, requester="△△일보", items=["2026-06-30 기준 센터별 등원율"]); agent.autopilot(case, None)
+    assert case["tone"]["kind"] == "언론" and "【확인" not in docread.read("x.hwpx", case["hwpx"]) and case["hwpx_name"].startswith("답변자료_")
+    case["tone_kind"] = "감사"; agent.tone_for(case); agent.step_hwpx(case, None)
+    assert case["tone"]["doc_label"] == "제출자료" and docread.read("x.hwpx", case["hwpx"]).startswith("△△일보 제출자료") and "【확인" in docread.read("x.hwpx", case["hwpx"])
+
+
+def test_monthly_report(fresh_db):
+    import report
+    db = fresh_db
+    r1 = db.add_request("감사실", "2026-09-02", "2026-09-10", "a", "원문", "f.txt", [{"item_text": "등원율", "indicator": "등원율", "base_date": "2026-06-30"}, {"item_text": "학생 수", "indicator": "등록 학생 수", "base_date": None}])
+    r2 = db.add_request("○○○ 의원실", "2026-09-20", "2026-09-25", "b", "원문", "f.txt", [{"item_text": "등원율", "indicator": "등원율", "base_date": None}])
+    r3 = db.add_request("교육부", "2026-08-15", "2026-08-20", "c", "원문", "f.txt", [])
+    s1 = db.add_submission(r1, "2026-09-05", "u", "f", "confirmed", "", [{"indicator": "등원율", "center": "A", "base_date": "2026-06-30", "value": 1.0}])
+    did = db.add_draft(s1, r1, {"제목": "t", "본문": "b"}, None, status="approved"); db.add_dispatch(s1, did, "2026-09-07", "감사실", "메일", "u")
+    assert "2026-09" in report.months_available() and report.months_available()[0] == "2026-09"
+    d = report.monthly("2026-09")
+    assert (d["received"], d["confirmed"], d["sent"]) == (2, 1, 1) and d["open_end"] == 2 and d["overdue_end"] == 2          # r2(처리 전)·r3(8월 접수, 미확정) 둘 다 월말에 진행 중이며 기한 경과
+    assert dict(d["by_requester"]) == {"감사실": 1, "○○○ 의원실": 1} and dict(d["by_indicator"])["등원율"] == 2 and d["lead"]["접수→확정"] == {"건수": 1, "평균": 3.0, "최대": 3} and d["lead"]["확정→발송"]["평균"] == 2.0
+    t = report.to_text(d); assert t.startswith("[2026년 9월") and "접수 2건 · 확정 1건 · 발송 1건" in t and "평균 3.0일" in t
+    x = report.to_excel(d); assert x[:2] == b"PK" and len(x) > 3000
+    assert report.monthly("2025-01")["received"] == 0 and report.to_text(report.monthly("2025-01")).count("\n") >= 1
