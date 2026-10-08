@@ -26,3 +26,31 @@ def test_migration_adds_period_column(fresh_db, tmp_path):
     c = db.connect()
     cols = {r[1] for r in c.execute("PRAGMA table_info(items)")}; vcols = {r[1] for r in c.execute("PRAGMA table_info(submission_values)")}
     assert "period" in cols and {"source_file", "source_sheet", "source_row"} <= vcols
+
+def test_edit_and_delete_cascade(fresh_db):
+    db = fresh_db
+    rid = db.add_request("감사실", "2026-08-11", "2026-08-18", "자체감사", "원문", "a.txt", [{"item_text": "등원율", "indicator": "등원율", "base_date": "2026-06-30"}])
+    rid2 = db.add_request("의원실", "2026-09-01", "2026-09-08", "국감", "원문2", "b.txt", [{"item_text": "학생 수"}])
+    sid = db.add_submission(rid, "2026-08-18", "홍", "v.xlsx", "confirmed", "n", [{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 60.3}, {"indicator": "등원율", "center": "센터B", "base_date": "2026-06-30", "value": 59.4}])
+    db.add_reason(sid, "등원율", "센터A", "2026-06-30", 60.3, 61.0, "보정", "홍")
+    did = db.add_draft(sid, rid, {"제목": "t", "본문": "b"}, "x.hwpx", "review_requested"); db.add_review(did, "김", "approved", "ok")
+    # 수정
+    db.update_request(rid, "감사실(수정)", "2026-08-12", "", "자체감사 2차")
+    r = db.get_request(rid); assert r["requester"] == "감사실(수정)" and r["due_date"] is None and r["title"] == "자체감사 2차" and r["raw_text"] == "원문"
+    assert db.replace_items(rid, [{"item_text": "등록 학생 수", "indicator": "등록 학생 수"}, {"item_text": ""}, {"item_text": "예산", "indicator": None}]) == 2
+    assert [i["seq"] for i in db.get_items(rid)] == [1, 2]
+    # 값 교체: 빈 행·값 없는 행은 버림, source_row 문자열 허용
+    n = db.replace_values(sid, [{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 61.0, "source_row": "7.0"}, {"indicator": "", "center": "x", "base_date": "y", "value": 1}, {"indicator": "등원율", "center": "센터C", "base_date": "2026-06-30", "value": None}])
+    vals = db.get_values(sid); assert n == 1 and len(vals) == 1 and vals[0]["value"] == 61.0 and vals[0]["source_row"] == 7
+    # 초안 삭제
+    db.delete_draft(did); assert db.list_drafts() == [] and db.reviews_for(did) == []
+    # 제출본 삭제 → 값·사유 함께
+    db.add_draft(sid, rid, {"제목": "t2"}, None, "draft")
+    info = db.delete_submission(sid); assert info == {"values": 1, "drafts": 1}
+    assert db.get_values(sid) == [] and db.reasons_for("등원율", "센터A", "2026-06-30") == [] and db.list_drafts() == [] and db.list_submissions(rid) == []
+    # 요구서 삭제 → 다른 요구서는 그대로
+    sid2 = db.add_submission(rid, "2026-08-19", "홍", "w.xlsx", "confirmed", "", [{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 1}])
+    db.add_draft(sid2, rid, {"제목": "t3"}, None, "draft")
+    info = db.delete_request(rid); assert info["submissions"] == 1 and info["drafts"] == 1 and info["values"] == 1 and info["items"] == 2
+    assert [r["id"] for r in db.list_requests()] == [rid2] and db.get_items(rid) == [] and db.list_submissions() == [] and db.list_drafts() == []
+    assert db.past_values_for("등원율", "2026-06-30") == []

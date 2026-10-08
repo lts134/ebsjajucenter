@@ -52,6 +52,22 @@ cap = next(c.value for c in at.caption if c.value.startswith("저장될 값"))
 assert cap.startswith("저장될 값 48건"), cap
 assert any("두 곳에" in w.value for w in at.warning), [w.value for w in at.warning]; print("여러 출처 한 번에 OK:", cap)
 
+# 이력 조회 — 수정·값 저장·삭제(요구서 #1은 뒤 단계가 쓰므로 임시 요구서를 하나 더 만들어 지운다)
+import db as _db
+tmp = _db.add_request("임시 기관", "2026-09-30", "2026-10-07", "임시 요구서", "원문", "t.txt", [{"item_text": "등원율 현황", "indicator": "등원율", "base_date": "2026-06-30"}])
+tsid = _db.add_submission(tmp, "2026-10-01", "담당자", "t.xlsx", "confirmed", "", [{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 1.0}])
+at = app("이력 조회")
+eb = next(b for b in at.button if b.key == f"edit_btn_{tmp}"); eb.click().run(); assert not at.exception
+next(t for t in at.text_input if t.key == f"ed_ti_{tmp}").set_value("임시 요구서(수정)").run()
+next(b for b in at.button if b.key == f"ed_save_{tmp}").click().run(); assert not at.exception
+assert _db.get_request(tmp)["title"] == "임시 요구서(수정)"
+next(c for c in at.checkbox if c.key == f"del_sub_{tsid}_ok").check().run()
+next(b for b in at.button if b.key == f"del_sub_{tsid}_go").click().run(); assert not at.exception
+assert _db.list_submissions(tmp) == [] and _db.get_request(tmp) is not None
+next(c for c in at.checkbox if c.key == f"del_req_{tmp}_ok").check().run()
+next(b for b in at.button if b.key == f"del_req_{tmp}_go").click().run(); assert not at.exception
+assert _db.get_request(tmp) is None and _db.get_request(1) is not None; print("이력 조회 수정·삭제 OK")
+
 # 새 요구서 처리 1단계: 시연 새 요구서 → 읽기 → 등록(2단계로)
 at = app("새 요구서 처리", 1)
 s = sb(at, "new_demo"); s.select(next(o for o in s.options if "새요구서_의원실" in str(o))).run(); assert not at.exception

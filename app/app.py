@@ -311,8 +311,14 @@ def page_register():
             rid = db.add_request(requester, received, due, title, st.session_state["reg_text"], st.session_state["reg_name"], items_df.to_dict("records"))
             vals = vdf.to_dict("records") if vdf is not None else []
             sid = db.add_submission(rid, submitted_date, USER, vname, "confirmed", "과거 제출본 등록", vals)
-            st.success(f"저장했습니다. 요구서 #{rid}, 제출본 #{sid}, 값 {len(vals)}건. 다음에 같은 지표·기준일을 물으면 자동으로 찾아 줍니다.")
-            del st.session_state["reg_extract"]
+            st.session_state["reg_last"] = (rid, sid, len(vals))
+            del st.session_state["reg_extract"]; st.rerun()
+    if st.session_state.get("reg_last"):
+        rid, sid, n = st.session_state["reg_last"]
+        c1, c2 = st.columns([4, 1.4])
+        c1.success(f"저장했습니다. 요구서 #{rid}, 제출본 #{sid}, 값 {n}건. 다음에 같은 지표·기준일을 물으면 자동으로 찾아 줍니다.")
+        if c2.button("잘못 넣었어요 — 되돌리기", key="reg_undo", icon=":material/undo:", help="방금 저장한 요구서·값을 지웁니다. 나중에 고치려면 이력 조회에서 수정·삭제할 수 있습니다."):
+            db.delete_request(rid); st.session_state.pop("reg_last"); st.toast(f"요구서 #{rid} 삭제됨"); st.rerun()
 
 # ================= 새 요구서 처리 (1→2→3) =================
 def page_process():
@@ -548,8 +554,34 @@ def page_review():
                 if c3.button("의견만", key=f"c_{d['id']}"): db.add_review(d["id"], REVIEWER, "comment", cmt); st.rerun()
 
 # ================= 이력 조회 =================
+def confirm_delete(label: str, key: str, what: str) -> bool:
+    """두 단계 삭제: 확인 체크 → 삭제 버튼. 체크해야 버튼이 나타난다. 눌리면 True."""
+    c1, c2 = st.columns([3, 1.2])
+    ok = c1.checkbox(f"{label} 삭제 확인 — {what}", key=f"{key}_ok")
+    return ok and c2.button(f"{label} 삭제", key=f"{key}_go", type="primary", icon=":material/delete:")
+
+def request_editor(r: dict):
+    """요구서 머리 정보·항목 수정 폼. 저장하면 DB 반영 후 닫힘."""
+    with st.container(border=True):
+        st.markdown("**요구서 수정** — 원문은 그대로 두고 머리 정보와 항목만 바꿉니다.")
+        c1, c2, c3, c4 = st.columns(4)
+        requester = c1.text_input("요청 주체", r["requester"] or "", key=f"ed_rq_{r['id']}")
+        received = c2.text_input("접수일", r["received_date"] or "", key=f"ed_rc_{r['id']}")
+        due = c3.text_input("제출기한", r["due_date"] or "", key=f"ed_du_{r['id']}")
+        title = c4.text_input("제목", r["title"] or "", key=f"ed_ti_{r['id']}")
+        its = pd.DataFrame(db.get_items(r["id"]), columns=["id", "request_id", "seq"] + extract.ITEM_FIELDS)[extract.ITEM_FIELDS]
+        its = st.data_editor(its, num_rows="dynamic", width="stretch", key=f"ed_items_{r['id']}",
+                             column_config={"item_text": "항목 원문", "indicator": st.column_config.SelectboxColumn("지표명(정규화)", options=list(normalize.CANON), required=False),
+                                            "base_date": "기준일", "period": "기간", "unit": "단위"})
+        b1, b2, _ = st.columns([1, 1, 4])
+        if b1.button("저장", key=f"ed_save_{r['id']}", type="primary"):
+            db.update_request(r["id"], requester, received, due, title); n = db.replace_items(r["id"], its.to_dict("records"))
+            st.session_state.pop(f"editing_{r['id']}", None); st.toast(f"요구서 #{r['id']} 저장 — 항목 {n}건"); st.rerun()
+        if b2.button("취소", key=f"ed_cancel_{r['id']}"):
+            st.session_state.pop(f"editing_{r['id']}", None); st.rerun()
+
 def page_history():
-    ui.page_title("이력 조회", "요구서마다 항목 → 보낸 값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다.", "기록")
+    ui.page_title("이력 조회", "요구서마다 항목 → 보낸 값 → 사유 → 초안 → 승인이 한 줄로 이어져 있습니다. 잘못 넣은 것은 여기서 고치거나 지웁니다.", "기록")
     reqs = db.list_requests()
     kw = st.text_input("찾기 (요청 주체·제목·항목·본문)", placeholder="예: 등원율, 의원실, 2026-06-30")
     if kw.strip():
@@ -557,16 +589,41 @@ def page_history():
         reqs = [r for r in reqs if r["id"] in ids]
         st.caption(f"검색 결과 {len(reqs)}건")
     if not reqs: st.info("등록된 요구서가 없습니다." if not kw.strip() else "검색 결과가 없습니다.")
+    inv = {v: k for k, v in VAL_KO.items()}
     for r in reqs:
-        with st.expander(f"#{r['id']} {r['received_date']} · {r['requester']} · {r['title']} (기한 {r['due_date']})"):
-            its = db.get_items(r["id"])
-            if its: st.dataframe(pd.DataFrame(its)[list(ITEM_KO)].rename(columns=ITEM_KO), width="stretch", hide_index=True)
-            for s in db.list_submissions(r["id"]):
-                st.markdown(f"보낸 값 #{s['id']} · {s['submitted_date']} · {ko(s['status'])} · {s['file_name']} · {s['note']}")
-                vals = pd.DataFrame(db.get_values(s["id"]))
-                if len(vals): st.dataframe(vals.drop(columns=["id", "submission_id"]).rename(columns=VAL_KO), width="stretch", height=180, hide_index=True)
-            for d in [x for x in db.list_drafts() if x["request_id"] == r["id"]]:
-                st.markdown(f"초안 #{d['id']} · {ko(d['status'])} · {d['hwpx_name']} · {d['created_at'][:16]}")
+        rid = r["id"]
+        with st.expander(f"#{rid} {r['received_date']} · {r['requester']} · {r['title']} (기한 {r['due_date']})"):
+            h1, h2 = st.columns([5, 1])
+            h1.caption(f"원문 {len(r['raw_text'] or '')}자 · 파일 {r['source_file'] or '-'} · 등록 {r['created_at'][:16] if r.get('created_at') else '-'}")
+            if h2.button("수정", key=f"edit_btn_{rid}", type="tertiary", icon=":material/edit:"):
+                st.session_state[f"editing_{rid}"] = not st.session_state.get(f"editing_{rid}")
+            if st.session_state.get(f"editing_{rid}"): request_editor(r)
+            else:
+                its = db.get_items(rid)
+                if its: st.dataframe(pd.DataFrame(its)[list(ITEM_KO)].rename(columns=ITEM_KO), width="stretch", hide_index=True)
+                else: st.caption("요구 항목 없음")
+            for s_ in db.list_submissions(rid):
+                sid = s_["id"]
+                with st.container(border=True):
+                    st.markdown(f"**보낸 값 #{sid}** · {s_['submitted_date']} · {ko(s_['status'])} · {s_['file_name']} · {s_['note'] or ''}")
+                    vals = pd.DataFrame(db.get_values(sid))
+                    if len(vals):
+                        ed = st.data_editor(vals.drop(columns=["id", "submission_id"]).rename(columns=VAL_KO), num_rows="dynamic", width="stretch", height=min(60 + 35 * len(vals), 320), key=f"vals_{sid}")
+                        c1, c2 = st.columns([1, 5])
+                        if c1.button("값 저장", key=f"vals_save_{sid}", icon=":material/save:", help="표에서 고친 값·근거를 이 제출본에 그대로 저장합니다. 지표·센터·기준일·값이 빈 행은 버립니다."):
+                            n = db.replace_values(sid, ed.rename(columns=inv).to_dict("records")); st.toast(f"제출본 #{sid} 값 {n}건 저장"); st.rerun()
+                        c2.caption("표에서 바로 고친 뒤 '값 저장'. 행 삭제는 행을 선택하고 Delete.")
+                    else: st.caption("값 없음(요구서만 저장된 제출본)")
+                    if confirm_delete(f"보낸 값 #{sid}", f"del_sub_{sid}", "값·차이 사유·이 제출본으로 만든 초안이 함께 지워집니다"):
+                        info = db.delete_submission(sid); st.toast(f"보낸 값 #{sid} 삭제 — 값 {info['values']}건, 초안 {info['drafts']}건"); st.rerun()
+            for d in [x for x in db.list_drafts() if x["request_id"] == rid]:
+                c1, c2 = st.columns([5, 1])
+                c1.markdown(f"초안 #{d['id']} · {ko(d['status'])} · {d['hwpx_name'] or '-'} · {d['created_at'][:16]}")
+                if c2.button("초안 삭제", key=f"del_draft_{d['id']}", type="tertiary", icon=":material/delete:"):
+                    db.delete_draft(d["id"]); st.toast(f"초안 #{d['id']} 삭제"); st.rerun()
+            st.divider()
+            if confirm_delete(f"요구서 #{rid}", f"del_req_{rid}", "항목·보낸 값·차이 사유·초안·검토 기록이 전부 지워지며 되돌릴 수 없습니다"):
+                info = db.delete_request(rid); st.toast(f"요구서 #{rid} 삭제 — 제출본 {info['submissions']}건, 초안 {info['drafts']}건"); st.rerun()
 
 # ================= 현황 =================
 def page_status():

@@ -145,6 +145,81 @@ def add_request(requester, received_date, due_date, title, raw_text, source_file
     con.commit(); con.close()
     return rid
 
+def _s(v):
+    """NaN·None → None, 그 외 문자열(빈 문자열은 None)."""
+    return None if v is None or (isinstance(v, float) and v != v) else (str(v).strip() or None)
+
+def update_request(request_id, requester, received_date, due_date, title):
+    """요구서 머리 정보 수정(원문·항목은 그대로)."""
+    con = connect()
+    con.execute("UPDATE requests SET requester=?, received_date=?, due_date=?, title=? WHERE id=?",
+                (_s(requester), _s(received_date), _s(due_date), _s(title), request_id))
+    con.commit(); con.close()
+
+def replace_items(request_id, items):
+    """요구 항목 전체 교체(빈 행 제외, 순번 다시 매김)."""
+    con = connect()
+    con.execute("DELETE FROM items WHERE request_id=?", (request_id,))
+    seq = 0
+    for it in items:
+        text = _s(it.get("item_text"))
+        if not text: continue
+        seq += 1
+        con.execute("INSERT INTO items(request_id,seq,item_text,indicator,base_date,unit,period) VALUES(?,?,?,?,?,?,?)",
+                    (request_id, seq, text, _s(it.get("indicator")), _s(it.get("base_date")), _s(it.get("unit")), _s(it.get("period"))))
+    con.commit(); con.close()
+    return seq
+
+def delete_request(request_id) -> dict:
+    """요구서와 딸린 것 전부 삭제(항목·제출본·값·차이 사유·초안·검토). 지운 개수 반환."""
+    con = connect()
+    sids = [r[0] for r in con.execute("SELECT id FROM submissions WHERE request_id=?", (request_id,)).fetchall()]
+    dids = [r[0] for r in con.execute("SELECT id FROM drafts WHERE request_id=?", (request_id,)).fetchall()]
+    n = {"submissions": len(sids), "drafts": len(dids)}
+    if dids: con.execute(f"DELETE FROM reviews WHERE draft_id IN ({','.join('?' * len(dids))})", dids)
+    con.execute("DELETE FROM drafts WHERE request_id=?", (request_id,))
+    if sids:
+        q = ",".join("?" * len(sids))
+        n["values"] = con.execute(f"DELETE FROM submission_values WHERE submission_id IN ({q})", sids).rowcount
+        con.execute(f"DELETE FROM diff_reasons WHERE submission_id IN ({q})", sids)
+    con.execute("DELETE FROM submissions WHERE request_id=?", (request_id,))
+    n["items"] = con.execute("DELETE FROM items WHERE request_id=?", (request_id,)).rowcount
+    con.execute("DELETE FROM requests WHERE id=?", (request_id,))
+    con.commit(); con.close(); return n
+
+def delete_submission(submission_id) -> dict:
+    """제출본과 그 값·차이 사유, 그 제출본으로 만든 초안·검토 삭제."""
+    con = connect()
+    dids = [r[0] for r in con.execute("SELECT id FROM drafts WHERE submission_id=?", (submission_id,)).fetchall()]
+    if dids: con.execute(f"DELETE FROM reviews WHERE draft_id IN ({','.join('?' * len(dids))})", dids)
+    con.execute("DELETE FROM drafts WHERE submission_id=?", (submission_id,))
+    nv = con.execute("DELETE FROM submission_values WHERE submission_id=?", (submission_id,)).rowcount
+    con.execute("DELETE FROM diff_reasons WHERE submission_id=?", (submission_id,))
+    con.execute("DELETE FROM submissions WHERE id=?", (submission_id,))
+    con.commit(); con.close(); return {"values": nv, "drafts": len(dids)}
+
+def _int_or_none(v):
+    try: return int(float(v)) if _s(v) is not None else None
+    except (TypeError, ValueError): return None
+
+def replace_values(submission_id, values) -> int:
+    """제출본의 값 전체 교체(이력 조회에서 표를 고쳐 저장할 때). 지표·센터·기준일·값이 비면 그 행은 버림."""
+    con = connect()
+    con.execute("DELETE FROM submission_values WHERE submission_id=?", (submission_id,))
+    rows = []
+    for v in values:
+        if not (_s(v.get("indicator")) and _s(v.get("center")) and _s(v.get("base_date"))) or v.get("value") is None or v.get("value") != v.get("value"): continue
+        rows.append((submission_id, _s(v["indicator"]), _s(v["center"]), _s(v["base_date"]), float(v["value"]), _s(v.get("definition")), _s(v.get("calc_period")),
+                     _s(v.get("extract_date")), _s(v.get("source_version")), _s(v.get("source_file")), _s(v.get("source_sheet")),
+                     _int_or_none(v.get("source_row"))))
+    con.executemany("INSERT INTO submission_values(submission_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+    con.commit(); con.close(); return len(rows)
+
+def delete_draft(draft_id):
+    con = connect()
+    con.execute("DELETE FROM reviews WHERE draft_id=?", (draft_id,)); con.execute("DELETE FROM drafts WHERE id=?", (draft_id,))
+    con.commit(); con.close()
+
 def list_requests():
     con = connect()
     rows = con.execute("SELECT * FROM requests ORDER BY received_date DESC, id DESC").fetchall()
