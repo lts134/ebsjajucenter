@@ -29,8 +29,12 @@ def rule_draft(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict
         parts, missing = [], []
         for it in [x for x in items if x.get("item_text") == text]:
             ind, bd = it.get("indicator"), it.get("base_date")
-            sub = values[(values["indicator"] == ind) & (values["base_date"] == bd)] if ind and bd and len(values) else values.iloc[0:0]
-            if len(sub): parts.append(f"{bd} 기준 {ind} {len(sub)}개 센터 자료를 붙임 표와 같이 제출합니다. (전체 평균 {sub['value'].mean():.1f}, 최소 {sub['value'].min():.1f}, 최대 {sub['value'].max():.1f})")
+            if ind and len(values): sub = values[(values["indicator"] == ind) & (values["base_date"] == bd)] if bd else values[values["indicator"] == ind]   # 기준일 없는 항목(기간·월별)은 그 지표의 가져온 값 전부
+            else: sub = values.iloc[0:0]
+            if len(sub):
+                dates = sorted(sub["base_date"].dropna().unique().tolist()); n_c = sub["center"].nunique()
+                when = f"{bd} 기준" if bd else (f"{dates[0]} ~ {dates[-1]} 기준({len(dates)}개 기준일)" if len(dates) > 1 else (f"{dates[0]} 기준" if dates else "기준일 미상"))
+                parts.append(f"{when} {ind} {n_c}개 센터 자료를 붙임 표와 같이 제출합니다." + (f" (전체 평균 {sub['value'].mean():.1f}, 최소 {sub['value'].min():.1f}, 최대 {sub['value'].max():.1f})" if len(dates) <= 1 else ""))
             else: missing.append(ind or "지표 미인식")
         if missing: parts.append(f"[확인 필요 — {', '.join(missing)}: 확정 수치가 없어 별도 산출 후 제출]")
         lines.append(f"{i + 1}. {text}: " + " ".join(parts))
@@ -74,7 +78,7 @@ def coverage_check(items: list[dict], draft: dict, values: pd.DataFrame) -> pd.D
     rows = []
     for i, it in enumerate(items, 1):
         ind, bd = it.get("indicator"), it.get("base_date")
-        has_val = bool(len(values) and ind and bd and ((values["indicator"] == ind) & (values["base_date"] == bd)).any())
+        has_val = bool(len(values) and ind and (((values["indicator"] == ind) & (values["base_date"] == bd)).any() if bd else (values["indicator"] == ind).any()))   # 기준일 없는 항목은 지표 값이 있으면 충족
         head = (it.get("item_text") or "")[:10]
         mentioned = bool(ind and ind in text) or (bool(head) and head in text)
         bd_ok = (bd in text) if bd else None

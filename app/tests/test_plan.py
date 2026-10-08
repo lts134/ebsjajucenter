@@ -33,3 +33,13 @@ def test_plan_falls_back_to_past_submissions(fresh_db):
     rows = plan.rows_for("등록 학생 수", pl["dates"], "past"); assert len(rows) == 1 and rows[0]["source_file"].startswith("기록 제출본 #")
     _load_months(db, "등록 학생 수", ("2026-04-30",))
     pl2 = plan.plan_item({"item_text": "등록 학생 수", "indicator": "등록 학생 수", "base_date": None}); assert pl2["source"] == "data" and pl2["dates"] == ["2026-04-30"]
+
+def test_plan_explicit_range_gives_every_month_and_reads_spoken_years(fresh_db):
+    """'25년 12월부터 26년 8월까지' 같은 말로 받은 기간: 두 자리 연도·부터/까지를 읽고, '월별'이 없어도 기간 안의 기준일을 전부 제안."""
+    db = fresh_db; _load_months(db, months=("2025-11-30", "2025-12-31", "2026-01-31", "2026-02-28", "2026-08-31", "2026-09-30"))
+    assert plan._norm_text("25년 12월부터 26년 8월까지 센터별 등원율") == "2025년 12월 ~ 2026년 8월 센터별 등원율"
+    pl = plan.plan_item({"item_text": "25년 12월부터 26년 8월까지 전체 센터의 센터별 등원율", "indicator": "등원율", "base_date": None})
+    assert pl["mode"] == "range" and pl["dates"] == ["2025-12-31", "2026-01-31", "2026-02-28", "2026-08-31"] and "2025년 12월 ~ 2026년 8월" in pl["why"] and "기간(" not in pl["why"]
+    one = plan.plan_item({"item_text": "2026년 8월 ~ 2026년 9월 등원율", "indicator": "등원율", "base_date": None}); assert one["dates"] == ["2026-08-31", "2026-09-30"]
+    year = plan.plan_item({"item_text": "2026년 센터별 등원율", "indicator": "등원율", "base_date": None}); assert year["mode"] == "latest" and year["dates"] == ["2026-09-30"]   # '2026년'만은 연도 → 최신
+    outside = plan.plan_item({"item_text": "2024년 1월 ~ 2024년 6월 등원율", "indicator": "등원율", "base_date": None}); assert outside["mode"] == "latest" and "해당하는 자료가 없어" in outside["why"]

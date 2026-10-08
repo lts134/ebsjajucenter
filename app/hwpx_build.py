@@ -19,17 +19,22 @@ from hwpx.document import HwpxDocument
 
 ITEM_RE = re.compile(r"^\s*(\d+)\s*[.)]\s*(.*)$")
 
-def split_body(body: str, n_items: int) -> tuple[list[str], dict[int, list[str]]]:
-    """초안 본문을 항목 번호별 문단으로 나눈다. 번호 문단 앞의 글은 머리말(preamble)로. (머리말, {번호: [문단…]})"""
+def split_body(body: str, n_items: int, item_texts: list[str] | None = None) -> tuple[list[str], dict[int, list[str]]]:
+    """초안 본문을 항목 번호별 문단으로 나눈다. 번호 문단 앞의 글은 머리말(preamble)로. (머리말, {번호: [문단…]})
+    규칙 초안처럼 '1.'이 인사 문단이고 항목이 2.부터 시작하면(번호 문단이 항목 수 + 1개) 한 칸 당겨 맞춘다. 항목 원문을 되풀이한 머리('항목: ')는 뗀다."""
+    lines = [l.rstrip() for l in (body or "").splitlines() if l.strip()]
+    nums = [int(ITEM_RE.match(l).group(1)) for l in lines if ITEM_RE.match(l)]
+    intro = bool(lines) and ITEM_RE.match(lines[0]) is not None and re.search(r"요구하신|요청하신|제출합니다|회신합니다|알려\s*드립니다", lines[0]) is not None   # 첫 문단이 '1. 귀 ○○에서 요구하신 … 제출합니다' 꼴
+    shift = 1 if (intro and nums == list(range(1, n_items + 2))) else 0
     pre, cur, by = [], None, {}
-    for raw in (body or "").splitlines():
-        line = raw.rstrip()
-        if not line.strip(): continue
+    for line in lines:
         m = ITEM_RE.match(line)
-        if m and 1 <= int(m.group(1)) <= n_items:
-            cur = int(m.group(1)); by.setdefault(cur, [])
-            if m.group(2).strip(): by[cur].append(m.group(2).strip())
+        if m and 1 <= int(m.group(1)) - shift <= n_items:
+            cur = int(m.group(1)) - shift; by.setdefault(cur, []); text = m.group(2).strip()
+            if item_texts and cur - 1 < len(item_texts) and text.startswith(item_texts[cur - 1]): text = text[len(item_texts[cur - 1]):].lstrip(" :：-—").strip()
+            if text: by[cur].append(text)
             continue
+        if m and shift and int(m.group(1)) == 1: pre.append(m.group(2).strip()); cur = None; continue
         (by[cur] if cur else pre).append(line.strip())
     return pre, by
 
@@ -82,7 +87,7 @@ def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft
     fmt(first, align="CENTER", after=6)
     para(f"{today.year}. {today.month}.", body10, align="RIGHT", after=10)
     if draft.get("제목"): para(draft["제목"], bold12, after=6)
-    pre, by = split_body(draft.get("본문", ""), len(items))
+    pre, by = split_body(draft.get("본문", ""), len(items), [it["item_text"] for it in items])
     for line in pre: para(line, body10, after=2)
     confirm = f"【확인 : {org}장 {dept_head or '[확인 필요]'} ☎ {phone or '[확인 필요]'}】"
     vals = values if values is not None else pd.DataFrame(columns=["indicator", "center", "base_date", "value"])

@@ -122,6 +122,18 @@ assert reply and "HWPX" in reply[0], [m.value[:80] for m in at.markdown][-6:]
 assert any(b.label == "승인하고 확정" for b in at.button), [b.label for b in at.button][:20]
 case = at.session_state["case"]; assert case["values"] is not None and case["draft"] and case["hwpx"]
 button(at, "승인하고 확정"); assert at.session_state["case"].get("approved"); print("대화 홈 → 검수 → 승인 OK")
+# 대화 홈 — 의뢰서 없이 집계 파일 + 말로 받은 요구(규칙 경로): 파일은 지표 데이터로, 문장은 요구 항목으로 → 검수 패널
+import io as _io, calendar as _cal, pandas as _pd
+_months = [f"{y}-{m:02d}-{_cal.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 10)]]
+_buf = _io.BytesIO(); _pd.DataFrame([{"지표": "등원율", "센터": f"센터{i}", "기준일": d, "값": 50 + i} for d in _months for i in range(1, 4)]).to_excel(_buf, index=False)
+at = AppTest.from_file(APP, default_timeout=120); at.session_state["nav"] = "홈"
+at.session_state["chat_pending"] = ("25년 12월부터 26년 8월까지 센터별 등원율 요청이 들어왔어. 등록은 빼고 파일만 만들어 줘", [("센터별월간출결.xlsx", _buf.getvalue())])
+at.run(); assert not at.exception, at.exception
+txt = "\n".join(m.value for m in at.markdown)
+assert "지표 데이터에 넣었습니다" in txt and "말씀하신 문장을 요구 항목으로" in txt and "기간이 적혀 있습니다(2025년 12월 ~ 2026년 8월)" in txt and "등록하지 않았습니다" in txt, txt[-600:]
+case = at.session_state["case"]; v = case["values"]      # 앞 단계에서 넣은 시연 지표 데이터(6/30·7/31)도 기간 안이라 함께 들어온다
+assert case["request_id"] is None and len(v) >= 27 and v["base_date"].min() == "2025-12-31" and v["base_date"].max() == "2026-08-31" and case["hwpx"] and any("요구서 미등록" in c.value for c in at.caption)
+print("대화 홈 — 파일+말로 받은 요구(등록 보류) OK")
 # 대화 홈 — AI 경로(가짜 모델): run_ai가 작업 스레드에서 돌 때 세션 저장소를 건드리지 않는지(KeyError 재발 방지)
 import llm, providers
 class _U: input_tokens = 10; output_tokens = 5

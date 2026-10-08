@@ -15,6 +15,14 @@ RECENT = re.compile(r"최근\s*(\d+)\s*(년|개년|개월|월)")
 RANGE = re.compile(r"(20\d{2})(?:\s*[.\-/년]\s*(\d{1,2})\s*월?)?\s*[~\-–∼]\s*(20\d{2})(?:\s*[.\-/년]\s*(\d{1,2})\s*월?)?")
 MONTH_RANGE = re.compile(r"(20\d{2})\s*년?\s*(\d{1,2})\s*월?\s*[~\-–∼]\s*(\d{1,2})\s*월")   # 2026년 1~3월
 YEAR_ONLY = re.compile(r"(?<!\d)(20\d{2})\s*년(?!\s*[~\-–∼])")
+TWO_DIGIT_YEAR = re.compile(r"(?<![\d.])'?(\d{2})\s*년")                                   # 25년 → 2025년 ('26년 포함)
+
+def _norm_text(text: str) -> str:
+    """기간 표현을 규칙이 읽는 꼴로: '25년 12월부터 26년 8월까지' → '2025년 12월 ~ 2026년 8월'. 두 자리 연도·부터/까지·사이."""
+    t = TWO_DIGIT_YEAR.sub(lambda m: f"20{m.group(1)}년", text or "")
+    t = re.sub(r"(월|년|일|\d)\s*(?:부터|에서)\s*", r"\1 ~ ", t)
+    t = re.sub(r"\s*(?:까지|사이|간)(?![가-힣])", "", t)
+    return t
 
 def _month_end(y: int, m: int) -> str:
     import calendar
@@ -22,6 +30,7 @@ def _month_end(y: int, m: int) -> str:
 
 def _window(text: str, anchor: str | None) -> tuple[str | None, str | None, str]:
     """기간 표현 → (시작일, 끝일, 설명). 못 읽으면 (None, None, '')."""
+    text = _norm_text(text)
     m = RANGE.search(text)
     if m:
         y1, m1, y2, m2 = int(m.group(1)), int(m.group(2) or 1), int(m.group(3)), int(m.group(4) or 12)
@@ -70,8 +79,10 @@ def plan_item(item: dict, anchor_date: str | None = None) -> dict:
         out["n_rows"] = _count(ind, out["dates"], source); return out
     # 기준일이 없음: 기간 표현을 읽는다
     lo, hi, why_w = _window(text, anchor_date)
-    pool = [d for d in options if (lo is None or d >= lo) and (hi is None or d <= hi)] or options
-    clipped = "" if pool is not options or not (lo or hi) else f" 요구 기간({why_w})에 해당하는 자료가 없어 전체 범위에서 고릅니다."
+    in_window = [d for d in options if (lo is None or d >= lo) and (hi is None or d <= hi)] if (lo or hi) else []
+    pool = in_window or options
+    clipped = "" if in_window or not (lo or hi) else f" 요구 기간({why_w})에 해당하는 자료가 없어 전체 범위에서 고릅니다."
+    explicit_range = bool(in_window) and not re.fullmatch(r"20\d{2}년", why_w)      # '2025년'만 적힌 것은 기간이 아니라 연도로 보고 최신을 제안
     if MONTHLY.search(text):
         out.update(mode="all", dates=pool, why=f"기준일이 정해지지 않았고 '월별'이라 적혀 있습니다. {src_name}에 {pool[0]} ~ {pool[-1]}({len(pool)}개월)이 있어 전부 제안합니다." + (f" ({why_w})" if why_w and not clipped else "") + clipped)
     elif YEARLY.search(text):
@@ -82,9 +93,11 @@ def plan_item(item: dict, anchor_date: str | None = None) -> dict:
     elif QUARTERLY.search(text):
         picks = [d for d in pool if d[5:7] in ("03", "06", "09", "12")] or pool
         out.update(mode="quarterly", dates=picks, why=f"기준일이 정해지지 않았고 '분기별'이라 적혀 있습니다. {src_name}에서 분기 말({len(picks)}개)을 제안합니다." + clipped)
+    elif explicit_range and len(pool) > 1:
+        out.update(mode="range", dates=pool, why=f"기준일 대신 기간이 적혀 있습니다({why_w.removeprefix('기간 ')}). {src_name}에 그 기간의 기준일 {len(pool)}개({pool[0]} ~ {pool[-1]})가 있어 전부 제안합니다. 끝 달 하나만 내려면 아래에서 바꾸세요.")
     else:
         latest = pool[-1]
-        out.update(mode="latest", dates=[latest], why=f"기준일이 정해지지 않았습니다. {src_name}에 {span}이 있어 가장 최신인 {latest} 기준 값을 제안합니다." + (f" ({why_w})" if why_w else "") + " 다른 기준일이 맞으면 아래에서 바꾸세요.")
+        out.update(mode="latest", dates=[latest], why=f"기준일이 정해지지 않았습니다. {src_name}에 {span}이 있어 가장 최신인 {latest} 기준 값을 제안합니다." + (f" ({why_w})" if why_w and not clipped else "") + clipped + " 다른 기준일이 맞으면 아래에서 바꾸세요.")
     out["n_rows"] = _count(ind, out["dates"], source)
     return out
 

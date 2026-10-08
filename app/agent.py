@@ -19,7 +19,7 @@ class Case(dict):
     def __init__(self, **kw):
         super().__init__(request_text="", request_name="", extracted=None, request_id=None, items=[], plans=[], choices={},
                          values=None, old_sid=None, compare=None, reasons={}, reason_cands=None, draft=None, draft_how="", coverage=None,
-                         foresee=None, hwpx=None, hwpx_name="", log=[], uploads=[])
+                         foresee=None, hwpx=None, hwpx_name="", log=[], uploads=[], described=False, no_register=False)
         self.update(kw)
     def note(self, text: str):
         self["log"].append(f"{dt.datetime.now().strftime('%H:%M:%S')} {text}"); return text
@@ -27,13 +27,65 @@ class Case(dict):
 # ---------------- 단계 ----------------
 def step_read(case: Case) -> dict:
     """요구서 원문 → 항목·지표·기준일·기간. 이미 읽었으면 그대로."""
-    if not case["request_text"]: raise ValueError("요구서가 없습니다. 의뢰서 파일을 붙이거나 본문을 보내 주세요.")
-    res, how = extract.extract(case["request_text"])
+    if not case["request_text"]: raise ValueError("요구서가 없습니다. 의뢰서 파일을 붙이거나, 요청 내용을 말로 알려 주세요(describe_request).")
+    if case.get("described") and case["extracted"]: res, how = case["extracted"], "대화 입력(규칙)"      # 말로 받은 요구는 describe_request가 이미 구조화해 두었다(다시 읽으면 '미기재'가 값으로 들어감)
+    else: res, how = extract.extract(case["request_text"])
     res["items"] = normalize.normalize_llm(normalize.normalize_items(res.get("items") or []))
     case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = how
     case.note(f"요구서 읽음: 항목 {len(res['items'])}건 ({how})")
     return {"requester": res.get("requester"), "received_date": res.get("received_date"), "due_date": res.get("due_date"), "title": res.get("title"),
             "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period")} for i, it in enumerate(res["items"])], "how": how}
+
+def _clean_item(text: str) -> str:
+    """말로 받은 항목에서 지시어를 뗀다: '센터별 등원율 요청이 들어왔어. 작성해줘' → '센터별 등원율'."""
+    t = re.split(r"\s*(?:요청이|요구가|자료가)?\s*(?:들어왔|왔어|왔는데|작성|처리|만들|준비|회신|해\s*줘|해줘|부탁)", text or "", 1)[0]
+    return re.sub(r"[\s,.。]+$", "", t).strip() or (text or "").strip()
+
+def describe_request(case: Case, requester: str | None = None, received_date: str | None = None, due_date: str | None = None, title: str | None = None,
+                     items: list[str] | None = None, name: str = "대화로 받은 요구") -> dict:
+    """의뢰서 파일 없이 말로 받은 요구를 작업의 요구서로 만든다. 모르는 칸은 비워 둔다(지어내지 않음).
+    이미 적어 둔 요구가 있으면 말한 칸만 바꾼다. 등록된 뒤라면 기록(DB)의 머리 정보·항목도 같이 고친다. 계획 이후 단계는 다시 한다."""
+    prev = case["extracted"] if (case.get("described") and case["extracted"]) else {}
+    def pick(new, key): return new if new not in (None, "") else prev.get(key)
+    nd = lambda v: (extract._norm_date(v) or (v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v)) else None)) if v else None
+    requester, received_date, due_date, title = pick(requester, "requester"), nd(pick(received_date, "received_date")), nd(pick(due_date, "due_date")), pick(title, "title")
+    item_texts = [_clean_item(t) for t in (items or []) if t and _clean_item(t)] or [it["item_text"] for it in (case["items"] or [])]
+    if not item_texts: raise ValueError("요구 항목이 없습니다. 무엇을 달라는 요청인지 한 줄이라도 알려 주세요(예: '2025년 12월 ~ 2026년 8월 센터별 월별 등원율').")
+    head = [f"요구 주체: {requester or '미기재'}", f"접수일: {received_date or '미기재'}", f"제출 기한: {due_date or '미기재'}", f"제목: {title or item_texts[0]}"]
+    case["request_text"] = "\n".join(head + [f"{i}. {t}" for i, t in enumerate(item_texts, 1)]); case["request_name"] = name; case["described"] = True
+    res = extract.rule_based(case["request_text"]); res.update(requester=requester, received_date=received_date, due_date=due_date, title=title or item_texts[0])
+    res["items"] = normalize.normalize_items(res["items"]); case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = "대화 입력(규칙)"
+    if case["request_id"]:
+        db.update_request(case["request_id"], requester, received_date, due_date, res["title"]); db.replace_items(case["request_id"], res["items"]); case["items"] = db.get_items(case["request_id"])
+    case.update(plans=[], choices={}, values=None, compare=None, draft=None, hwpx=None, coverage=None, foresee=None)
+    case.note(f"요구를 말로 받음: 항목 {len(res['items'])}건" + (" (기록도 고침)" if case["request_id"] else ""))
+    return {"requester": requester, "received_date": received_date, "due_date": due_date, "title": res["title"], "registered": case["request_id"],
+            "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period"), "unit": it.get("unit")} for i, it in enumerate(res["items"])],
+            "missing_header": [k for k, v in (("요청 주체", requester), ("접수일", received_date), ("기한", due_date)) if not v],
+            "unknown_indicator": [it["item_text"] for it in res["items"] if not it.get("indicator")]}
+
+def _req_items(case: Case) -> tuple[dict, list[dict]]:
+    """초안·HWPX가 쓰는 요구 머리 정보와 항목: 등록돼 있으면 기록에서, 아니면(등록 보류) 작업 상태에서."""
+    if case["request_id"]: return db.get_request(case["request_id"]), db.get_items(case["request_id"])
+    if not case["extracted"]: step_read(case)
+    return dict(case["extracted"]), list(case["items"])
+
+def coverage_summary() -> list[dict]:
+    """지표 데이터(미리 넣어 둔 집계값)의 보유 범위를 지표별 한 줄로."""
+    by = {}
+    for r in db.data_coverage():
+        g = by.setdefault(r["indicator"], {"indicator": r["indicator"], "dates": [], "n_centers": 0, "last_loaded": None})
+        g["dates"].append(r["base_date"]); g["n_centers"] = max(g["n_centers"], int(r["n_centers"] or 0))
+        g["last_loaded"] = max(filter(None, [g["last_loaded"], str(r["loaded_at"] or "")[:10]]), default=None)
+    out = []
+    for g in by.values():
+        ds = sorted(g["dates"]); out.append({**g, "dates": ds, "first": ds[0], "last": ds[-1], "n_dates": len(ds)})
+    return out
+
+def coverage_line() -> str:
+    cov = coverage_summary()
+    if not cov: return "지표 데이터 없음"
+    return "지표 데이터 보유: " + "; ".join(f"{g['indicator']} {g['first']}~{g['last']}({g['n_dates']}개 기준일·{g['n_centers']}센터)" if g["n_dates"] > 1 else f"{g['indicator']} {g['first']}({g['n_centers']}센터)" for g in cov)
 
 def step_register(case: Case) -> dict:
     """요구서를 기록에 등록(이미 등록돼 있으면 그 번호)."""
@@ -128,9 +180,9 @@ def set_reason(case: Case, indicator: str, center: str, base_date: str, reason: 
 
 def step_draft(case: Case) -> dict:
     """확정 전 수치와 사유만으로 회신 초안. 없는 항목은 [확인 필요]."""
-    if not case["request_id"]: step_register(case)
+    if not case["request_id"] and not case.get("no_register"): step_register(case)
     if case["values"] is None: step_pull(case)
-    req = db.get_request(case["request_id"]); items = db.get_items(case["request_id"])
+    req, items = _req_items(case)
     values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
     prov = {k: values.iloc[0].get(k) for k in ("definition", "calc_period", "extract_date", "source_version")} if len(values) else {}
     ck = compare.checklist(case["compare"], case["reasons"]).to_dict("records") if case["compare"] is not None else None
@@ -149,7 +201,7 @@ def edit_draft(case: Case, field: str, text: str) -> dict:
 
 def step_foresee(case: Case) -> dict:
     if not case["draft"]: step_draft(case)
-    req = db.get_request(case["request_id"]); items = db.get_items(case["request_id"])
+    req, items = _req_items(case)
     qs, how = assist.foresee(req, items, case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS), dict(case["reasons"]), case.get("checklist"), case["draft"])
     case["foresee"] = (qs, how); case.note(f"예상 질문 {len(qs)}건 ({how})")
     return {"how": how, "questions": qs}
@@ -157,8 +209,7 @@ def step_foresee(case: Case) -> dict:
 def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = "", phone: str = "") -> dict:
     """회신 HWPX 생성. 기본은 부서 '답변자료' 양식을 처음부터 만들고(hwpx_build), 자리표시자 서식(template_bytes)이 주어지면 그 서식에 채운다."""
     if not case["draft"]: step_draft(case)
-    req = db.get_request(case["request_id"]); d = case["draft"]; values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
-    items = db.get_items(case["request_id"])
+    req, items = _req_items(case); d = case["draft"]; values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
     if template_bytes:
         fill = {"수신": req.get("requester") or "", "제목": d.get("제목", ""), "본문": d.get("본문", ""), "차이사유": d.get("차이사유", "") or "해당 없음",
                 "산출근거": d.get("산출근거", ""), "요구항목": "\n".join(f"{i + 1}. {it['item_text']}" for i, it in enumerate(items)), "발신": "한국교육방송공사", "담당자": ""}
@@ -172,8 +223,9 @@ def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = 
     return {"file_name": name, "bytes": len(out), "rows": len(rows), "kind": kind}
 
 def approve(case: Case, user: str, reviewer: str, out_dir=None, comment: str = "검수 승인") -> dict:
-    """사람의 승인: 값을 확정 제출본으로 저장, 사유 기록, 초안을 승인 상태로 저장. 에이전트는 이 함수를 호출하지 않는다."""
-    if not case["request_id"]: step_register(case)
+    """사람의 승인: 값을 확정 제출본으로 저장, 사유 기록, 초안을 승인 상태로 저장. 에이전트는 이 함수를 호출하지 않는다.
+    등록을 보류했던(no_register) 작업도 승인하면 요구서부터 기록에 남긴다 — 확정 제출본은 요구서 없이 존재할 수 없다."""
+    if not case["request_id"]: case["no_register"] = False; step_register(case)
     if case["values"] is None or not len(case["values"]): raise ValueError("확정할 수치가 없습니다.")
     if not case["draft"]: step_draft(case)
     sid = db.add_submission(case["request_id"], str(dt.date.today()), user, "대화 처리(지표 데이터·기록)", "confirmed", "대화형 처리 후 검수 승인", case["values"].to_dict("records"))
@@ -190,11 +242,12 @@ def approve(case: Case, user: str, reviewer: str, out_dir=None, comment: str = "
     return {"submission_id": sid, "draft_id": did}
 
 # ---------------- 전체 실행(규칙 경로·'다 해 줘') ----------------
-def autopilot(case: Case, template_bytes: bytes | None = None) -> list[str]:
-    """표준 순서로 끝까지. 각 단계의 한 줄 설명을 돌려준다(대화에 그대로 보여 줌)."""
+def autopilot(case: Case, template_bytes: bytes | None = None, register: bool = True) -> list[str]:
+    """표준 순서로 끝까지. 각 단계의 한 줄 설명을 돌려준다(대화에 그대로 보여 줌). register=False면 기록 등록을 승인 때까지 미룬다."""
     lines = []
     r = step_read(case); lines.append(f"요구서를 읽었습니다. 요청 주체 {r['requester'] or '미기재'} · 접수 {r['received_date'] or '미기재'} · 기한 {r['due_date'] or '미기재'} · 요구 항목 {len(r['items'])}건.")
-    step_register(case); lines.append(f"요구서 #{case['request_id']}로 기록했습니다.")
+    if register or case["request_id"]: case["no_register"] = False; step_register(case); lines.append(f"요구서 #{case['request_id']}로 기록했습니다.")
+    else: case["no_register"] = True; lines.append("기록에는 등록하지 않았습니다(승인하면 그때 요구서·제출본으로 남습니다).")
     p = step_plan(case)
     for it in p["items"]: lines.append(f"항목 {it['no']} '{it['item_text'][:40]}': {it['why']}")
     pulled = step_pull(case)
@@ -232,18 +285,26 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"field": {"type": "string"}, "text": {"type": "string"}}, "required": ["field", "text"]}},
     {"name": "foresee_questions", "description": "이 회신을 받은 쪽이 다음에 물을 만한 질문과 준비할 자료를 예측한다.", "input_schema": {"type": "object", "properties": {}}},
     {"name": "make_hwpx", "description": "회신 HWPX 파일을 만든다. 기본은 부서 '답변자료' 양식(제목·날짜·번호 항목·【확인】·본문·수치표·※ 근거), 설정에 자리표시자 서식이 있으면 그 서식.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "run_all", "description": "표준 순서로 전부 실행: 읽기→등록→계획→값 가져오기→대조→사유 후보→초안→HWPX. 사용자가 '작성해 줘' '다 해 줘'라고 하면 이것 하나로 시작한다.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "case_status", "description": "지금 작업 상태(어디까지 됐는지, 수치 건수, 차이 수, 초안 유무)를 본다.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "run_all", "description": "표준 순서로 전부 실행: 읽기→등록→계획→값 가져오기→대조→사유 후보→초안→HWPX. 사용자가 '작성해 줘' '다 해 줘'라고 하면 이것 하나로 시작한다. 사용자가 '등록은 하지 말고 파일만' 하면 register=false(승인 때 등록).",
+     "input_schema": {"type": "object", "properties": {"register": {"type": "boolean", "description": "기록(DB)에 요구서를 등록할지. 기본 true"}}}},
+    {"name": "describe_request", "description": "의뢰서 파일 없이 사용자가 말로 알려 준 요구를 작업의 요구서로 만든다(또는 고친다). 사용자가 '○○ 요청이 들어왔어' 하면 즉시 이것으로 적고 run_all을 이어서 한다. 모르는 칸은 비워 둔다(묻기 전에 먼저 처리). items는 요구 항목을 한 줄씩, 기간·기준일·단위를 그대로 담아(예: '2025년 12월 ~ 2026년 8월 센터별 월별 등원율'). 날짜는 YYYY-MM-DD(오늘·내일 같은 말은 상태줄의 오늘 날짜로 계산).",
+     "input_schema": {"type": "object", "properties": {"requester": {"type": "string"}, "received_date": {"type": "string"}, "due_date": {"type": "string"}, "title": {"type": "string"},
+                                                       "items": {"type": "array", "items": {"type": "string"}}}, "required": ["items"]}},
+    {"name": "data_coverage", "description": "지표 데이터(담당자가 미리 넣어 둔 집계값 — 과거 제출 이력과 별개)의 보유 범위: 지표별 기준일 목록·센터 수·적재일. '그 기간 자료가 있나' 판단은 이것으로.", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "case_status", "description": "지금 작업 상태(어디까지 됐는지, 이번에 낼 수치 건수, 차이 수, 초안 유무, 지표 데이터 보유 범위)를 본다.", "input_schema": {"type": "object", "properties": {}}},
 ] + history_qa.TOOLS
 
 SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 담당자를 돕는 업무 에이전트입니다. 담당자가 의뢰서(요구서)를 붙이고 지시하면, 도구를 골라 써서 회신에 필요한 것을 끝까지 준비합니다. 사람은 검수·승인·발송만 합니다.
 
 하는 일과 순서
 1. '작성해 줘' '처리해 줘' 같은 지시에는 run_all을 먼저 호출하고, 결과를 단계별로 짧게 설명합니다(무엇을 읽었고, 어떤 자료를 어느 기준일로 넣었고, 과거 제출값과 어디가 다른지, 초안과 HWPX를 만들었는지).
+   의뢰서 파일이 없어도 사용자가 말로 요구를 알려 주면("센터별 등원율 요청이 들어왔어", "25년 12월부터 26년 8월까지") 되묻지 말고 describe_request로 적은 뒤 바로 run_all을 합니다. 요청 주체·기한처럼 모르는 칸은 비워 두고 결과 끝에 "알려 주시면 반영합니다"라고 한 줄만 덧붙입니다. 나중에 사용자가 그 칸을 말하면 describe_request로 고치고 필요한 단계를 다시 합니다.
+   사용자가 "등록은 빼고 파일만" 하면 run_all(register=false)로 합니다(승인할 때 기록됩니다).
 2. 자료 계획에서 판단이 갈리는 항목(기준일이 없거나 요구 기준일 자료가 없음)은 제안 이유를 그대로 전하고, 다른 기준일을 원하면 set_dates로 바꾼 뒤 pull_values→compare_with_past→write_draft→make_hwpx를 다시 합니다.
 3. 자료가 없는 항목은 '지표 데이터에 없음 → 새로 산출 필요'라고 분명히 말하고 지어내지 않습니다.
 4. 사용자가 사유나 문안을 말하면 set_reason / edit_draft로 반영하고 make_hwpx를 다시 합니다.
 5. 과거 이력 질문은 이력 조회 도구(search_requests, indicator_history 등)로 조회한 결과만 근거로 답합니다.
+6. 자료가 있는지는 상태줄의 '지표 데이터 보유'와 data_coverage로 봅니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
 
 지켜야 할 것
 - 수치를 계산·추정하지 않습니다(평균·합계·증감률도). 값은 도구가 가진 자료에서 가져온 것만 씁니다.
@@ -256,16 +317,18 @@ def handlers(case: Case, template_bytes: bytes | None):
     def status():
         return {"request_id": case["request_id"], "n_items": len(case["items"]), "planned": bool(case["plans"]), "n_values": int(len(case["values"])) if case["values"] is not None else 0,
                 "compared": case["compare"] is not None, "n_diff": int((case["compare"]["판정"] == "차이").sum()) if case["compare"] is not None else 0,
-                "has_draft": bool(case["draft"]), "has_hwpx": bool(case["hwpx"]), "log": case["log"][-8:]}
-    def run_all():
-        lines = autopilot(case, template_bytes); return {"summary": lines, **status()}
+                "has_draft": bool(case["draft"]), "has_hwpx": bool(case["hwpx"]), "registered": bool(case["request_id"]), "data_coverage": coverage_line(), "log": case["log"][-8:]}
+    def run_all(register=True):
+        lines = autopilot(case, template_bytes, register=bool(register) if register is not None else True); return {"summary": lines, **status()}
     def hwpx(): return step_hwpx(case, template_bytes)
     own = {"read_request": lambda: step_read(case), "register_request": lambda: step_register(case), "plan_data": lambda: step_plan(case),
            "set_dates": lambda item_no, dates: set_dates(case, item_no, dates), "pull_values": lambda: step_pull(case),
            "compare_with_past": lambda tolerance=0.0: step_compare(case, float(tolerance or 0)), "suggest_reasons": lambda: step_reasons(case),
            "set_reason": lambda indicator, center, base_date, reason: set_reason(case, indicator, center, base_date, reason),
            "write_draft": lambda: step_draft(case), "edit_draft": lambda field, text: edit_draft(case, field, text),
-           "foresee_questions": lambda: step_foresee(case), "make_hwpx": hwpx, "run_all": run_all, "case_status": status}
+           "foresee_questions": lambda: step_foresee(case), "make_hwpx": hwpx, "run_all": run_all, "case_status": status,
+           "describe_request": lambda items, requester=None, received_date=None, due_date=None, title=None: describe_request(case, requester, received_date, due_date, title, items),
+           "data_coverage": lambda: {"indicators": coverage_summary(), "note": "값은 pull_values로 가져온다. 여기 없는 지표·기간은 새로 산출해야 한다."}}
     def wrap(fn):
         def h(*a, **kw): return pii.redact_obj(history_qa._strip(fn(*a, **kw)))
         return h
@@ -273,9 +336,14 @@ def handlers(case: Case, template_bytes: bytes | None):
     out.update(history_qa.HANDLERS)
     return out
 
-def chat_turn(case: Case, messages: list[dict], user_text: str, template_bytes: bytes | None, on_tool=None) -> dict:
-    """Claude 경로 한 턴. messages는 이전 대화(도구 호출 포함). 반환: run_tools_conv 결과(text·trace·messages)."""
-    ctx = f"[작업 상태] 요구서 {'있음(' + (case['request_name'] or '본문') + ')' if case['request_text'] else '없음'} · 등록 {case['request_id'] or '-'} · 값 {int(len(case['values'])) if case['values'] is not None else 0}건 · 초안 {'있음' if case['draft'] else '없음'}"
+def status_line(case: Case) -> str:
+    """매 턴 모델에 주는 한 줄 상태: 오늘 날짜 · 요구서 유무 · 등록 · 이번에 낼 수치 · 초안 · 지표 데이터 보유 범위."""
+    return (f"[작업 상태] 오늘 {dt.date.today()} · 요구서 {'있음(' + (case['request_name'] or '본문') + ')' if case['request_text'] else '없음(말로 알려 주면 describe_request로 적는다)'} · 등록 {('#' + str(case['request_id'])) if case['request_id'] else ('보류' if case.get('no_register') else '-')}"
+            f" · 이번에 낼 수치 {int(len(case['values'])) if case['values'] is not None else 0}건{'' if case['values'] is not None else '(아직 안 가져옴)'} · 초안 {'있음' if case['draft'] else '없음'} · {coverage_line()}")
+
+def chat_turn(case: Case, messages: list[dict], user_text: str, template_bytes: bytes | None, on_tool=None, notes: list[str] | None = None) -> dict:
+    """Claude 경로 한 턴. messages는 이전 대화(도구 호출 포함). notes는 이번 턴 첨부 파일 처리 결과(모델도 알아야 한다). 반환: run_tools_conv 결과(text·trace·messages)."""
+    ctx = status_line(case) + ("".join(f"\n[첨부 처리] {n}" for n in notes) if notes else "")
     msgs = list(messages) + [{"role": "user", "content": f"{ctx}\n\n{user_text}"}]
     return llm.run_tools_conv(msgs, SYSTEM, TOOLS, handlers(case, template_bytes), max_turns=12, max_tokens=3000, purpose="대화 처리", on_tool=on_tool)
 

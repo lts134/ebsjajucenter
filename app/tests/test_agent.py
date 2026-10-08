@@ -85,3 +85,36 @@ def test_chat_turn_with_fake_model(fresh_db, monkeypatch):
     res2 = agent.chat_turn(case, res["messages"], "센터C 사유는 사후 보정으로 적어", TPL.read_bytes())
     assert res2["text"] == "반영했습니다." and case["reasons"][("등원율", "센터C", "2026-06-30")] == "사후 보정" and case["draft_stale"]
     assert len(fake.calls[2]["messages"]) == 5 and len(res2["messages"]) == 8                              # 이전 대화 4 + 이번 사용자 1 → 도구 왕복 후 8
+
+
+def test_describe_request_without_file_and_deferred_register(fresh_db):
+    """의뢰서 파일 없이 말로 받은 요구: 지시어를 뗀 항목 → 지표 데이터 범위로 기간 전부 → 등록 보류(no_register)로 초안·HWPX → 승인 때 등록."""
+    import calendar, docread
+    db = fresh_db
+    months = [f"{y}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 10)]]
+    db.add_data_batch([{"indicator": "등원율", "center": f"센터{i}", "base_date": d, "value": 50 + i} for d in months for i in range(1, 4)], "u", "센터별월간출결.xls")
+    assert agent.coverage_line() == "지표 데이터 보유: 등원율 2025-12-31~2026-09-30(10개 기준일·3센터)"
+    case = agent.Case()
+    r = agent.describe_request(case, items=["센터별 등원율 요청이 들어왔어. 작성해줘"])
+    assert r["items"][0]["item_text"] == "센터별 등원율" and r["items"][0]["indicator"] == "등원율" and r["missing_header"] == ["요청 주체", "접수일", "기한"]
+    assert "describe_request" in agent.status_line(agent.Case()) and "지표 데이터 보유" in agent.status_line(case)
+    lines = agent.autopilot(case, None, register=False)
+    assert case["request_id"] is None and case["no_register"] and any("등록하지 않았습니다" in l for l in lines)
+    assert len(case["values"]) == 3 and case["values"]["base_date"].unique().tolist() == ["2026-09-30"]        # 기간 말이 없으면 최신
+    assert case["extracted"]["requester"] is None and case["hwpx_name"] == f"답변자료_요구_{__import__('datetime').date.today()}.hwpx"   # 다시 읽어도 '미기재'가 값으로 들어가지 않음
+    # 나중에 머리 정보와 기간을 말해 주면 고치고 다시
+    r2 = agent.describe_request(case, requester="테스트용", received_date="2026-10-08", due_date="2026-10-09", items=["25년 12월부터 26년 8월까지 전체 센터의 센터별 등원율"])
+    assert r2["requester"] == "테스트용" and r2["missing_header"] == [] and case["values"] is None and case["draft"] is None
+    agent.autopilot(case, None, register=False)
+    assert len(case["values"]) == 27 and case["values"]["base_date"].min() == "2025-12-31" and case["values"]["base_date"].max() == "2026-08-31"
+    assert case["coverage"]["판정"].tolist() == ["충족"] and "2025-12-31 ~ 2026-08-31 기준(9개 기준일)" in case["draft"]["본문"]
+    text = docread.read("x.hwpx", case["hwpx"]); assert text.startswith("테스트용 답변자료") and "2026-08-31" in text and "2. 25년" not in text   # 규칙 초안의 '2.' 항목이 1번 항목 아래로 들어감
+    out = agent.approve(case, "담당자", "팀장")
+    req = db.get_request(case["request_id"]); assert req["requester"] == "테스트용" and req["due_date"] == "2026-10-09" and len(db.get_values(out["submission_id"])) == 27
+    # 등록된 뒤 다시 describe하면 기록도 고쳐진다
+    agent.describe_request(case, title="센터별 월별 등원율(수정)"); assert db.get_request(case["request_id"])["title"] == "센터별 월별 등원율(수정)"
+    # 도구 표: 새 도구가 핸들러와 맞고 data_coverage가 지표 데이터를 보여 준다
+    hs = agent.handlers(agent.Case(), None); assert {t["name"] for t in agent.TOOLS} == set(hs)
+    assert hs["data_coverage"]()["indicators"][0]["n_dates"] == 10 and hs["case_status"]()["data_coverage"].startswith("지표 데이터 보유")
+    assert hs["describe_request"](items=["센터별 등록 학생 수"], requester="감사실")["unknown_indicator"] == []
+    msgs = agent.chat_turn.__code__.co_varnames; assert "notes" in msgs

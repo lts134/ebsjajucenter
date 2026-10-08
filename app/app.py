@@ -8,7 +8,7 @@
   과거 답변 등록  — 예전에 낸 요구서와 그때 보낸 값을 기억에 넣기
   이력 조회 · 현황 · 이력에 묻기 · 설정
 역할 경계: AI는 읽기·문안·점검·기억 조회만. 수치 계산·대조는 코드, 사유·확정은 담당자."""
-import os, io, sys, subprocess, datetime as dt, zipfile, json, threading, queue, time
+import os, io, re, sys, subprocess, datetime as dt, zipfile, json, threading, queue, time
 from pathlib import Path
 
 def _in_streamlit():
@@ -300,6 +300,9 @@ def _rule_reply(case: agent.Case, text: str, tpl: bytes | None) -> str:
     """키 없을 때: 의뢰서가 있고 처리 지시면 표준 순서로 전부, 질문이면 키워드 검색, 그 외 안내."""
     if case["request_text"] and agent.is_do_it(text):
         return "\n\n".join(agent.autopilot(case, tpl))
+    if agent.is_do_it(text) and normalize.normalize_all(text):                       # 의뢰서 없이 "센터별 등원율 요청이 들어왔어. 작성해 줘" → 말한 문장을 요구 항목으로
+        agent.describe_request(case, items=[text])
+        return "\n\n".join(["의뢰서 파일이 없어 말씀하신 문장을 요구 항목으로 적었습니다(요청 주체·기한은 미기재)."] + agent.autopilot(case, tpl, register=not re.search(r"등록\s*(은|는)?\s*(빼|제외|말|하지)", text)))
     kw = history_qa.keyword_search(text)
     if kw["requests"] or kw["reasons"]:
         lines = [f"'{', '.join(kw['tokens'][:4])}'로 기록을 찾았습니다(키워드 검색, AI 연결 없음)."]
@@ -312,8 +315,8 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
     """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인."""
     with st.container(border=True):
         st.markdown("### 검수 — 확인하고 승인하면 확정됩니다")
-        req = db.get_request(case["request_id"]) if case["request_id"] else {}
-        st.caption(f"요구서 #{case['request_id']} · {req.get('requester') or '요청 주체 미기재'} · {req.get('title') or ''} · 기한 {req.get('due_date') or '-'}")
+        req = db.get_request(case["request_id"]) if case["request_id"] else (case["extracted"] or {})
+        st.caption(f"{('요구서 #' + str(case['request_id'])) if case['request_id'] else '요구서 미등록(승인하면 등록)'} · {req.get('requester') or '요청 주체 미기재'} · {req.get('title') or ''} · 기한 {req.get('due_date') or '-'}")
         missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
         if missing: st.warning("자료가 없어 새로 산출해야 하는 항목: " + " / ".join(missing) + ". 초안에는 [확인 필요]로 들어가 있습니다. 집계 파일을 대화에 붙이면 지표 데이터에 넣고 다시 처리합니다.")
         t1, t2, t3, t4 = st.tabs(["이번에 낼 수치", "대조·차이 사유", "회신 초안", "예상 질문"])
@@ -406,7 +409,7 @@ def page_chat():
     try:
         if HAS_API:
             msgs = list(st.session_state.get("chat_msgs") or [])            # 세션 값은 여기서 꺼낸다(run_ai는 작업 스레드에서 돌아 세션에 접근 못 함)
-            res = run_ai("처리 중", lambda: agent.chat_turn(case, msgs, text, tpl), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다")
+            res = run_ai("처리 중", lambda: agent.chat_turn(case, msgs, text, tpl, notes=notes), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다")
             st.session_state["chat_msgs"] = res["messages"]; reply = res["text"] or "(답이 비어 있습니다)"
         else:
             reply = run_ai("처리 중", lambda: _rule_reply(case, text, tpl), "", "처리 중… (규칙 기반)")
