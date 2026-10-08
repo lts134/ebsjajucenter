@@ -204,15 +204,22 @@ def usage_summary() -> dict:
 def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = 2000, purpose: str = "도구 질의") -> dict:
     """도구 호출 루프(수동). 모델이 tools 중 하나를 고르면 handlers[name](**input)을 실행해 결과를 돌려주고, 더 이상 호출이 없으면 최종 답을 반환.
     반환: {"text": 최종 답, "trace": [{"tool", "input", "result", "rows"}...], "turns": n}. 모델 없음이면 다음 후보로."""
+    return run_tools_conv([{"role": "user", "content": prompt}], system, tools, handlers, max_turns, max_tokens, purpose)
+
+def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = 2000,
+                   purpose: str = "도구 질의", on_tool=None) -> dict:
+    """이어지는 대화용 도구 호출 루프. messages(이전 대화 + 이번 사용자 메시지)를 받아 모델이 도구를 다 쓸 때까지 돌고,
+    새 메시지들을 덧붙인 전체 대화를 "messages"로 돌려준다(다음 턴에 그대로 넘기면 기억이 이어짐).
+    on_tool(name, input, result) 콜백으로 화면이 각 도구 결과를 받아 볼 수 있다."""
     prov, state = _provider(), _state()
     model_iter = iter(_model_order()); model = next(model_iter)
-    messages = [{"role": "user", "content": prompt}]
+    messages = list(messages)
     trace, turns, last_err = [], 0, None
     while turns < max_turns:
         t0 = time.time()
         _notify(f"{purpose} — {turns + 1}회차: {model}이(가) 어떤 기록을 조회할지 정하는 중…" if turns else f"{purpose} — {model}이(가) 질문을 읽고 조회할 기록을 정하는 중…")
         try:
-            msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, tools=tools)
+            msg = prov.create_message(model=model, max_tokens=max_tokens, messages=list(messages), system=system, tools=tools)   # 호출 시점의 대화 스냅샷
         except Exception as e:
             if not prov.is_not_found(e): raise
             last_err = e
@@ -221,10 +228,10 @@ def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_t
         state["resolved"] = model; turns += 1
         _record(msg, model, t0, purpose, False)
         uses = [b for b in msg.content if getattr(b, "type", "") == "tool_use"]
+        messages.append({"role": "assistant", "content": msg.content})
         if msg.stop_reason != "tool_use" or not uses:
             _notify(f"{purpose} — 조회 {len(trace)}건을 근거로 답을 정리함 ({time.time() - t0:.1f}초)")
-            return {"text": "".join(getattr(b, "text", "") for b in msg.content).strip(), "trace": trace, "turns": turns}
-        messages.append({"role": "assistant", "content": msg.content})
+            return {"text": "".join(getattr(b, "text", "") for b in msg.content).strip(), "trace": trace, "turns": turns, "messages": messages}
         results = []
         for u in uses:
             fn = handlers.get(u.name)
@@ -238,9 +245,13 @@ def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_t
             trace.append({"tool": u.name, "input": u.input, "rows": len(out) if isinstance(out, list) else None, "result": out})
             arg = ", ".join(f"{k}={v}" for k, v in (u.input or {}).items())[:80]
             _notify(f"{purpose} — 조회 {u.name}({arg}) → " + ("오류" if err else (f"{len(out)}건" if isinstance(out, list) else "결과 받음")))
+            if on_tool:
+                try: on_tool(u.name, u.input, out)
+                except Exception: pass
             results.append({"type": "tool_result", "tool_use_id": u.id, "content": s, "is_error": err})
         messages.append({"role": "user", "content": results})
-    return {"text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다. 질문을 더 좁혀 주세요.)", "trace": trace, "turns": turns}
+    messages.append({"role": "assistant", "content": [{"type": "text", "text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다.)"}]})
+    return {"text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다. 질문을 더 좁혀 주세요.)", "trace": trace, "turns": turns, "messages": messages}
 
 # 하위 호환(설정 화면 문구 등에서 참조)
 CANDIDATES = providers.AnthropicProvider.default_models

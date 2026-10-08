@@ -23,7 +23,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui, plan
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui, plan, agent
 
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
@@ -262,29 +262,157 @@ STEPS = [("1단계", "요구서 읽기"), ("2단계", "수치 맞춰 보기"), (
 
 def req_label(r): return f"#{r['id']} {r['received_date'] or '접수일 미기재'} · {r['requester'] or '요청 주체 미기재'} — {r['title'] or '(제목 없음)'}"
 
-# ================= 홈 =================
-def page_home():
+# ================= 홈 = 대화 =================
+REQ_EXT = (".hwp", ".hwpx", ".pdf", ".docx", ".txt"); VAL_EXT = (".xlsx", ".xls", ".xlsm", ".csv")
+
+def _template_bytes() -> bytes | None:
+    if st.session_state.get("tpl_custom"): return st.session_state["tpl_custom"]
+    tpls = sorted(TPL_DIR.glob("*.hwpx")); return tpls[0].read_bytes() if tpls else None
+
+def _attach(case: agent.Case, files: list[tuple[str, bytes]]) -> list[str]:
+    """대화에 붙인 파일 처리: 요구서 문서는 작업의 요구서로, 집계 파일(엑셀·CSV)은 지표 데이터로 넣는다. 설명 줄을 돌려준다."""
+    notes = []
+    for name, data in files:
+        low = name.lower()
+        if low.endswith(REQ_EXT):
+            try: text = docread.read(name, data)
+            except Exception as e: notes.append(f"'{name}'을 읽지 못했습니다: {e}"); continue
+            if case["request_id"] or case["draft"]:                              # 새 의뢰서면 새 작업
+                st.session_state["case"] = case = agent.Case(); st.session_state["chat_msgs"] = []
+            case["request_text"], case["request_name"] = text, name; case["uploads"].append(name)
+            notes.append(f"의뢰서 '{name}'을 받았습니다({len(text):,}자).")
+        elif low.endswith(VAL_EXT):
+            try:
+                grid = tabular.read_grid(type("U", (), {"name": name, "getvalue": lambda self, d=data: d})())
+                info = tabular.analyze(grid)
+                if info.shape == "long": df = tabular.long_table(grid, info)
+                elif info.shape == "wide" and (info.center_cols or info.center_col is not None) and info.value_cols and (info.base_date_hint or info.col_dates):
+                    df = tabular.wide_to_long(grid, info, info.center_cols or [info.center_col], info.value_cols, info.base_date_hint or "")
+                else: raise ValueError("센터 열·값 열·기준일을 확인해야 합니다. '지표 데이터' 화면에서 올려 주세요.")
+                bid, n = db.add_data_batch(df.to_dict("records"), USER, name, "대화 첨부")
+                notes.append(f"집계 파일 '{name}'을 지표 데이터에 넣었습니다(묶음 #{bid}, {n}건, 지표 {', '.join(sorted(df['indicator'].unique())[:4])}). 잘못 넣었으면 '지표 데이터'에서 지울 수 있습니다.")
+                case["plans"] = []; case["values"] = None
+            except Exception as e: notes.append(f"집계 파일 '{name}'을 넣지 못했습니다: {e}")
+        else: notes.append(f"'{name}'은 다루지 않는 형식입니다.")
+    return notes
+
+def _rule_reply(case: agent.Case, text: str, tpl: bytes | None) -> str:
+    """키 없을 때: 의뢰서가 있고 처리 지시면 표준 순서로 전부, 질문이면 키워드 검색, 그 외 안내."""
+    if case["request_text"] and agent.is_do_it(text):
+        return "\n\n".join(agent.autopilot(case, tpl))
+    kw = history_qa.keyword_search(text)
+    if kw["requests"] or kw["reasons"]:
+        lines = [f"'{', '.join(kw['tokens'][:4])}'로 기록을 찾았습니다(키워드 검색, AI 연결 없음)."]
+        lines += [f"- 요구서 #{r['id']} {r['received_date']} {r['requester']} — {r['title']}" for r in kw["requests"][:8]]
+        lines += [f"- 사유 기록: {x['center']} {x['indicator']} {x['base_date']}: {x['reason']}" for x in kw["reasons"][:5]]
+        return "\n".join(lines)
+    return "의뢰서(hwp·hwpx·pdf·docx·txt)를 붙이고 '요구하는 것들 작성해 줘'라고 하면 끝까지 준비합니다. 기록을 찾으려면 지표나 기관 이름을 넣어 물어보세요. AI를 연결하면 자유로운 지시와 질문에 답합니다."
+
+def _review_panel(case: agent.Case, tpl: bytes | None):
+    """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인."""
+    with st.container(border=True):
+        st.markdown("### 검수 — 확인하고 승인하면 확정됩니다")
+        req = db.get_request(case["request_id"]) if case["request_id"] else {}
+        st.caption(f"요구서 #{case['request_id']} · {req.get('requester') or '요청 주체 미기재'} · {req.get('title') or ''} · 기한 {req.get('due_date') or '-'}")
+        missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
+        if missing: st.warning("자료가 없어 새로 산출해야 하는 항목: " + " / ".join(missing) + ". 초안에는 [확인 필요]로 들어가 있습니다. 집계 파일을 대화에 붙이면 지표 데이터에 넣고 다시 처리합니다.")
+        t1, t2, t3, t4 = st.tabs(["이번에 낼 수치", "대조·차이 사유", "회신 초안", "예상 질문"])
+        with t1:
+            if case["values"] is not None and len(case["values"]):
+                v = case["values"]; st.caption(f"{len(v)}건 · 지표 {', '.join(sorted(v['indicator'].unique())[:5])} · 기준일 {', '.join(sorted(v['base_date'].unique())[:6])}" + (" …" if v["base_date"].nunique() > 6 else ""))
+                st.dataframe(v[VAL_COLS + ["source_file"]].rename(columns=VAL_KO), width="stretch", height=min(60 + 35 * len(v), 360), hide_index=True)
+            else: st.info("가져온 수치가 없습니다.")
+        with t2:
+            m = case["compare"]
+            if m is None: st.info("같은 지표·기준일의 과거 제출값이 없어 대조할 짝이 없습니다(첫 제출).")
+            else:
+                diff = m[m["판정"] == "차이"]
+                k1, k2, k3 = st.columns(3); k1.metric("짝이 맞는 행", int(m["판정"].isin(["차이", "일치", "값 누락"]).sum())); k2.metric("차이", len(diff)); k3.metric("일치", int((m["판정"] == "일치").sum()))
+                st.dataframe(m[["indicator", "center", "base_date", "old_value", "new_value", "diff", "판정", "단서"]].rename(columns={"indicator": "지표", "center": "센터", "base_date": "기준일", "old_value": "지난번", "new_value": "이번", "diff": "차이"}), width="stretch", hide_index=True, height=min(60 + 35 * len(m), 320))
+                if len(diff):
+                    st.markdown("**차이 사유** (제안이 채워져 있음 · 고치면 초안을 다시 씁니다)")
+                    changed = False
+                    for _, r in diff.iterrows():
+                        k = (r["indicator"], r["center"], r["base_date"])
+                        new = st.text_input(f"{r['center']} · {r['indicator']} · {r['base_date']} ({r['old_value']} → {r['new_value']})", value=case["reasons"].get(k, ""), key=f"rv_reason_{k}")
+                        if new != case["reasons"].get(k, ""): case["reasons"][k] = new; changed = True
+                    if changed or case.get("draft_stale"):
+                        if st.button("사유 반영해 초안 다시 쓰기", key="rv_redraft"):
+                            run_ai("초안 다시 쓰는 중", lambda: (agent.step_draft(case), tpl and agent.step_hwpx(case, tpl)), "약 10~15초", "초안 다시 쓰는 중… (규칙 기반)"); st.rerun()
+        with t3:
+            d = case["draft"] or {}
+            st.caption(f"생성 방식: {case.get('draft_how', '')} · 고치면 HWPX에 반영됩니다.")
+            d["제목"] = st.text_input("제목", d.get("제목", ""), key="rv_title")
+            d["본문"] = st.text_area("본문", d.get("본문", ""), height=260, key="rv_body")
+            c1, c2 = st.columns(2)
+            d["차이사유"] = c1.text_area("차이 사유", d.get("차이사유", ""), height=120, key="rv_reasons")
+            d["산출근거"] = c2.text_area("산출 근거", d.get("산출근거", ""), height=120, key="rv_prov")
+            cov = case.get("coverage")
+            if cov is not None and len(cov):
+                n_ok = int((cov["판정"] == "충족").sum())
+                (st.success if n_ok == len(cov) else st.warning)(f"요구 항목 충족 {n_ok}/{len(cov)}" + ("" if n_ok == len(cov) else " — 나머지는 [확인 필요]"))
+                with st.expander("항목별 판정"): st.dataframe(cov, width="stretch", hide_index=True)
+            hits = [h for k in ("제목", "본문", "차이사유", "산출근거") for h in pii.scan_text(d.get(k, ""), f"초안 {k}")]
+            if hits: st.error(f"초안에 개인정보로 보이는 패턴 {len(hits)}건 — 승인 전 삭제·가명 처리")
+        with t4:
+            if st.button("예상 질문 보기", key="rv_foresee"):
+                run_ai("예상 후속 질문 뽑는 중", lambda: agent.step_foresee(case), "보통 20~30초", "예측 중… (규칙 기반)"); st.rerun()
+            if case.get("foresee"):
+                qs, how = case["foresee"]; st.caption(f"생성 방식: {how}")
+                st.dataframe(pd.DataFrame(qs)[["가능성", "질문", "근거", "준비할 자료"]], width="stretch", hide_index=True)
+        st.divider()
+        b1, b2, b3, b4 = st.columns([1.6, 1.4, 1.4, 1.6])
+        if case.get("approved"):
+            sid, did = case["approved"]; b1.success(f"승인됨 · 제출본 #{sid} · 초안 #{did}")
+        elif b1.button("승인하고 확정", type="primary", key="rv_approve", icon=":material/task_alt:", disabled=case["values"] is None or not len(case["values"]),
+                       help="이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 삭제."):
+            if tpl and (case["hwpx"] is None or case.get("draft_stale")): agent.step_hwpx(case, tpl)
+            agent.approve(case, USER, REVIEWER, OUT_DIR); st.toast("승인·확정했습니다"); st.rerun()
+        if case["hwpx"]:
+            if tpl and case.get("draft") and b2.button("HWPX 다시 만들기", key="rv_rehwpx", help="초안을 고쳤으면 눌러 반영"): agent.step_hwpx(case, tpl); st.rerun()
+            b3.download_button("회신 HWPX 받기", case["hwpx"], file_name=case["hwpx_name"], key="rv_dl", icon=":material/download:")
+        if b4.button("단계 화면에서 자세히 고치기", key="rv_detail", type="tertiary"):
+            st.session_state["target_request"] = case["request_id"]; go("새 요구서 처리", 2)
+
+def page_chat():
     ui.page_title(f"{USER}님, 무엇을 할까요", "", "홈")
-    c1, c2, c3 = st.columns(3)
-    if ui.action_card(c1, "새 요구서 처리", "요구서 읽기 → 수치 맞춰 보기 → 회신 초안", "시작", "home_new", "upload_file", primary=True): go("새 요구서 처리", 1)
-    if ui.action_card(c2, "과거 답변 등록", "예전 요구서와 그때 보낸 값을 기억에 저장", "등록", "home_reg", "library_add"): go("과거 답변 등록")
-    if ui.action_card(c3, "기록에 묻기", "언제, 누구에게, 얼마로 냈는지 바로 찾기", "질문", "home_ask", "forum"): go("이력에 묻기")
-    ov = db.request_overview(); pending = db.list_drafts("review_requested")
-    st.markdown("## 현황")
-    if not ov:
-        st.info("아직 기록이 없습니다. 첫 작업으로 '과거 답변 등록'에서 예전에 낸 요구서 하나를 넣어 보세요. 시연용 데이터가 필요하면 설정 → 시연·초기화.")
-        return
-    df = pd.DataFrame(ov); today = pd.Timestamp(dt.date.today())
-    df["D-day"] = (pd.to_datetime(df["due_date"], errors="coerce") - today).dt.days
-    df["상태"] = df.apply(lambda r: "확정 제출" if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
-    live = df[df["상태"] == "진행 중"]; soon = live[live["D-day"].between(0, 3)]
-    k1, k2, k3, k4 = st.columns(4)
-    ui.kpi(k1, len(df), "등록된 요구서", "ok"); ui.kpi(k2, len(live), "진행 중", "ok" if len(live) else ""); ui.kpi(k3, len(soon), "기한 3일 이내", "warn" if len(soon) else ""); ui.kpi(k4, len(pending), "팀장 검토 대기", "warn" if pending else "")
-    df["D-day"] = df["D-day"].astype("object"); df.loc[df["상태"] == "확정 제출", "D-day"] = ""      # 끝난 건은 D-day를 비운다
-    show = df.sort_values(["상태", "D-day"], ascending=[False, True]).head(8)
-    st.dataframe(show.rename(columns={"id": "번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_confirmed": "확정 제출본"})
-                 [["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "확정 제출본"]], width="stretch", hide_index=True)
-    if pending and st.button("검토 대기 초안 보기"): go("검토·승인")
+    case: agent.Case = st.session_state.setdefault("case", agent.Case())
+    hist: list = st.session_state.setdefault("chat", []); st.session_state.setdefault("chat_msgs", [])
+    tpl = _template_bytes()
+    if not hist:
+        with st.container(border=True):
+            st.markdown("**의뢰서를 붙이고 말하면 됩니다.** 예: \"이 의뢰서에서 요구하는 것들 작성해 줘\"  \n요구 항목을 읽고 → 가진 자료(지표 데이터·과거 제출값)에서 기준일을 정해 값을 모으고 → 과거 제출값과 맞춰 보고 → 차이 사유 후보를 채우고 → 회신 초안과 HWPX를 만듭니다. 사람은 아래 검수 화면에서 확인하고 승인합니다.")
+            st.caption("집계 엑셀을 함께 붙이면 지표 데이터에 넣고 씁니다. 과거 이력은 그냥 물어보면 됩니다: \"감사실에 등원율 언제 어떤 값으로 냈지?\"" + ("" if HAS_API else "  \nAI 연결이 없어 지금은 정해진 순서로 처리하고 질문은 키워드 검색으로 답합니다."))
+            if DEMO:
+                c1, c2 = st.columns([1, 3])
+                if c1.button("시연: 의뢰서 붙여 시작", key="chat_demo", icon=":material/play_arrow:"):
+                    p = SAMPLE / "새요구서_의원실_2026-09-15.txt"
+                    st.session_state["chat_pending"] = ("이 의뢰서에서 요구하는 것들 작성해 줘", [(p.name, p.read_bytes())]); st.rerun()
+                c2.caption("가상의 9/15 의원실 요구서를 붙이고 작성을 요청합니다. 먼저 설정 → 시연 데이터 넣기, 지표 데이터에 샘플 적재를 해 두면 결과가 풍부합니다.")
+    for m in hist:
+        with st.chat_message(m["role"], avatar=":material/person:" if m["role"] == "user" else ":material/smart_toy:"):
+            st.markdown(m["text"])
+            if m.get("files"): st.caption("첨부: " + ", ".join(m["files"]))
+    if case["draft"]: _review_panel(case, tpl)
+    prompt = st.chat_input("의뢰서를 붙이고 지시하거나, 기록에 대해 물어보세요", accept_file="multiple", file_type=["hwp", "hwpx", "pdf", "docx", "txt", "xlsx", "xls", "xlsm", "csv"], key="chat_in")
+    pending = st.session_state.pop("chat_pending", None)
+    if prompt is None and pending is None: return
+    if pending: text, files = pending
+    else: text, files = (prompt.text or "").strip(), [(f.name, f.getvalue()) for f in (prompt.files or [])]
+    if not text and not files: return
+    notes = _attach(case, files); case = st.session_state["case"]
+    hist.append({"role": "user", "text": text or "(파일 첨부)", "files": [n for n, _ in files]})
+    if not text: text = "붙인 파일을 확인해 줘" if not case["request_text"] else "이 의뢰서에서 요구하는 것들 작성해 줘"
+    try:
+        if HAS_API:
+            res = run_ai("처리 중", lambda: agent.chat_turn(case, st.session_state["chat_msgs"], text, tpl), "의뢰서 한 건 전체 처리는 보통 30초~2분. 도구 호출이 아래에 찍힙니다")
+            st.session_state["chat_msgs"] = res["messages"]; reply = res["text"] or "(답이 비어 있습니다)"
+        else:
+            reply = run_ai("처리 중", lambda: _rule_reply(case, text, tpl), "", "처리 중… (규칙 기반)")
+    except Exception as e:
+        reply = f"처리 중 오류가 났습니다: {llm.explain_error(e) or e}"
+    hist.append({"role": "assistant", "text": "\n\n".join(notes + [reply]) if notes else reply})
+    st.session_state["chat"] = hist[-40:]; st.rerun()
 
 # ================= 지표 데이터 =================
 def page_data():
@@ -868,7 +996,7 @@ def page_settings():
             except FileNotFoundError:
                 st.info("서식 원본이 상위 폴더에 없어 templates/의 기존 샘플을 그대로 씁니다.")
 
-PAGES = {"홈": page_home, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data,
+PAGES = {"홈": page_chat, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data,
          "이력 조회": page_history, "현황": page_status, "이력에 묻기": page_ask, "설정": page_settings}
 if not HAS_API and page != "설정": ui.ai_banner(lambda: go("설정"))
 PAGES[page]()

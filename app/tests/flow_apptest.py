@@ -27,7 +27,7 @@ def ms_pick(at, key, *texts):
     m.set_value([o for o in m.options if any(t in str(o) for t in texts)]).run(); assert not at.exception, at.exception
 
 # 홈(빈 상태)
-at = app("홈"); assert any("기록이 없습니다" in i.value for i in at.info); print("홈(빈 상태) OK")
+at = app("홈"); assert at.chat_input and any("의뢰서를 붙이고" in m.value for m in at.markdown); print("홈(대화, 빈 상태) OK")
 
 # 과거 답변 등록: 시연 요구서 + 시연 제출본(7월) → 저장
 at = app("과거 답변 등록")
@@ -113,4 +113,13 @@ at = app("검토·승인"); button(at, "승인"); print("승인 후 대기:", [(
 for pg in ("홈", "이력 조회", "현황", "이력에 묻기", "설정"):
     at = app(pg); print(pg, "OK")
 at = app("이력에 묻기"); next(t for t in at.text_input if t.key == "qa_q").set_value("감사실에 등원율 어떻게 냈지?").run(); button(at, "물어보기"); print("이력에 묻기(키워드) OK")
+# 대화 홈: 시연 의뢰서를 붙여 '작성해 줘' → 규칙 경로 autopilot → 검수 패널 → 승인
+at = AppTest.from_file(APP, default_timeout=120); at.session_state["nav"] = "홈"
+at.session_state["chat_pending"] = ("이 의뢰서에서 요구하는 것들 작성해 줘", [("새요구서_의원실_2026-09-15.txt", (Path(__file__).resolve().parents[1] / "sample_data" / "새요구서_의원실_2026-09-15.txt").read_bytes())])
+at.run(); assert not at.exception, at.exception
+reply = [m.value for m in at.markdown if "회신 초안을 썼습니다" in m.value]
+assert reply and "HWPX" in reply[0], [m.value[:80] for m in at.markdown][-6:]
+assert any(b.label == "승인하고 확정" for b in at.button), [b.label for b in at.button][:20]
+case = at.session_state["case"]; assert case["values"] is not None and case["draft"] and case["hwpx"]
+button(at, "승인하고 확정"); assert at.session_state["case"].get("approved"); print("대화 홈 → 검수 → 승인 OK")
 print("DONE")
