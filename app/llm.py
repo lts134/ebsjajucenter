@@ -62,7 +62,7 @@ def explain_error(e: Exception) -> str:
 
 def _model_order() -> list[str]:
     """사용자가 고른 모델이 가장 먼저, 다음은 이 세션에서 성공한 모델, 그다음 공급자 기본 후보 순."""
-    pref = (_cfg().get("model") or os.environ.get("CLAUDE_MODEL") or "").strip()
+    pref = (_cfg().get("model") or os.environ.get("LLM_MODEL") or os.environ.get("CLAUDE_MODEL") or "").strip()
     resolved = _state().get("resolved")
     order = ([pref] if pref else []) + ([resolved] if resolved else []) + list(_provider().default_models)
     seen, out = set(), []
@@ -71,7 +71,7 @@ def _model_order() -> list[str]:
     return out
 
 def model_label() -> str:
-    pref = (_cfg().get("model") or os.environ.get("CLAUDE_MODEL") or "").strip()
+    pref = (_cfg().get("model") or os.environ.get("LLM_MODEL") or os.environ.get("CLAUDE_MODEL") or "").strip()
     cands = _provider().default_models
     return pref or _state().get("resolved") or (cands[0] if cands else "-")
 
@@ -98,6 +98,11 @@ class Truncated(RuntimeError):
     """응답이 max_tokens에 잘렸다(stop_reason=max_tokens). JSON이면 해석 불가이므로 더 큰 한도로 다시 시도해야 한다."""
     def __init__(self, max_tokens: int, text: str):
         super().__init__(f"응답이 {max_tokens} 토큰 한도에서 잘렸습니다."); self.max_tokens, self.text = max_tokens, text
+
+class Refused(RuntimeError):
+    """모델(또는 공급자의 안전 분류기)이 응답을 거절했다(stop_reason=refusal). 규칙 경로로 대체되거나 담당자에게 안내한다."""
+    def __init__(self, model: str):
+        super().__init__(f"{model}이(가) 이 요청에 대한 응답을 거절했습니다(안전 분류). 입력에 개인정보·민감 내용이 없는지 확인하거나 다른 모델을 고르세요."); self.model = model
 
 def set_progress(fn):
     """화면이 호출 진행 상황을 받을 콜백(문자열 하나). 세션(스레드) 한정. None이면 해제."""
@@ -134,6 +139,7 @@ def ask(prompt: str, system: str | None = None, max_tokens: int = 2000, purpose:
         text = _record(msg, model, t0, purpose, use_struct)
         _notify(f"{purpose or '호출'} — {model} 응답 {LAST['latency_s']}초, 출력 {LAST.get('output_tokens') or '?'} 토큰")
         if getattr(msg, "stop_reason", None) == "max_tokens": raise Truncated(max_tokens, text)
+        if getattr(msg, "stop_reason", None) == "refusal" and not text.strip(): raise Refused(model)
         return text
     raise RuntimeError(f"사용 가능한 모델을 찾지 못함(시도: {', '.join(_model_order())}). 설정 화면에서 연결 테스트로 모델을 고르세요. 마지막 오류: {last_err}")
 
@@ -184,7 +190,7 @@ def test_connection() -> dict:
         res["models_error"] = explain_error(e)
     try:
         before = len(log())
-        txt = ask('다음을 JSON으로만 답하세요: {"ok": true}', max_tokens=20, purpose="연결 테스트")
+        txt = ask('다음을 JSON으로만 답하세요: {"ok": true}', max_tokens=400, purpose="연결 테스트")      # 추론 모델은 생각 토큰도 한도에 들어가 20으로는 잘린다
         info = log()[-1] if len(log()) > before else {}
         res.update(ok=True, model=info.get("model"), latency_s=info.get("latency_s"), reply=txt.strip()[:60])
     except Exception as e:
@@ -231,7 +237,10 @@ def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handler
         messages.append({"role": "assistant", "content": msg.content})
         if msg.stop_reason != "tool_use" or not uses:
             _notify(f"{purpose} — 조회 {len(trace)}건을 근거로 답을 정리함 ({time.time() - t0:.1f}초)")
-            return {"text": "".join(getattr(b, "text", "") for b in msg.content).strip(), "trace": trace, "turns": turns, "messages": messages}
+            text = "".join(getattr(b, "text", "") for b in msg.content).strip()
+            if msg.stop_reason == "refusal" and not text: text = f"(모델이 이 요청에 대한 답을 거절했습니다 — {model}의 안전 분류. 질문을 바꾸거나 설정에서 다른 모델을 고르세요.)"
+            elif msg.stop_reason == "max_tokens": text = (text + "\n\n(답이 출력 한도에서 잘렸습니다. 질문을 좁혀 다시 물어보세요.)").strip()
+            return {"text": text, "trace": trace, "turns": turns, "messages": messages}
         results = []
         for u in uses:
             fn = handlers.get(u.name)

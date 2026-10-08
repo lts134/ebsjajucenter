@@ -112,6 +112,12 @@ at = app("검토·승인"); button(at, "승인"); print("승인 후 대기:", [(
 # 나머지 화면
 for pg in ("홈", "이력 조회", "현황", "이력에 묻기", "설정"):
     at = app(pg); print(pg, "OK")
+# 설정 — 공급자 셋(OpenAI 호환·Gemini 포함) 선택 시 입력칸이 뜨고 예외 없음
+for pv in ("openai", "gemini", "none"):
+    at = app("설정", state={"llm_cfg": {"provider": pv}})
+    labels = " ".join(t.label for t in at.text_input)
+    assert (pv == "none") or ("API 키" in labels and "기본 주소" in labels), (pv, labels)
+print("설정 — 공급자 선택(openai·gemini·none) OK")
 at = app("이력에 묻기"); next(t for t in at.text_input if t.key == "qa_q").set_value("감사실에 등원율 어떻게 냈지?").run(); button(at, "물어보기"); print("이력에 묻기(키워드) OK")
 # 대화 홈: 시연 의뢰서를 붙여 '작성해 줘' → 규칙 경로 autopilot → 검수 패널 → 승인
 at = AppTest.from_file(APP, default_timeout=120); at.session_state["nav"] = "홈"

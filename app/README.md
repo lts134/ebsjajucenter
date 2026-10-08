@@ -7,11 +7,11 @@
 |---|---|---|---|
 | 혼자 쓰기(PC) | `run.bat` 더블클릭(또는 `python start.py`) | 내 PC 브라우저만(localhost) | 설정 화면에 입력(세션 한정) 또는 `set_key.bat`로 환경변수에 한 번 저장 |
 | **클라우드(권장)** | `deploy_cloudrun.sh` — Google Cloud Run(쓴 만큼 과금, 요청 없으면 0) + 이력 DB를 Cloud Storage에 실시간 복제(Litestream) | 공개 URL + 접속 비밀번호(`APP_PASSWORD`) | 접속자마다 설정 화면에 입력(또는 공통 키 환경변수). 이력은 컨테이너가 꺼져도 유지. 비용·절차·보안은 `docs/배포_클라우드.md` |
-| 여러 사람(서버) | `run_server.bat` / `run_server.sh` | 같은 망의 PC에서 `http://<서버>:8501` | **접속자마다 설정 화면에 자기 키 입력**(브라우저 세션에만 보관, 서버에 저장 안 됨). 운영자가 서버 환경변수 `ANTHROPIC_API_KEY`에 공통 키를 두면 빈 칸으로도 동작 |
+| 여러 사람(서버) | `run_server.bat` / `run_server.sh` | 같은 망의 PC에서 `http://<서버>:8501` | **접속자마다 설정 화면에 자기 키 입력**(브라우저 세션에만 보관, 서버에 저장 안 됨). 운영자가 서버 환경변수에 공통 키(`ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`GEMINI_API_KEY`)를 두면 빈 칸으로도 동작 |
 
 - 없는 모듈만 자동 설치(이미 있으면 건너뜀). 종료: 터미널에서 Ctrl+C
 - **받는 방법 두 가지**: ① 제출 ZIP(심사용 고정본) 압축 해제 ② GitHub에서 `git clone -b claude/demo-refinement-efn737 https://github.com/lts134/ebsjajucenter.git` 한 뒤 `app` 폴더 사용. ②로 받았으면 이후 갱신은 `update.bat`(최신 코드 받기 + 실행) 한 번으로 끝. 이력 DB(`storage/`)는 유지됨
-- **AI 공급자는 모듈형**: 기본은 Anthropic Claude API. `docs/provider_template.py`를 복사해 `app/provider_<이름>.py`로 두면 설정 화면 '공급자' 목록에 자동으로 나타남(사내 LLM 게이트웨이 등). 기존 코드 수정 없음. `LLM_PROVIDER` 환경변수로 기본 공급자 지정. '사용 안 함'을 고르면 전부 규칙 기반
+- **AI 공급자는 모듈형, 셋 내장**: Anthropic Claude(기본, `ANTHROPIC_API_KEY`) · **OpenAI 호환**(OpenAI·Azure·사내 게이트웨이, `OPENAI_API_KEY`, 주소 바꾸려면 `OPENAI_BASE_URL`) · **Google Gemini**(`GEMINI_API_KEY`). 설정 → 공급자에서 고르고 키를 넣으면 추출·초안·대화 처리·이력 질의가 모두 그 모델로 동작(도구 호출·JSON 스키마 출력을 공급자 형식으로 변환). 다른 백엔드는 `docs/provider_template.py`를 복사해 `app/provider_<이름>.py`로 두면 목록에 자동 추가. `LLM_PROVIDER`·`LLM_MODEL` 환경변수로 기본 공급자·모델 지정. '사용 안 함'을 고르면 전부 규칙 기반
 - 설정 화면 **연결 테스트**로 모델·왕복시간·사용 가능 모델(단가 포함) 확인 → 모델 선택
   - 키가 없으면 규칙 기반(정규식·동의어 사전)으로 동작. 심사용 시연은 Claude 경로 권장
   - 요구서 원문의 전화·이메일·주민번호·계좌 패턴은 Claude에 보내기 전 자동 마스킹. '이력에 묻기' 도구 결과에서는 직원 이름 필드 제거

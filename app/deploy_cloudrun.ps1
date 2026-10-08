@@ -2,13 +2,17 @@
 # 사전: Google Cloud CLI 설치 + 로그인(gcloud init 또는 gcloud auth login). 결제가 연결된 프로젝트(Firebase Blaze와 같은 프로젝트여도 됨).
 # 사용(앱 폴더에서):  .\deploy_cloudrun.ps1 -Project 내-프로젝트-id -AppPassword 접속암호
 #   선택: -Region asia-northeast3  -Bucket 버킷이름  -Service 서비스이름  -AnthropicApiKey 공통키(두면 접속자 전원이 이 키로 호출)
+#         -LlmProvider anthropic|openai|gemini (기본 공급자. 생략하면 기존 설정 유지, 처음이면 anthropic)  -OpenAIApiKey 키  -GeminiApiKey 키
 param(
   [Parameter(Mandatory=$true)][string]$Project,
   [string]$Region = "asia-northeast3",
   [string]$Service = "ebs-request-agent",
   [string]$Bucket = "",
   [string]$AppPassword = "",
-  [string]$AnthropicApiKey = ""
+  [string]$AnthropicApiKey = "",
+  [string]$LlmProvider = "",
+  [string]$OpenAIApiKey = "",
+  [string]$GeminiApiKey = ""
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8   # 한글 깨짐 방지(콘솔 출력 UTF-8)
 # gcloud는 안내문도 stderr로 내보내므로 PowerShell의 'Stop' 모드를 쓰지 않고 종료 코드로 성공·실패를 판단한다.
@@ -66,9 +70,12 @@ if ($LASTEXITCODE -ne 0) { Fail "컨테이너 빌드 실패. 위 로그 링크�
 
 Step "배포"
 # 환경변수는 '갱신'만 한다(--update-env-vars): 다시 배포할 때 -AppPassword를 생략해도 이미 설정된 비밀번호·키가 유지된다.
-$envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic"
+$envs = "LITESTREAM_REPLICA_URL=gcs://$Bucket/history,HISTORY_DB=/data/history.db"
 if ($AppPassword) { $envs += ",APP_PASSWORD=$AppPassword" } else { Write-Host "비밀번호를 지정하지 않아 기존 값을 유지합니다." }
+if ($LlmProvider) { $envs += ",LLM_PROVIDER=$LlmProvider" }
 if ($AnthropicApiKey) { $envs += ",ANTHROPIC_API_KEY=$AnthropicApiKey" }
+if ($OpenAIApiKey) { $envs += ",OPENAI_API_KEY=$OpenAIApiKey" }
+if ($GeminiApiKey) { $envs += ",GEMINI_API_KEY=$GeminiApiKey" }
 gcloud run deploy $Service --image $image --region $Region --platform managed --allow-unauthenticated `
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --cpu-boost --timeout 3600 --session-affinity `
   --update-env-vars $envs

@@ -3,6 +3,7 @@
 # 사전: gcloud 설치·로그인(gcloud auth login), 결제가 연결된 프로젝트(Firebase Blaze와 같은 프로젝트여도 됨).
 # 사용: PROJECT=내-프로젝트 REGION=asia-northeast3 APP_PASSWORD=접속암호 ./deploy_cloudrun.sh
 #   선택: BUCKET=버킷이름(기본 <프로젝트>-ebs-history), SERVICE=서비스이름, ANTHROPIC_API_KEY=공통키(두면 접속자 전원이 이 키로 호출)
+#         LLM_PROVIDER=anthropic|openai|gemini(기본 공급자, 생략하면 기존 설정 유지), OPENAI_API_KEY=키, GEMINI_API_KEY=키
 set -euo pipefail
 : "${PROJECT:?PROJECT 필요}"; REGION="${REGION:-asia-northeast3}"; SERVICE="${SERVICE:-ebs-request-agent}"; BUCKET="${BUCKET:-${PROJECT}-ebs-history}"
 gcloud config set project "$PROJECT" >/dev/null
@@ -22,9 +23,12 @@ REPO="cloud-run-source-deploy"
 gcloud artifacts repositories describe "$REPO" --location="$REGION" >/dev/null 2>&1 || gcloud artifacts repositories create "$REPO" --repository-format=docker --location="$REGION"
 IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/$SERVICE:$(date +%Y%m%d-%H%M%S)"
 gcloud builds submit --tag "$IMAGE" --region "$REGION" --timeout 1200 .
-ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db,LLM_PROVIDER=anthropic"
+ENVS="LITESTREAM_REPLICA_URL=gcs://$BUCKET/history,HISTORY_DB=/data/history.db"
 [ -n "${APP_PASSWORD:-}" ] && ENVS="$ENVS,APP_PASSWORD=$APP_PASSWORD"          # 생략하면 기존 비밀번호 유지
+[ -n "${LLM_PROVIDER:-}" ] && ENVS="$ENVS,LLM_PROVIDER=$LLM_PROVIDER"
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENVS="$ENVS,ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
+[ -n "${OPENAI_API_KEY:-}" ] && ENVS="$ENVS,OPENAI_API_KEY=$OPENAI_API_KEY"
+[ -n "${GEMINI_API_KEY:-}" ] && ENVS="$ENVS,GEMINI_API_KEY=$GEMINI_API_KEY"
 gcloud run deploy "$SERVICE" --image "$IMAGE" --region "$REGION" --platform managed --allow-unauthenticated \
   --min-instances 0 --max-instances 1 --concurrency 40 --memory 1Gi --cpu 1 --cpu-boost --timeout 3600 --session-affinity \
   --update-env-vars "$ENVS"

@@ -18,6 +18,7 @@
     응답 객체는 Anthropic SDK Message와 같은 모양이면 된다: .content(블록 리스트: .type == "text"면 .text, "tool_use"면 .id/.name/.input),
     .stop_reason("end_turn" | "tool_use" | ...), .usage.input_tokens / .usage.output_tokens. 다른 백엔드는 아래 SimpleMessage로 감싸면 된다.
 
+내장 공급자: Anthropic Claude(기본, 공식 SDK) · OpenAI 호환(provider_openai.py: OpenAI·Azure·호환 게이트웨이, HTTP) · Google Gemini(provider_gemini.py, HTTP) · 사용 안 함.
 예시 플러그인 골격은 docs/provider_template.py 참고."""
 from __future__ import annotations
 import importlib, inspect, os, pkgutil
@@ -50,6 +51,33 @@ class SimpleMessage:
     content: list = field(default_factory=list)
     stop_reason: str = "end_turn"
     usage: SimpleUsage = field(default_factory=SimpleUsage)
+
+
+# ---------- 플러그인 공용 도우미: Anthropic 모양의 메시지 블록을 dict든 객체든 같은 방식으로 읽는다 ----------
+def block_get(b, key: str, default=None):
+    """블록(dict 또는 SDK 객체)에서 필드를 꺼낸다."""
+    return b.get(key, default) if isinstance(b, dict) else getattr(b, key, default)
+
+def iter_blocks(content):
+    """메시지 content(문자열 또는 블록 리스트)를 블록 리스트로. 문자열이면 text 블록 하나."""
+    if content is None: return []
+    if isinstance(content, str): return [{"type": "text", "text": content}]
+    return list(content)
+
+def tool_names_by_id(messages: list[dict]) -> dict[str, str]:
+    """이전 assistant 메시지의 tool_use 블록에서 호출 id → 도구 이름. (Gemini처럼 결과에 도구 이름이 필요한 백엔드용)"""
+    out = {}
+    for m in messages:
+        if m.get("role") != "assistant": continue
+        for b in iter_blocks(m.get("content")):
+            if block_get(b, "type") == "tool_use": out[str(block_get(b, "id"))] = str(block_get(b, "name"))
+    return out
+
+
+class HttpError(RuntimeError):
+    """HTTP 백엔드의 오류 응답(상태 코드 + 본문 메시지). 플러그인이 is_not_found/is_bad_request/explain_error에서 쓴다."""
+    def __init__(self, status: int, message: str, body: str = ""):
+        super().__init__(f"HTTP {status}: {message}"); self.status, self.message, self.body = status, message, body
 
 
 class Provider:
@@ -187,7 +215,9 @@ _errors: dict[str, str] = {}
 _discover()
 
 def names() -> list[str]:
-    return list(PROVIDERS)
+    """설정 화면 순서: Anthropic(기본) → 다른 공급자(이름순) → 사용 안 함."""
+    rest = sorted(n for n in PROVIDERS if n not in ("anthropic", "none"))
+    return ["anthropic"] + rest + ["none"]
 
 def get(name: str | None, cfg: dict | None = None) -> Provider:
     cls = PROVIDERS.get((name or "").strip() or os.environ.get("LLM_PROVIDER", "anthropic"), AnthropicProvider)

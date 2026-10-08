@@ -1,5 +1,5 @@
 """추출 품질 점검: 샘플 4건 + 실전형 5건을 규칙 기반과 Claude 경로로 각각 추출해 정답표(testcases.py)와 비교한다.
-사용: (앱과 같은 폴더에서)  set ANTHROPIC_API_KEY=...  →  python check_llm.py
+사용: (앱과 같은 폴더에서)  set ANTHROPIC_API_KEY=...  →  python check_llm.py   (다른 공급자: set LLM_PROVIDER=openai + OPENAI_API_KEY, 또는 gemini + GEMINI_API_KEY)
       키가 없으면 규칙 기반만 점검한다. 결과: storage/llm_check_<날짜>.md (+ 콘솔 요약)
 채점: must(반드시 잡아야 할 지표·기준일 쌍) 재현율, extra(정답표에 없는 쌍) 수, 제출기한·접수일·요청 주체 일치 여부.
 설명·문안 초안 품질은 자동 채점하지 않고 원문을 보고서에 그대로 남겨 담당자가 본다."""
