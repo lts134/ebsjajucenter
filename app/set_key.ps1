@@ -1,5 +1,6 @@
-# 내 PC(현재 Windows 사용자 계정)에 API 키를 환경변수로 저장한다. 혼자 쓰는 PC 전용: 이 계정으로 앱을 띄우는 사람은 모두 이 키로 호출한다.
+﻿# 내 PC(현재 Windows 사용자 계정)에 API 키를 환경변수로 저장한다. 혼자 쓰는 PC 전용: 이 계정으로 앱을 띄우는 사람은 모두 이 키로 호출한다.
 # 저장되는 곳: 사용자 환경변수(레지스트리 HKCU\Environment). 앱 폴더·저장소에는 저장되지 않는다. 적용은 앱을 다시 실행해야 된다.
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; $OutputEncoding = [System.Text.Encoding]::UTF8   # 한글 깨짐 방지(콘솔 출력 UTF-8)
 $sec = Read-Host "Anthropic API 키(sk-ant-...) 입력 — 화면에 표시되지 않음" -AsSecureString
 $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
 if (-not $key) { Write-Host "입력이 비어 있어 저장하지 않았습니다."; exit 1 }
