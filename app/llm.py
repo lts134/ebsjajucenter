@@ -210,6 +210,7 @@ def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_t
     trace, turns, last_err = [], 0, None
     while turns < max_turns:
         t0 = time.time()
+        _notify(f"{purpose} — {turns + 1}회차: {model}이(가) 어떤 기록을 조회할지 정하는 중…" if turns else f"{purpose} — {model}이(가) 질문을 읽고 조회할 기록을 정하는 중…")
         try:
             msg = prov.create_message(model=model, max_tokens=max_tokens, messages=messages, system=system, tools=tools)
         except Exception as e:
@@ -221,6 +222,7 @@ def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_t
         _record(msg, model, t0, purpose, False)
         uses = [b for b in msg.content if getattr(b, "type", "") == "tool_use"]
         if msg.stop_reason != "tool_use" or not uses:
+            _notify(f"{purpose} — 조회 {len(trace)}건을 근거로 답을 정리함 ({time.time() - t0:.1f}초)")
             return {"text": "".join(getattr(b, "text", "") for b in msg.content).strip(), "trace": trace, "turns": turns}
         messages.append({"role": "assistant", "content": msg.content})
         results = []
@@ -234,6 +236,8 @@ def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_t
             s = json.dumps(out, ensure_ascii=False, default=str)
             if len(s) > 8000: s = s[:8000] + f" …(이하 생략, 총 {len(s)}자)"
             trace.append({"tool": u.name, "input": u.input, "rows": len(out) if isinstance(out, list) else None, "result": out})
+            arg = ", ".join(f"{k}={v}" for k, v in (u.input or {}).items())[:80]
+            _notify(f"{purpose} — 조회 {u.name}({arg}) → " + ("오류" if err else (f"{len(out)}건" if isinstance(out, list) else "결과 받음")))
             results.append({"type": "tool_result", "tool_use_id": u.id, "content": s, "is_error": err})
         messages.append({"role": "user", "content": results})
     return {"text": "(도구 호출 횟수 한도에 도달해 답을 마치지 못했습니다. 질문을 더 좁혀 주세요.)", "trace": trace, "turns": turns}

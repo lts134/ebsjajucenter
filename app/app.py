@@ -8,7 +8,7 @@
   과거 답변 등록  — 예전에 낸 요구서와 그때 보낸 값을 기억에 넣기
   이력 조회 · 현황 · 이력에 묻기 · 설정
 역할 경계: AI는 읽기·문안·점검·기억 조회만. 수치 계산·대조는 코드, 사유·확정은 담당자."""
-import os, io, sys, subprocess, datetime as dt, zipfile, json
+import os, io, sys, subprocess, datetime as dt, zipfile, json, threading, queue, time
 from pathlib import Path
 
 def _in_streamlit():
@@ -95,9 +95,8 @@ def _grid_to_values(grid, key: str, source_version_default: str | None = None, b
     st.dataframe(tabular.preview(grid, info), height=180, width="stretch")
     sug = st.session_state.get(f"{key}_map")
     if HAS_API and st.button("AI에게 열 구성 물어보기", key=f"{key}_sug", help="표 제목·머리글·앞 5행만 보냅니다(연락처 패턴은 가린 뒤). 제안은 초안이며 아래에서 확정합니다."):
-        with st.spinner("표 구조 판단 중…"):
-            try: sug = tabular.suggest_mapping(grid, info); st.session_state[f"{key}_map"] = sug
-            except Exception as e: st.warning(f"AI 제안 실패, 규칙 추정값을 사용합니다: {llm.explain_error(e) or e}")
+        try: sug = run_ai("표 구조 판단 중", lambda: tabular.suggest_mapping(grid, info), "약 5초"); st.session_state[f"{key}_map"] = sug
+        except Exception as e: st.warning(f"AI 제안 실패, 규칙 추정값을 사용합니다: {llm.explain_error(e) or e}")
     if sug and sug.get("note"): st.caption(f"AI 메모: {sug['note']}")
     cols = list(range(grid.width())); label = info.col_label
     c_default = [sug["center_col"]] if sug and sug.get("center_col") is not None else (info.center_cols or ([info.center_col] if info.center_col is not None else []))
@@ -185,19 +184,41 @@ def value_sources(key: str, what: str = "값", base_date_default: str | None = N
         df = df.drop_duplicates(subset=["indicator", "center", "base_date"], keep="last").reset_index(drop=True)
     return df, " + ".join(dict.fromkeys(names))
 
-def analyze_with_status(text: str):
-    """추출을 돌리면서 단계(모델·출력 한도·응답 시간·잘림 재시도)를 보여 준다. 긴 요구서는 수십 초~수 분."""
+def run_ai(label: str, fn, hint: str = "", rules_label: str | None = None):
+    """AI 호출을 진행 상자 안에서 실행한다. 호출은 작업 스레드에서 돌고, 화면은 0.5초마다 경과 시간을 갱신하며
+    llm이 보내는 단계 글(모델·입력 크기·응답 시간·잘림 재시도·도구 호출)을 줄줄이 보여 준다. 끝나면 상자가 접히고 걸린 시간이 남는다.
+    AI가 없으면 규칙 기반으로 바로 실행(짧으니 스피너만). fn은 Streamlit 요소를 만지면 안 된다(결과만 반환)."""
     if not HAS_API:
-        with st.spinner("요구 항목 읽는 중… (규칙 기반)"): return analyze(text)
-    box = st.status(f"요구 항목 읽는 중… ({llm.model_label()}, 본문 {len(text):,}자)", expanded=True)
-    lines = []
-    def progress(msg):
-        lines.append(f"{dt.datetime.now().strftime('%H:%M:%S')} {msg}"); box.update(label=msg[:120]); box.write(lines[-1])
-    llm.set_progress(progress)
-    try: res, how = analyze(text)
-    finally: llm.set_progress(None)
-    box.update(label=f"읽기 완료 — {how}", state="complete", expanded=False)
-    return res, how
+        with st.spinner(rules_label or f"{label} (규칙 기반)"): return fn()
+    box = st.status(f"{label} — {llm.model_label()} 준비", expanded=True)
+    with box:
+        timer = st.empty(); log_box = st.container()
+    q: queue.Queue = queue.Queue()
+    cfg = (st.session_state["llm_cfg"], st.session_state["llm_state"], st.session_state["llm_log"])
+    def worker():
+        llm.configure(*cfg); llm.set_progress(lambda m: q.put(m))
+        try: q.put(("done", fn()))
+        except BaseException as e: q.put(("err", e))
+        finally: llm.set_progress(None)
+    threading.Thread(target=worker, daemon=True).start()
+    t0, last, outcome = time.time(), "", None
+    while outcome is None:
+        try: item = q.get(timeout=0.5)
+        except queue.Empty: item = None
+        if isinstance(item, tuple): outcome = item
+        elif isinstance(item, str):
+            last = item; log_box.write(f"{dt.datetime.now().strftime('%H:%M:%S')}  {item}"); box.update(label=f"{label} — {item[:90]}", state="running", expanded=True)
+        timer.markdown(f"**경과 {time.time() - t0:.0f}초**" + (f" · {hint}" if hint else "") + (f"  \n지금: {last}" if last else ""))
+    took = time.time() - t0
+    if outcome[0] == "err":
+        box.update(label=f"{label} 실패 — {took:.0f}초", state="error", expanded=True); timer.error(llm.explain_error(outcome[1]) or str(outcome[1]))
+        raise outcome[1]
+    timer.markdown(f"**완료 — {took:.0f}초**"); box.update(label=f"{label} 완료 — {took:.0f}초", state="complete", expanded=False)
+    return outcome[1]
+
+def analyze_with_status(text: str):
+    """요구서 추출을 진행 상자 안에서. 긴 요구서는 수십 초~수 분."""
+    return run_ai(f"요구 항목 읽는 중 (본문 {len(text):,}자)", lambda: analyze(text), "보통 5~10초, 긴 요구서는 수 분", "요구 항목 읽는 중… (규칙 기반)")
 
 def analyze(text: str):
     res, how = extract.extract(text)
@@ -395,8 +416,7 @@ def step_compare():
             st.markdown("#### 차이가 난 이유 (담당자가 적음)")
             cands_key = tuple((r["indicator"], r["center"], r["base_date"]) for r in diff_rows)
             if st.button("문구 후보 받기 (단서·과거에 쓴 사유 근거)"):
-                with st.spinner("후보 만드는 중…"):
-                    cands, how = assist.reason_candidates(diff_rows)
+                cands, how = run_ai(f"사유 문구 후보 만드는 중 (차이 {len(diff_rows)}건)", lambda: assist.reason_candidates(diff_rows), "보통 10~20초", "후보 만드는 중… (규칙 기반)")
                 st.session_state["reason_cands"] = (cands_key, cands, how)
             cands = st.session_state.get("reason_cands")
             cands = cands[1] if cands and cands[0] == cands_key else None
@@ -448,7 +468,7 @@ def step_draft():
     prov = {k: values.iloc[0].get(k) for k in ("definition", "calc_period", "extract_date", "source_version")} if len(values) else {}
     ck_now = st.session_state.get("last_checklist") if st.session_state.get("last_request") == req["id"] else None
     if st.button("초안 만들기", type="primary"):
-        d, how = draft.make_draft(req, items, values, reasons_raw, prov, ck_now)
+        d, how = run_ai("회신 초안 쓰는 중", lambda: draft.make_draft(req, items, values, reasons_raw, prov, ck_now), "보통 10~15초", "초안 만드는 중… (규칙 기반)")
         st.session_state.update(draft=d, draft_how=how, draft_req=req["id"])
     if not (st.session_state.get("draft_req") == req["id"] and "draft" in st.session_state): return
     d = st.session_state["draft"]
@@ -466,11 +486,10 @@ def step_draft():
     else: st.success(f"모든 요구 항목 충족({n_ok}건)")
     with st.expander("항목별 판정"): st.dataframe(cov, width="stretch", hide_index=True)
     if HAS_API and st.button("AI로 한 번 더 점검 (누락·불일치·단정 표현)"):
-        st.info(draft.coverage_check_llm(items, d, values, ck_now, reasons_raw, prov))
+        st.info(run_ai("초안 점검 중 (누락·불일치·단정 표현)", lambda: draft.coverage_check_llm(items, d, values, ck_now, reasons_raw, prov), "약 5초"))
     st.markdown("#### 이 회신을 받으면 어떤 질문이 올까")
     if st.button("예상 질문 보기 (요구 항목·수치·대조 결과·타 기관 제출 이력 근거)"):
-        with st.spinner("예측 중…"):
-            qs, how = assist.foresee(req, items, values, reasons_raw, ck_now, d)
+        qs, how = run_ai("예상 후속 질문 뽑는 중", lambda: assist.foresee(req, items, values, reasons_raw, ck_now, d), "보통 20~30초 — 요구 항목·수치·대조 결과·타 기관 제출 이력을 함께 봅니다", "예측 중… (규칙 기반)")
         st.session_state["foresee"] = (req["id"], qs, how)
     fs = st.session_state.get("foresee")
     if fs and fs[0] == req["id"]:
@@ -586,10 +605,9 @@ def page_ask():
     go_ = c1.button("물어보기", type="primary", disabled=not q.strip())
     c2.caption("예: " + " · ".join(examples[1:]))
     if go_:
-        with st.spinner("기록 찾는 중…"):
-            res = history_qa.ask(q) if HAS_API else {"text": None, "trace": [], "how": "키 없음 — 키워드 검색"}
-            if not (res.get("text") or "").strip(): res["text"] = None
-            kw = history_qa.keyword_search(q) if res.get("text") is None else None
+        res = run_ai("기록 찾는 중", lambda: history_qa.ask(q), "조회 도구를 골라 몇 차례 호출합니다. 보통 5~30초", "기록 찾는 중… (키워드 검색)") if HAS_API else {"text": None, "trace": [], "how": "키 없음 — 키워드 검색"}
+        if not (res.get("text") or "").strip(): res["text"] = None
+        kw = history_qa.keyword_search(q) if res.get("text") is None else None
         st.session_state.setdefault("qa_log", []).insert(0, {"q": q, "res": res, "kw": kw})
         st.session_state["qa_log"] = st.session_state["qa_log"][:5]
     for i, e in enumerate(st.session_state.get("qa_log", [])):
@@ -646,8 +664,7 @@ def page_settings():
         if c2.button("키 지우기"):
             cfg.clear(); st.session_state["llm_state"] = {}; st.session_state["model_list"] = []; st.rerun()
         if c3.button("연결 테스트", disabled=not llm.available()):
-            with st.spinner("호출 중…"):
-                r = llm.test_connection()
+            r = run_ai("연결 테스트", llm.test_connection, "1~3초")
             if r.get("ok"): st.success(f"연결 성공 · 공급자 {r.get('provider')} · 모델 {r['model']} · 왕복 {r['latency_s']}초")
             else: st.error(f"연결 실패: {r.get('error')}")
             if r.get("models"):

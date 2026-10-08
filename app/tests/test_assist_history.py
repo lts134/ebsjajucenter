@@ -81,6 +81,18 @@ def test_run_tools_loop_executes_handlers_and_returns_trace(monkeypatch):
     tr = fake.calls[2]["messages"][-1]["content"]; assert len(tr) == 2 and tr[0]["type"] == "tool_result" and tr[0]["is_error"] is True
     assert fake.calls[0]["tools"] is history_qa.TOOLS and llm.log()[-1]["purpose"] == "도구 질의"
 
+def test_run_tools_reports_progress(monkeypatch):
+    """진행 상자용 콜백: 회차마다 '정하는 중', 도구마다 '조회 이름(인자) → N건', 끝에 '근거로 답을 정리함'."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()
+    fake = Fake([_M([_Use("search_requests", {"keyword": "감사실"}, "tu1")], "tool_use"), _M([_T("답")], "end_turn")])
+    monkeypatch.setattr(llm, "_provider", lambda: fake)
+    seen = []; llm.set_progress(seen.append)
+    try: llm.run_tools("q", "sys", history_qa.TOOLS, {"search_requests": lambda keyword: [{"id": 1}, {"id": 2}]}, max_turns=3, purpose="이력 질의")
+    finally: llm.set_progress(None)
+    assert any("질문을 읽고 조회할 기록을 정하는 중" in m for m in seen)
+    assert any("조회 search_requests(keyword=감사실) → 2건" in m for m in seen), seen
+    assert any("2회차" in m for m in seen) and "조회 1건을 근거로 답을 정리함" in seen[-1]
+
 def test_run_tools_turn_limit(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test"); llm.reset()
     fake = Fake([_M([_Use("search_requests", {"keyword": "x"}, f"t{i}")], "tool_use") for i in range(3)])
