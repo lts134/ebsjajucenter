@@ -23,7 +23,7 @@ if __name__ == "__main__" and not _in_streamlit():
 
 import pandas as pd
 import streamlit as st
-import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui
+import db, extract, compare, pii, docread, normalize, search, suggest, draft, hwpx_out, llm, assist, history_qa, tabular, ui, plan
 
 st.set_page_config(page_title="대외 요구자료 대응", page_icon="📁", layout="wide")
 ui.inject()
@@ -438,41 +438,39 @@ def step_compare():
     tgt_default = next((i for i, r in enumerate(reqs) if r["id"] == st.session_state.get("target_request")), 0)
     target = st.selectbox("이번에 회신할 요구서", reqs, index=tgt_default, format_func=req_label)
     items = db.get_items(target["id"])
-    # 1) 기록에서 먼저 찾는다: 항목의 지표·기준일이 이미 낸 값과 같으면 그 값을 쓰면 된다(새로 만들 필요 없음)
-    found, missing, hit_sids, where = {}, [], {}, {}
-    for it in items:
-        k = (it.get("indicator"), it.get("base_date"))
-        if k[0] and k[1]:
-            data = db.data_values_for(*k)                       # 1순위: 미리 넣어 둔 지표 데이터(부서의 현재 집계)
-            if data:
-                found[k] = (data, None); where[k] = f"지표 데이터 · 적재 {data[0]['loaded_at'][:10]} · {data[0]['source']} · {len(data)}건"
-                for p_ in db.past_values_for(*k)[:1]: hit_sids[p_["submission_id"]] = hit_sids.get(p_["submission_id"], 0) + 1
-                continue
-            past = db.past_values_for(*k)                         # 2순위: 과거에 낸 값
-            if past:
-                latest_sid = past[0]["submission_id"]; rows = [v for v in past if v["submission_id"] == latest_sid]
-                found[k] = (rows, past[0]); where[k] = f"과거 제출본 #{latest_sid} · {past[0]['submitted_date']} · {past[0]['requester']} · {len(rows)}건"
-                hit_sids[latest_sid] = hit_sids.get(latest_sid, 0) + 1; continue
-        missing.append(it)
-    hist_key = ("cmp_hist", target["id"])
+    # 1) 자료 계획: 항목의 지표·기준일·기간 표현과 '가진 자료'(지표 데이터 → 과거 제출값)의 범위를 맞춰 무엇을 어느 기준일로 낼지 제안한다
+    plans = plan.plan(items, target.get("received_date"))
+    hist_key = ("cmp_hist", target["id"]); hit_sids = {}
+    for pl in plans:
+        if pl["source"] == "past":
+            for d in pl["dates"][:1]:
+                for p_ in db.past_values_for(pl["indicator"], d)[:1]: hit_sids[p_["submission_id"]] = hit_sids.get(p_["submission_id"], 0) + 1
+        elif pl["source"] == "data" and pl["dates"]:
+            for p_ in db.past_values_for(pl["indicator"], pl["dates"][-1])[:1]: hit_sids[p_["submission_id"]] = hit_sids.get(p_["submission_id"], 0) + 1
     with st.container(border=True):
-        st.markdown("**기록에서 찾기** — 항목의 지표·기준일이 '지표 데이터'에 있으면 그 값을, 없으면 과거에 낸 값을 가져옵니다. 새로 만들 것은 아래에만 올리면 됩니다.")
-        if items:
-            rows_tbl = [{"항목": it["item_text"], "지표": it.get("indicator") or "-", "기준일": it.get("base_date") or "-",
-                         "어디에 있나": where.get((it.get("indicator"), it.get("base_date")),
-                                             "기준일이 없어 찾을 수 없음" if not it.get("base_date") else ("지표를 모름" if not it.get("indicator") else
-                                             (f"없음 → 새로 산출 (지표 데이터에 있는 기준일: {', '.join(db.data_dates_for(it['indicator'])[:3])})" if db.data_dates_for(it["indicator"]) else "없음 → 새로 산출")))} for it in items]
-            st.dataframe(pd.DataFrame(rows_tbl), width="stretch", hide_index=True)
-        else: st.caption("이 요구서에 항목이 없습니다. 이력 조회에서 항목을 넣거나 1단계에서 다시 읽으세요.")
+        st.markdown("**자료 계획** — 항목마다 가진 자료(지표 데이터 → 과거 제출값)를 보고 어느 기준일 값을 낼지 제안합니다. 기준일이 없는 항목은 요구 문구(월별·최근 3년…)와 자료 범위로 판단합니다. 확인하고 고치면 됩니다.")
+        if not items: st.caption("이 요구서에 항목이 없습니다. 이력 조회에서 항목을 넣거나 1단계에서 다시 읽으세요.")
+        chosen: dict[int, list[str]] = {}
+        for i, (it, pl) in enumerate(zip(items, plans, strict=True)):
+            with st.container(border=True):
+                a, b = st.columns([3, 2])
+                a.markdown(f"**{it['item_text']}**  \n<span class='small-muted'>지표 {pl['indicator'] or '사전에 없음'} · 요구 기준일 {pl['base_date'] or '없음'}" + (f" · 기간 {it['period']}" if it.get("period") else "") + "</span>", unsafe_allow_html=True)
+                tone = {"exact": "ok", "all": "ok", "latest": "warn", "nearest": "warn", "yearly": "ok", "quarterly": "ok"}.get(pl["mode"], "bad")
+                icon = {"ok": ":material/check_circle:", "warn": ":material/help:", "bad": ":material/cancel:"}[tone]
+                a.markdown(f"{icon} {pl['why']}")
+                if pl["options"] and pl["mode"] not in ("none", "unknown_indicator"):
+                    many = len(pl["options"]) > 1
+                    picked = b.multiselect("낼 기준일", pl["options"], default=pl["dates"], key=f"cmp_dates_{target['id']}_{i}", help="제안이 기본값입니다. 더하거나 빼면 그대로 가져옵니다.") if many else pl["dates"]
+                    chosen[i] = picked
+                    b.caption(f"{'지표 데이터' if pl['source'] == 'data' else '과거 제출값'} · {len(picked)}개 기준일 · 약 {plan._count(pl['indicator'], picked, pl['source'])}건")
+        pullable = {i: d for i, d in chosen.items() if d}
+        missing = [it for it, pl in zip(items, plans, strict=True) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
+        n_rows = sum(plan._count(plans[i]["indicator"], d, plans[i]["source"]) for i, d in pullable.items())
         b1, b2, b3 = st.columns([2.4, 1.3, 2.6])
-        n_found = sum(len(v[0]) for v in found.values())
-        if found and b1.button(f"기록의 값 가져오기 ({len(found)}개 항목 · {n_found}건)", type="primary", key="cmp_pull", icon=":material/history:"):
-            parts = []
-            for rows, meta in found.values():
-                df = pd.DataFrame(rows)[VAL_COLS].copy(); df["source_sheet"] = ""; df["source_row"] = None
-                df["source_file"] = f"기록 제출본 #{meta['submission_id']} ({meta['submitted_date']} {meta['requester']})" if meta else f"지표 데이터 ({rows[0]['source']}, 적재 {rows[0]['loaded_at'][:10]})"
-                parts.append(df)
-            st.session_state[hist_key] = pd.concat(parts, ignore_index=True); st.rerun()
+        if pullable and b1.button(f"계획대로 가져오기 ({len(pullable)}개 항목 · {n_rows}건)", type="primary", key="cmp_pull", icon=":material/history:"):
+            rows = [r for i, d in pullable.items() for r in plan.rows_for(plans[i]["indicator"], d, plans[i]["source"])]
+            df = pd.DataFrame(rows)
+            st.session_state[hist_key] = df[VAL_COLS + ["source_file", "source_sheet", "source_row"]].reset_index(drop=True) if len(df) else None; st.rerun()
         if st.session_state.get(hist_key) is not None and b2.button("가져온 값 비우기", key="cmp_pull_clear"):
             st.session_state.pop(hist_key); st.rerun()
         if missing:
@@ -483,7 +481,9 @@ def step_compare():
             buf = io.BytesIO(); pii.excel_safe(tmpl).to_excel(buf, index=False)
             b3.download_button(f"새로 산출할 {len(missing)}개 항목 입력 서식(엑셀)", buf.getvalue(), file_name=f"입력서식_요구{target['id']}_{dt.date.today()}.xlsx", key="cmp_tmpl",
                                help="지표·센터·기준일이 채워진 긴 형식 서식. '값' 칸만 채워 아래에 올리면 바로 읽힙니다.")
-        if st.session_state.get(hist_key) is not None: st.caption(f"가져온 값 {len(st.session_state[hist_key])}건. 아래에 파일을 올리면 같은 지표·센터·기준일은 올린 값이 우선합니다.")
+        if st.session_state.get(hist_key) is not None:
+            h = st.session_state[hist_key]; ds = sorted(h["base_date"].unique())
+            st.caption(f"가져온 값 {len(h)}건 · 기준일 {ds[0]}" + (f" ~ {ds[-1]} ({len(ds)}개)" if len(ds) > 1 else "") + ". 아래에 파일을 올리면 같은 지표·센터·기준일은 올린 값이 우선합니다.")
     # 2) 지난번 값: 기록에서 가장 많이 맞은 제출본을 기본 선택
     c1, c2 = st.columns(2)
     with c2:

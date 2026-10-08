@@ -383,6 +383,12 @@ def delete_data_batch(batch_id) -> int:
     con.execute("DELETE FROM data_batches WHERE id=?", (batch_id,))
     con.commit(); con.close(); return n
 
+def past_dates_for(indicator) -> list[str]:
+    """과거에 낸(확정) 값이 있는 기준일 목록."""
+    con = connect()
+    rows = con.execute("SELECT DISTINCT v.base_date FROM submission_values v JOIN submissions s ON s.id=v.submission_id WHERE v.indicator=? AND s.status='confirmed' AND v.base_date IS NOT NULL ORDER BY v.base_date", (indicator,)).fetchall()
+    con.close(); return [r[0] for r in rows]
+
 def data_count() -> int:
     con = connect(); n = con.execute("SELECT COUNT(*) FROM indicator_data").fetchone()[0]; con.close(); return n
 
