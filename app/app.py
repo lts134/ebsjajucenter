@@ -393,7 +393,7 @@ def _send_card(case: agent.Case, req: dict):
         if st.button("발송 기록 저장", key=f"disp_save_{sid}", type="primary", icon=":material/send:", disabled=not sent_to.strip()):
             db.add_dispatch(sid, did, str(sent_at), sent_to.strip(), method, USER, memo.strip()); st.toast("발송을 기록했습니다"); st.rerun()
         for x in db.dispatches_for(sid): st.caption(f"✓ {x['sent_at']} · {x['method']} → {x['sent_to']} · {x['sent_by']}" + (f" · {x['note']}" if x["note"] else ""))
-    if st.button("＋ 새 요구 시작", key=f"rv_new_{sid}", icon=":material/add:"): _new_case(); st.rerun()
+    if st.button("새 요구 시작", key=f"rv_new_{sid}", icon=":material/add:"): _new_case(); st.rerun()
 
 def _review_panel(case: agent.Case, tpl: bytes | None):
     """검수: 수치·대조·사유·초안을 한 장에서 확인하고 승인. 입력칸 키에 판 번호(rev)를 넣어 모델·코드가 초안을 새로 쓰면 칸도 새 내용으로 바뀐다."""
@@ -456,8 +456,8 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
         checks = _approve_checks(case, req, case["draft"] or {})
         n_vals = len(case["values"]) if case["values"] is not None else 0
         b1, b2, b3, b4 = st.columns([1.6, 1.5, 1.7, 1.6])
-        with b1.popover("승인하고 확정", icon=":material/task_alt:", disabled=not n_vals, width="stretch", help="이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 제출본을 지웁니다."):
-            st.markdown("**확정 전 확인**")
+        with b1.popover("승인하고 확정", icon=":material/task_alt:", disabled=not n_vals, width="stretch", type="primary"):     # help 말풍선은 열린 팝오버를 가려 넣지 않는다
+            st.markdown("**확정 전 확인**"); st.caption("이번 수치를 확정 제출본으로, 사유와 초안을 승인 기록으로 저장합니다. 되돌리려면 이력 조회에서 제출본을 지웁니다.")
             for tone, t in checks: {"bad": st.error, "warn": st.warning, "info": st.info}[tone](t)
             if not checks: st.success("걸리는 것이 없습니다.")
             n_reason = sum(1 for v in case["reasons"].values() if str(v or "").strip())
@@ -494,7 +494,7 @@ def page_chat():
         if label:
             c1, c2 = st.columns([5, 1.4], vertical_alignment="center")
             c1.caption(f"지금 작업: {label}")
-            if c2.button("＋ 새 요구 시작", key="chat_new", icon=":material/add:", disabled=bool(job), help="지금 작업을 접고 빈 작업으로 시작합니다. 확정한 기록은 남고, 확정하지 않은 초안·수치는 사라집니다."):
+            if c2.button("새 요구 시작", key="chat_new", icon=":material/add:", disabled=bool(job), help="지금 작업을 접고 빈 작업으로 시작합니다. 확정한 기록은 남고, 확정하지 않은 초안·수치는 사라집니다."):
                 _new_case(); st.rerun()
     for m in hist:
         with st.chat_message(m["role"], avatar=":material/person:" if m["role"] == "user" else ":material/smart_toy:"):
@@ -540,7 +540,7 @@ def page_data():
         vdf, vname = value_sources("data_in", "집계값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
         note = st.text_input("출처 메모 (선택)", placeholder="예: 학사시스템 월 집계, 2026-07-03 추출", key="data_note")
         if vdf is not None:
-            st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=200, width="stretch")
+            st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=200, width="stretch", hide_index=True)
             inds = sorted(vdf["indicator"].unique()); dates = sorted(vdf["base_date"].unique())
             st.caption(f"{len(vdf)}건 · 지표 {', '.join(inds[:6])} · 기준일 {', '.join(dates[:4])}" + (" …" if len(dates) > 4 else ""))
             if st.button("지표 데이터에 저장", type="primary", key="data_save", icon=":material/database:"):
@@ -1056,15 +1056,16 @@ def page_status():
     df["D-day"] = (pd.to_datetime(df["due_date"], errors="coerce") - today).dt.days
     dispatched = db.dispatched_request_ids()                   # 확정 ≠ 발송: 발송 기록이 있어야 '발송 완료'
     df["상태"] = df.apply(lambda r: ("발송 완료" if r["id"] in dispatched else "확정(미발송)") if r["n_confirmed"] > 0 else ("기한 경과" if pd.notna(r["D-day"]) and r["D-day"] < 0 else "진행 중"), axis=1)
+    df["D-day"] = df.apply(lambda r: "" if r["상태"] != "진행 중" or pd.isna(r["D-day"]) else int(r["D-day"]), axis=1)      # 끝난 건은 D-day를 비운다(-92 같은 숫자가 미제출처럼 보이지 않게)
     show = df.rename(columns={"id": "번호", "requester": "요청 주체", "received_date": "접수일", "due_date": "제출기한", "title": "제목", "n_items": "항목 수", "n_confirmed": "확정 제출본", "last_submitted": "최근 제출일"})
-    soon = (df["상태"] == "진행 중") & df["D-day"].between(0, 3)
+    soon = df["D-day"].map(lambda d: isinstance(d, int) and 0 <= d <= 3)
     n_unsent = int((df["상태"] == "확정(미발송)").sum())
     c1, c2, c3, c4, c5 = st.columns(5)
     ui.kpi(c1, len(df), "요구서"); ui.kpi(c2, int((df["상태"] == "진행 중").sum()), "진행 중"); ui.kpi(c3, int(soon.sum()), "기한 3일 이내", "warn" if soon.sum() else ""); ui.kpi(c4, int((df["상태"] == "기한 경과").sum()), "기한 경과(미제출)", "bad" if (df["상태"] == "기한 경과").sum() else ""); ui.kpi(c5, n_unsent, "확정(미발송)", "warn" if n_unsent else "")
     view = show[["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "항목 수", "확정 제출본", "최근 제출일"]].fillna({"요청 주체": "미기재", "접수일": "미기재", "제출기한": "미기재", "제목": "(제목 없음)"})
     def _row_style(r):
         if r["상태"] == "기한 경과": return ["background-color: #FDE8E8"] * len(r)
-        if r["상태"] == "진행 중" and pd.notna(r["D-day"]) and r["D-day"] <= 3: return ["background-color: #FFF4D6"] * len(r)
+        if r["상태"] == "진행 중" and isinstance(r["D-day"], int) and r["D-day"] <= 3: return ["background-color: #FFF4D6"] * len(r)
         if r["상태"] == "확정(미발송)": return ["background-color: #E8F1FD"] * len(r)
         return [""] * len(r)
     st.dataframe(view.style.apply(_row_style, axis=1), width="stretch", hide_index=True)
@@ -1075,7 +1076,7 @@ def page_status():
     by_req, by_ind = db.requester_stats()
     c1, c2 = st.columns(2)
     with c1: st.markdown("### 요청 주체별"); st.dataframe(pd.DataFrame(by_req).rename(columns={"requester": "요청 주체", "n_requests": "요구 건수", "n_items": "항목 수", "first_date": "최초", "last_date": "최근"}), width="stretch", hide_index=True)
-    with c2: st.markdown("### 반복 요구 지표"); st.dataframe(pd.DataFrame(by_ind).rename(columns={"indicator": "지표", "n_times": "요구 횟수", "n_requesters": "요청 주체 수", "base_dates": "기준일들"}), width="stretch", hide_index=True); st.caption("여러 번 요구된 지표는 미리 산출해 두면 좋습니다.")
+    with c2: st.markdown("### 반복 요구 지표"); st.dataframe(pd.DataFrame(by_ind).rename(columns={"indicator": "지표", "n_times": "요구 횟수", "n_requesters": "요청 주체 수", "base_dates": "기준일들"}).fillna("-"), width="stretch", hide_index=True); st.caption("여러 번 요구된 지표는 미리 산출해 두면 좋습니다.")
 
 # ================= 이력에 묻기 =================
 def page_ask():
