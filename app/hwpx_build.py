@@ -7,7 +7,7 @@
     "N. {요구 항목 원문}"                                   ← 굵게
     "【확인 : {부서장} ☎ {내선}】"                           ← 오른쪽, 작게. 값이 없으면 [확인 필요]
     본문 문단(초안의 해당 번호 문단)
-    수치 표(센터 × 기준일 — 기준일이 하나면 센터|값), 머리글 음영
+    수치 표(센터 × 기준일 — 기준일이 하나면 센터|값), 머리글 음영·반복, 첫 열은 이름이 한 줄에 들어가는 폭, 24행 넘으면 쪽 단위로 나눔
     "※ 산출 근거: 정의 / 집계기간 / 추출시점 / 원자료 버전"
     "※ 지난 제출값과 차이: 센터 … (사유)"                    ← 대조에서 차이 난 행만
     자료가 없으면 "[확인 필요] 보유 자료 없음 — 별도 산출 필요"
@@ -55,14 +55,91 @@ def _all_int(series) -> bool:
     vs = [x for x in series.tolist() if x is not None and not (isinstance(x, float) and pd.isna(x))]
     return all(isinstance(x, (int, float)) and float(x) == int(x) for x in vs) if vs else True
 
+def _short_date(d: str) -> str:
+    """표 머리글용 짧은 날짜: 월말이면 '25.12 (연.월), 아니면 '26.9.15. 열이 좁아도 한 줄에 들어가게."""
+    try:
+        import calendar
+        y, m, dd = int(d[:4]), int(d[5:7]), int(d[8:10])
+        return f"'{y % 100:02d}.{m}" if dd == calendar.monthrange(y, m)[1] else f"'{y % 100:02d}.{m}.{dd}"
+    except (ValueError, TypeError): return str(d)
+
 def _table_for(df: pd.DataFrame) -> tuple[list[str], list[list[str]]]:
-    """한 지표의 값 → (머리글, 행들). 기준일이 둘 이상이면 센터 × 기준일로 펼친다."""
+    """한 지표의 값 → (머리글, 행들). 기준일이 둘 이상이면 센터 × 기준일로 펼친다(머리글은 짧은 날짜)."""
     dates = sorted(df["base_date"].dropna().unique().tolist())
     centers = list(dict.fromkeys(df["center"].tolist())); as_int = _all_int(df["value"])
     if len(dates) <= 1:
         return ["구분", f"값({dates[0]} 기준)" if dates else "값"], [[c, _fmt(df[df["center"] == c]["value"].iloc[0], as_int)] for c in centers]
     piv = {(r["center"], r["base_date"]): r["value"] for _, r in df.iterrows()}
-    return ["구분"] + dates, [[c] + [_fmt(piv.get((c, d)), as_int) for d in dates] for c in centers]
+    return ["구분"] + [_short_date(d) for d in dates], [[c] + [_fmt(piv.get((c, d)), as_int) for d in dates] for c in centers]
+
+# ---- 표 치수(HWPUNIT = 1/7200인치, 1pt = 100) ----
+TEXT_W = 42520          # A4 본문 폭(210mm - 좌우 30mm씩)
+MAX_ROWS = 24           # 표 하나의 최대 자료 행 — 한 쪽(약 130mm)에 들어가게 나눠서 한글이 표를 통째로 다음 쪽에 보내거나 자르지 않게 한다
+CELL_MARGIN = 280       # 셀 좌우 안쪽 여백(≈1mm) — 열이 많은 표도 들어가게 기본값(510)보다 좁게
+CELL_PAD = CELL_MARGIN * 2
+
+def _text_w(text: str, pt: float = 9) -> int:
+    """글자 폭 추정(HWPUNIT): 한글·전각은 1em, 숫자·영문·기호는 0.55em."""
+    return int(sum((1.0 if ord(ch) > 0x2E7F else 0.55) for ch in str(text)) * pt * 100)
+
+def _line_h(pt: float) -> int: return int(pt * 100 * 1.6) + 160          # 줄 간격 160% + 셀 위아래 여백
+
+def _fit_pt(hdr: list[str], rows: list[list[str]]) -> float:
+    """표 글자 크기: 첫 열 이름과 수치 열이 모두 한 줄에 들어가는 가장 큰 크기(9 → 8 → 7). 7로도 안 되면 7(첫 열이 두 줄로 접힘)."""
+    n = len(hdr)
+    for pt in (9, 8, 7):
+        label = max([_text_w(hdr[0], pt)] + [_text_w(r[0], pt) for r in rows]) + CELL_PAD
+        num = max([_text_w(h, pt) for h in hdr[1:]] + [_text_w(r[c], pt) for r in rows for c in range(1, n)] + [0]) + CELL_PAD
+        if label + num * (n - 1) <= TEXT_W: return pt
+    return 7
+
+def _col_widths(hdr: list[str], rows: list[list[str]], pt: float = 9) -> list[int]:
+    """열 폭: 첫 열(구분)은 가장 긴 이름이 한 줄에 들어가게(본문 폭의 45%까지), 나머지는 남는 폭을 같게. 수치 열은 머리글·값이 들어갈 최소 폭을 지킨다."""
+    n = len(hdr)
+    if n == 1: return [TEXT_W]
+    label_need = max([_text_w(hdr[0], pt)] + [_text_w(r[0], pt) for r in rows]) + CELL_PAD
+    label_w = min(label_need, int(TEXT_W * 0.45))
+    num_need = max([_text_w(h, pt) for h in hdr[1:]] + [_text_w(r[c], pt) for r in rows for c in range(1, n)]) + CELL_PAD
+    rest = TEXT_W - label_w
+    if rest // (n - 1) < num_need: label_w = max(int(TEXT_W * 0.25), TEXT_W - num_need * (n - 1)); rest = TEXT_W - label_w
+    each = rest // (n - 1)
+    ws = [label_w] + [each] * (n - 1); ws[-1] += TEXT_W - sum(ws)
+    return ws
+
+def _lines(text: str, width: int, pt: float = 9) -> int:
+    inner = max(width - CELL_PAD, 500)
+    return max(1, -(-_text_w(text, pt) // inner))
+
+def _emit_table(doc, hdr: list[str], rows: list[list[str]], border, pt: float, ws: list[int]):
+    """표 하나를 문서에 넣는다: 머리글 음영·굵게, 열 폭(ws)·글자 크기(pt)는 전체 표 기준으로 미리 정한 것(나눈 조각이 같은 모양이 되게), 줄 수에 맞춘 행 높이, 첫 열 왼쪽·수치 가운데 정렬, 머리글 반복."""
+    cp_head = doc.ensure_run_style(bold=True, size=pt); cp_body = doc.ensure_run_style(size=pt); lh = _line_h(pt)
+    t = doc.add_table(len(rows) + 1, len(hdr), border_fill_id_ref=border)
+    t.element.set("repeatHeader", "1")                                             # 쪽이 넘어가면 머리글 다시
+    t.set_column_widths(ws)
+    left, center = [], []
+    heights = []
+    for r, row in enumerate([hdr] + rows):
+        h = max(_lines(v, ws[c], pt) for c, v in enumerate(row)) * lh; heights.append(h)
+        for c, v in enumerate(row):
+            t.set_cell_text(r, c, v)
+            cell = t.cell(r, c); cell.set_size(height=h); cell.set_margins(left=CELL_MARGIN, right=CELL_MARGIN, top=141, bottom=141)
+            for p in cell.paragraphs:
+                for run in p.runs: run.char_pr_id_ref = cp_head if r == 0 else cp_body
+                (center if (r == 0 or c > 0) else left).append(p)
+            if r == 0: t.set_cell_shading(r, c, "#EDEDED")
+    sz = t.element.find("{http://www.hancom.co.kr/hwpml/2011/paragraph}sz")
+    if sz is not None: sz.set("height", str(sum(heights)))
+    if left: doc.styles.apply_paragraph_format(paragraphs=left, alignment="LEFT")
+    if center: doc.styles.apply_paragraph_format(paragraphs=center, alignment="CENTER")
+    return t
+
+def _unit_for(indicator: str | None) -> str | None:
+    """표 제목의 단위: 지표 이름에서 분명한 것만(율·률 → %, 학생 수·인원 → 명, 센터 수 → 개소). 모르면 적지 않는다."""
+    s = indicator or ""
+    if re.search(r"[율률]$", s): return "%"
+    if re.search(r"학생\s*수|인원", s): return "명"
+    if re.search(r"센터\s*수|개소", s): return "개소"
+    return None
 
 def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft: dict, reasons: dict | None = None, compare_df: pd.DataFrame | None = None,
                 dept_head: str = "", phone: str = "", org: str = "지역교육협력부", today: dt.date | None = None) -> bytes:
@@ -101,13 +178,11 @@ def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft
         if ind and it.get("base_date") and len(sub) and it["base_date"] in set(sub["base_date"]): sub = sub[sub["base_date"] == it["base_date"]]
         if len(sub):
             hdr, rows = _table_for(sub)
-            para(f"□ {ind} (단위: {it.get('unit') or '-'})", bold10, before=4, after=2)
-            t = doc.add_table(len(rows) + 1, len(hdr), border_fill_id_ref=border)
-            for c, h in enumerate(hdr):
-                t.set_cell_text(0, c, h); t.set_cell_shading(0, c, "#EDEDED")
-            for r, row in enumerate(rows, 1):
-                for c, v in enumerate(row): t.set_cell_text(r, c, v)
-            t.equalize_column_widths()
+            unit = _unit_for(ind); dates = sorted(sub["base_date"].dropna().unique().tolist())
+            para(f"□ {ind}" + (f" (단위: {unit})" if unit else "") + (f" — 기준일 {dates[0]} ~ {dates[-1]}, 각 월 말일" if len(dates) > 1 else ""), bold10, before=4, after=2)
+            pt = _fit_pt(hdr, rows); ws = _col_widths(hdr, rows, pt)
+            for k in range(0, len(rows), MAX_ROWS):                                 # 긴 표는 쪽 크기로 나눠 넣는다(머리글 반복, 같은 열 폭·글자 크기)
+                _emit_table(doc, hdr, rows[k:k + MAX_ROWS], border, pt, ws)
             meta = sub.iloc[0]
             prov = [f"{k}: {meta.get(col)}" for k, col in (("정의", "definition"), ("집계기간", "calc_period"), ("추출시점", "extract_date"), ("원자료 버전", "source_version")) if meta.get(col) not in (None, "", "None") and not (isinstance(meta.get(col), float) and pd.isna(meta.get(col)))]
             if prov: para("※ 산출 근거 — " + " / ".join(prov), note9, after=2)

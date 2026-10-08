@@ -1,3 +1,4 @@
+import io
 import pandas as pd
 import hwpx_build, docread, tabular
 
@@ -9,7 +10,8 @@ def test_table_pivot_and_single_date():
     df = pd.DataFrame([{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 60.3}, {"indicator": "등원율", "center": "센터A", "base_date": "2026-07-31", "value": 61.0},
                        {"indicator": "등원율", "center": "센터B", "base_date": "2026-06-30", "value": 59.4}])
     hdr, rows = hwpx_build._table_for(df)
-    assert hdr == ["구분", "2026-06-30", "2026-07-31"] and rows == [["센터A", "60.3", "61.0"], ["센터B", "59.4", "-"]]
+    assert hdr == ["구분", "'26.6", "'26.7"] and rows == [["센터A", "60.3", "61.0"], ["센터B", "59.4", "-"]]      # 기준일이 여럿이면 머리글은 짧은 날짜(월말 → '연.월)
+    assert hwpx_build._short_date("2026-09-15") == "'26.9.15" and hwpx_build._short_date("2025-12-31") == "'25.12"
     hdr1, rows1 = hwpx_build._table_for(df[df["base_date"] == "2026-06-30"]); assert hdr1 == ["구분", "값(2026-06-30 기준)"] and rows1[0] == ["센터A", "60.3"]
     ints = pd.DataFrame([{"indicator": "등록 학생 수", "center": "센터A", "base_date": "2026-06-30", "value": 188.0}, {"indicator": "등록 학생 수", "center": "센터B", "base_date": "2026-06-30", "value": 1095.0}])
     assert hwpx_build._table_for(ints)[1] == [["센터A", "188"], ["센터B", "1,095"]]        # 정수 표는 정수로, 소수 섞인 표(위)는 61.0처럼 소수 유지
@@ -30,3 +32,28 @@ def test_build_reply_structure_roundtrip():
     assert len(grids) == 1 and grids[0].rows[0] == ["구분", "값(2026-06-30 기준)"] and grids[0].rows[1] == ["센터A", "60.3"] and len(grids[0].rows) == 3   # 합계 행을 만들지 않음
     # 생성한 파일을 다시 열어 표가 그대로 읽히는지(값 재현)
     assert docread.hwpx_tables(out)[0][2] == ["센터C", "67.8"]
+
+
+def test_table_layout_widths_heights_and_chunking():
+    """실제 깨짐 사례(48센터 × 9개월, 긴 센터 이름)의 재현: 첫 열은 이름이 한 줄에 들어가는 폭, 수치 열은 머리글이 들어가는 폭, 24행 단위로 표를 나누고 머리글 반복, 행 높이는 줄 수에 맞춤."""
+    import calendar, zipfile, re
+    months = [f"{y}-{m:02d}-{calendar.monthrange(y, m)[1]:02d}" for y, m in [(2025, 12)] + [(2026, m) for m in range(1, 9)]]
+    names = [f"EBS {s} 자기주도학습센터" for s in ("계룡", "논산", "보은", "청양")] + [f"센터{i:02d}" for i in range(44)]
+    values = pd.DataFrame([{"indicator": "등원율", "center": c, "base_date": d, "value": float((i * 7 + j * 3) % 101)} for i, c in enumerate(names) for j, d in enumerate(months)])
+    hdr, rows = hwpx_build._table_for(values)
+    pt = hwpx_build._fit_pt(hdr, rows); assert pt == 8                                    # 10열은 9pt로 안 들어가 8pt
+    ws = hwpx_build._col_widths(hdr, rows, pt)
+    assert len(ws) == 10 and sum(ws) == hwpx_build.TEXT_W and ws[0] >= hwpx_build._text_w("EBS 계룡 자기주도학습센터", pt) + hwpx_build.CELL_PAD and ws[1] >= hwpx_build._text_w("'25.12", pt) + hwpx_build.CELL_PAD
+    assert all(hwpx_build._lines(r[0], ws[0], pt) == 1 for r in rows)                   # 이름이 한 줄에
+    assert hwpx_build._fit_pt(["구분", "값(2026-06-30 기준)"], [["센터A", "60.3"]]) == 9
+    items = [{"item_text": "2025년 12월 ~ 2026년 8월 센터별 월별 등원율", "indicator": "등원율", "base_date": None, "unit": "센터별"}]
+    out = hwpx_build.build_reply({"requester": "테스트용"}, items, values, {"제목": "t", "본문": "1. 현황은 붙임 표와 같습니다."}, {}, None)
+    sec = zipfile.ZipFile(io.BytesIO(out)).read("Contents/section0.xml").decode("utf-8")
+    tbls = re.findall(r'<hp:tbl [^>]*>', sec)
+    assert len(tbls) == 2 and all('repeatHeader="1"' in t and 'pageBreak="CELL"' in t for t in tbls)                 # 48행 → 24행 × 2
+    assert [int(x) for x in re.findall(r'rowCnt="(\d+)"', sec)] == [25, 25]
+    heights = [int(h) for h in re.findall(r'<hp:sz width="\d+" widthRelTo="ABSOLUTE" height="(\d+)"', sec)]
+    assert heights == [25 * hwpx_build._line_h(8)] * 2                                        # 모든 행이 한 줄 → 25 × 줄 높이
+    assert sec.count('<hp:cellMargin left="280" right="280"') == 2 * 25 * 10
+    assert '(단위: %)' in docread.read("x.hwpx", out) and "(단위: 센터별)" not in docread.read("x.hwpx", out)
+    assert len(docread.hwpx_tables(out)) == 2 and docread.hwpx_tables(out)[1][0][0] == "구분"
