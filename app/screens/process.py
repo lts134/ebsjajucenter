@@ -31,6 +31,7 @@ def step_read():
     res = st.session_state["new_req"]
     st.caption(f"읽은 방식: {st.session_state['new_how']}" + (" · 요구서의 전화·이메일 등은 가린 채 전송됨" if res.get("_redacted") else ""))
     if res.get("_error"): st.warning(f"AI 호출 오류로 규칙 기반 결과입니다: {res['_error']}")
+    if res.get("_match_notes"): st.info("요구 이름과 보유 자료 이름이 달라 가진 자료에 맞춘 항목: " + " / ".join(res["_match_notes"]) + " — 다르면 아래 항목의 지표를 바꾸세요.", icon=":material/join_inner:")
     with st.container(border=True):
         st.markdown(f"**{res.get('title') or '(제목 없음)'}**  \n요청 주체 **{res.get('requester') or '-'}** · 접수 {res.get('received_date') or '-'} · 제출기한 **{res.get('due_date') or '-'}** · 요구 항목 {len(res.get('items') or [])}건")
     sim_req = search.similar_requests(st.session_state["new_text"])
@@ -92,16 +93,17 @@ def step_compare():
             with st.container(border=True):
                 a, b = st.columns([3, 2])
                 a.markdown(f"**{ui.esc(it['item_text'])}**  \n<span class='small-muted'>지표 {ui.esc(pl['indicator'] or '사전에 없음')} · 요구 기준일 {ui.esc(pl['base_date'] or '없음')}" + (f" · 기간 {ui.esc(it['period'])}" if it.get("period") else "") + "</span>", unsafe_allow_html=True)
-                tone = {"exact": "ok", "all": "ok", "latest": "warn", "nearest": "warn", "yearly": "ok", "quarterly": "ok"}.get(pl["mode"], "bad")
+                tone = {"exact": "ok", "all": "ok", "latest": "warn", "nearest": "warn", "yearly": "ok", "quarterly": "ok", "range": "ok", "docs": "ok"}.get(pl["mode"], "bad")
                 icon = {"ok": ":material/check_circle:", "warn": ":material/help:", "bad": ":material/cancel:"}[tone]
                 a.markdown(f"{icon} {pl['why']}")
+                if pl["mode"] == "docs": b.caption("참고 문서 발췌로 초안 작성: " + ", ".join(f"「{h['doc']}」 {h['page']}쪽" for h in pl["doc_hits"][:3]))
                 if pl["options"] and pl["mode"] not in ("none", "unknown_indicator"):
                     many = len(pl["options"]) > 1
                     picked = b.multiselect("낼 기준일", pl["options"], default=pl["dates"], key=f"cmp_dates_{target['id']}_{i}", help="제안이 기본값입니다. 더하거나 빼면 그대로 가져옵니다.") if many else pl["dates"]
                     chosen[i] = picked
                     b.caption(f"{'지표 데이터' if pl['source'] == 'data' else '과거 제출값'} · {len(picked)}개 기준일 · 약 {plan._count(pl['indicator'], picked, pl['source'])}건")
         pullable = {i: d for i, d in chosen.items() if d}
-        missing = [it for it, pl in zip(items, plans, strict=True) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
+        missing = [it for it, pl in zip(items, plans, strict=True) if (not pl["options"] and pl["mode"] != "docs") or pl["mode"] in ("none", "unknown_indicator")]
         n_rows = sum(plan._count(plans[i]["indicator"], d, plans[i]["source"]) for i, d in pullable.items())
         b1, b2, b3 = st.columns([2.4, 1.3, 2.6])
         if pullable and b1.button(f"계획대로 가져오기 ({len(pullable)}개 항목 · {n_rows}건)", type="primary", key="cmp_pull", icon=":material/history:"):

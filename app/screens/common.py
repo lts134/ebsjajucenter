@@ -4,7 +4,7 @@ import subprocess, datetime as dt, json, threading, queue, time
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-import dashboard_import, db, extract, compare, docread, normalize, hwpx_out, llm, tabular, ui
+import dashboard_import, db, match, extract, compare, docread, normalize, hwpx_out, llm, tabular, ui
 
 HERE = Path(__file__).resolve().parents[1]
 SAMPLE = HERE / "sample_data"
@@ -210,7 +210,8 @@ def analyze_with_status(text: str):
 def analyze(text: str):
     res, how = extract.extract(text)
     items = normalize.normalize_items(res.get("items") or [])
-    res["items"] = items if how.startswith("Claude") else normalize.normalize_llm(items)      # 모델 추출이면 지표 분류를 다시 묻지 않는다(중복 호출 제거)
+    items = items if how.startswith("Claude") else normalize.normalize_llm(items)            # 모델 추출이면 지표 분류를 다시 묻지 않는다(중복 호출 제거)
+    res["items"], res["_match_notes"] = match.match_items(items)                             # 이름이 달라도 가진 자료에 맞춘다
     return res, how
 
 def request_input(key: str, demo_glob: str | None):

@@ -998,3 +998,14 @@ def requester_kind(name) -> str | None:
 def list_dispatches() -> list[dict]:
     con = connect(); rows = con.execute("SELECT d.*, s.request_id FROM dispatches d JOIN submissions s ON s.id=d.submission_id ORDER BY d.sent_at, d.id").fetchall(); con.close()
     return [dict(r) for r in rows]
+
+def indicator_catalog() -> list[dict]:
+    """가진 자료의 지표 목록(이름·기준일 범위·센터 수·정의 하나): 지표 데이터(활성) 먼저, 과거 제출값에만 있는 지표는 뒤에."""
+    con = connect()
+    rows = con.execute("""SELECT indicator, COUNT(DISTINCT base_date) AS n_dates, MIN(base_date) AS first, MAX(base_date) AS last, COUNT(DISTINCT center) AS n_centers, MAX(definition) AS definition
+                          FROM indicator_data WHERE active=1 GROUP BY indicator ORDER BY indicator""").fetchall()
+    out = [dict(r, source="지표 데이터") for r in rows]; seen = {r["indicator"] for r in rows}
+    past = con.execute("""SELECT v.indicator, COUNT(DISTINCT v.base_date) AS n_dates, MIN(v.base_date) AS first, MAX(v.base_date) AS last, COUNT(DISTINCT v.center) AS n_centers, MAX(v.definition) AS definition
+                          FROM submission_values v JOIN submissions s ON s.id=v.submission_id WHERE s.status='confirmed' AND v.indicator IS NOT NULL GROUP BY v.indicator ORDER BY v.indicator""").fetchall()
+    out += [dict(r, source="과거 제출값") for r in past if r["indicator"] not in seen]
+    con.close(); return out

@@ -138,7 +138,9 @@ def _review_panel(case: agent.Case, tpl: bytes | None):
                            ("값", n_vals > 0, f"{n_vals}건"), ("대조", m is not None, f"차이 {n_diff}" if m is not None else "첫 제출"), ("사유", n_diff == 0 or n_reason == n_diff, f"{n_reason}/{n_diff}" if n_diff else ""),
                            ("초안", bool(case["draft"]) and not case.get("draft_stale"), "다시 쓰기 필요" if case.get("draft_stale") else ""), ("HWPX", bool(case["hwpx"]) and not case.get("hwpx_stale"), "반영 전" if case.get("hwpx_stale") else ""),
                            ("확정", locked, "")])
-        missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
+        if case.get("match_notes") and not locked: st.info("요구 이름과 보유 자료 이름이 달라 가진 자료에 맞춘 항목: " + " / ".join(case["match_notes"]) + " — 다르면 '단계 화면에서 자세히 고치기'에서 지표를 바꾸세요.", icon=":material/join_inner:")
+        if case.get("doc_hits") and not locked: st.caption("설명 항목은 참고 문서 발췌로 썼습니다: " + " / ".join(f"'{t}' ← " + ", ".join(f"「{h['doc']}」 {h['page']}쪽" for h in hs[:2]) for t, hs in case["doc_hits"].items()))
+        missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if (not pl["options"] and pl["mode"] != "docs") or pl["mode"] in ("none", "unknown_indicator")]
         if missing and not locked: st.warning("자료가 없어 새로 산출해야 하는 항목: " + " / ".join(missing) + ". 초안에는 [확인 필요]로 들어가 있습니다. 집계 파일을 대화에 붙이면 지표 데이터에 넣고 다시 처리합니다.")
         st.markdown("**① 이번에 낼 수치와 대조**")
         if n_vals:

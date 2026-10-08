@@ -84,7 +84,7 @@ def estimate_cost(model: str | None, input_tokens, output_tokens, cache_read=0, 
     return round((input_tokens + (cache_write or 0) * CACHE_WRITE_RATE + (cache_read or 0) * CACHE_READ_RATE) / 1e6 * p[0] + output_tokens / 1e6 * p[1], 6)
 
 # 용도별 추론 강도: 정형 작업은 낮게(빠르고 싸게). 설정 칸에 값이 있으면 그것이 우선. 요구서 추출은 정확도 검증(check_llm.py) 전까지 모델 기본값.
-EFFORT_BY_PURPOSE = {"지표 분류": "low", "표 열 매핑 제안": "low", "연결 테스트": "low"}
+EFFORT_BY_PURPOSE = {"지표 분류": "low", "표 열 매핑 제안": "low", "연결 테스트": "low", "자료 맞춤": "low"}
 
 def _effort_for(purpose: str) -> str | None:
     return (_cfg().get("effort") or "").strip() or EFFORT_BY_PURPOSE.get((purpose or "").replace("(잘림 재시도)", "").replace("(재시도)", "").strip())

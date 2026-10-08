@@ -157,7 +157,7 @@ def page_register():
         title = c4.text_input("제목", res.get("title") or "")
         items_df = pd.DataFrame(res.get("items") or [], columns=extract.ITEM_FIELDS)
         items_df = st.data_editor(items_df, num_rows="dynamic", width="stretch",
-                                  column_config={"item_text": "항목 원문", "indicator": st.column_config.SelectboxColumn("지표명(정규화)", options=list(normalize.CANON), required=False),
+                                  column_config={"item_text": "항목 원문", "indicator": st.column_config.SelectboxColumn("지표명(정규화)", options=list(dict.fromkeys(list(normalize.CANON) + [c["indicator"] for c in db.indicator_catalog()])), required=False),
                                                  "base_date": "기준일", "period": "기간", "unit": "단위"})
         if res.get("_error"): st.warning(f"AI 호출 오류로 규칙 기반 결과입니다: {res['_error']}")
         submitted_date = st.text_input("그때 제출한 날짜", due or "")

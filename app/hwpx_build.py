@@ -165,8 +165,9 @@ def _unit_for(indicator: str | None) -> str | None:
     return None
 
 def build_model(req: dict, items: list[dict], values: pd.DataFrame | None, draft: dict, reasons: dict | None = None, compare_df: pd.DataFrame | None = None,
-                dept_head: str = "", phone: str = "", org: str = "지역교육협력부", today: dt.date | None = None, doc_label: str = "답변자료", show_confirm: bool = True) -> list[dict]:
-    """답변자료의 내용 모형(블록 목록). HWPX(build_reply)와 화면 미리보기(preview_html)가 같은 모형을 그리므로 둘이 어긋나지 않는다.
+                dept_head: str = "", phone: str = "", org: str = "지역교육협력부", today: dt.date | None = None, doc_label: str = "답변자료", show_confirm: bool = True,
+                doc_hits: dict | None = None) -> list[dict]:
+    """답변자료의 내용 모형(블록 목록). doc_hits는 설명 항목의 참고 문서 발췌({원문: [hits]}) — 표 대신 출처 주석을 단다. HWPX(build_reply)와 화면 미리보기(preview_html)가 같은 모형을 그리므로 둘이 어긋나지 않는다.
     블록: title·date·subtitle·pre·heading·confirm·body·table(caption·hdr·rows·big)·note·missing·attach_title·attach"""
     today = today or dt.date.today(); out = []
     out.append({"kind": "title", "text": f"{req.get('requester') or '[확인 필요: 요청 주체]'} {doc_label}"})
@@ -177,7 +178,7 @@ def build_model(req: dict, items: list[dict], values: pd.DataFrame | None, draft
     out += [{"kind": "pre", "text": line} for line in pre]
     confirm = f"【확인 : {org}장 {dept_head or '[확인 필요]'} ☎ {phone or '[확인 필요]'}】"
     vals = values if values is not None else pd.DataFrame(columns=["indicator", "center", "base_date", "value"])
-    reasons = reasons or {}
+    reasons = reasons or {}; doc_hits = doc_hits or {}
     for i, (text, its) in enumerate(groups, 1):
         out.append({"kind": "heading", "text": f"{i}. {text}"})
         if show_confirm: out.append({"kind": "confirm", "text": confirm})
@@ -204,16 +205,18 @@ def build_model(req: dict, items: list[dict], values: pd.DataFrame | None, draft
                     out.append({"kind": "note", "text": "※ 지난 제출값과 차이: " + ", ".join(lines)})
             elif diffs:
                 out.append({"kind": "note", "text": "※ 차이 사유: " + ", ".join(f"{k[1]} {v}" for k, v in diffs)})
-        if not shown: out.append({"kind": "missing", "text": "[확인 필요] 보유 자료 없음 — 별도 산출 필요"})
+        if not shown and doc_hits.get(text): out.append({"kind": "note", "text": "※ 출처: " + ", ".join(f"「{h['doc']}」 {h['page']}쪽" for h in doc_hits[text][:3])})
+        elif not shown: out.append({"kind": "missing", "text": "[확인 필요] 보유 자료 없음 — 별도 산출 필요"})
     if draft.get("산출근거"):
         out.append({"kind": "attach_title", "text": "붙임. 산출 근거"})
         out += [{"kind": "attach", "text": line.strip()} for line in str(draft["산출근거"]).splitlines() if line.strip()]
     return out
 
 def build_reply(req: dict, items: list[dict], values: pd.DataFrame | None, draft: dict, reasons: dict | None = None, compare_df: pd.DataFrame | None = None,
-                dept_head: str = "", phone: str = "", org: str = "지역교육협력부", today: dt.date | None = None, doc_label: str = "답변자료", show_confirm: bool = True) -> bytes:
+                dept_head: str = "", phone: str = "", org: str = "지역교육협력부", today: dt.date | None = None, doc_label: str = "답변자료", show_confirm: bool = True,
+                doc_hits: dict | None = None) -> bytes:
     """답변자료 HWPX. 내용은 build_model이 정하고 여기서는 글꼴·정렬·표 치수만 입힌다."""
-    model = build_model(req, items, values, draft, reasons, compare_df, dept_head, phone, org, today, doc_label, show_confirm)
+    model = build_model(req, items, values, draft, reasons, compare_df, dept_head, phone, org, today, doc_label, show_confirm, doc_hits)
     doc = HwpxDocument.new()
     bold16 = doc.ensure_run_style(bold=True, size=16); bold12 = doc.ensure_run_style(bold=True, size=12); bold10 = doc.ensure_run_style(bold=True, size=10)
     body10 = doc.ensure_run_style(size=10); small9 = doc.ensure_run_style(size=9, color="#444444"); note9 = doc.ensure_run_style(size=9)

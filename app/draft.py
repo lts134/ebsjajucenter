@@ -26,16 +26,19 @@ def _sub(values: pd.DataFrame, ind, bd):
     if not ind or not len(values): return values.iloc[0:0]
     return values[(values["indicator"] == ind) & (values["base_date"] == bd)] if bd else values[values["indicator"] == ind]
 
-def item_summaries(items: list[dict], values: pd.DataFrame) -> list[dict]:
-    """모델에 보내는 항목 요약(값 행은 보내지 않는다): 원문마다 지표별 건수·센터 수·기준일 범위·자료 없음 여부."""
-    out = []
+def item_summaries(items: list[dict], values: pd.DataFrame, doc_hits: dict | None = None) -> list[dict]:
+    """모델에 보내는 항목 요약(값 행은 보내지 않는다): 원문마다 지표별 건수·센터 수·기준일 범위·자료 없음 여부. 설명 항목은 참고 문서 발췌."""
+    out = []; doc_hits = doc_hits or {}
     for i, text in enumerate(unique_texts(items), 1):
         parts = []
         for it in [x for x in items if x.get("item_text") == text]:
             ind, bd = it.get("indicator"), it.get("base_date"); sub = _sub(values, ind, bd)
+            if not ind and doc_hits.get(text):
+                parts.append({"설명 항목": True, "참고 문서 발췌": [{"문서": h["doc"], "쪽": h["page"], "문구": h["text"][:600]} for h in doc_hits[text][:3]]}); continue
             if len(sub):
                 dates = sorted(sub["base_date"].dropna().unique().tolist())
-                parts.append({"지표": ind, "요구 기준일": bd, "값 건수": int(len(sub)), "센터 수": int(sub["center"].nunique()), "기준일": (dates if len(dates) <= 3 else [dates[0], "…", dates[-1]]), "기준일 수": len(dates)})
+                parts.append({"지표": ind, "요구 기준일": bd, "값 건수": int(len(sub)), "센터 수": int(sub["center"].nunique()), "기준일": (dates if len(dates) <= 3 else [dates[0], "…", dates[-1]]), "기준일 수": len(dates),
+                              **({"맞춤": it["matched_by"]} if (it.get("matched_by") or "").startswith("가진 자료 맞춤") else {})})
             else: parts.append({"지표": ind or "지표 미인식", "요구 기준일": bd, "자료 없음": True})
         out.append({"번호": i, "원문": text, "자료": parts})
     return out
@@ -87,18 +90,22 @@ def compare_counts(checklist) -> dict | None:
         if j == "차이" and len(diff) < 30: diff.append(f"{r.get('center') or r.get('센터')}({r.get('base_date') or r.get('기준일')})")
     return {"판정별 건수": cnt, "차이 센터": diff}
 
-def rule_draft(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict, provenance: dict) -> dict:
-    """규칙 기반 문안. 반환: {제목, 본문, 차이사유, 산출근거}. 값을 계산하지 않는다(평균·최소·최대 없음)."""
-    title = f"{req.get('title') or '자료'} 제출"
+def rule_draft(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict, provenance: dict, doc_hits: dict | None = None) -> dict:
+    """규칙 기반 문안. 반환: {제목, 본문, 차이사유, 산출근거}. 값을 계산하지 않는다(평균·최소·최대 없음). 설명 항목은 참고 문서 발췌를 출처와 함께."""
+    title = f"{req.get('title') or '자료'} 제출"; doc_hits = doc_hits or {}
     lines = [f"1. 귀 {req.get('requester') or '기관'}에서 요구하신 「{req.get('title') or '자료'}」(접수 {req.get('received_date') or '-'})에 대하여 아래와 같이 제출합니다."]
     for i, text in enumerate(unique_texts(items), 1):
         parts, missing = [], []
         for it in [x for x in items if x.get("item_text") == text]:
             ind, bd = it.get("indicator"), it.get("base_date"); sub = _sub(values, ind, bd)
+            if not ind and doc_hits.get(text):
+                h = doc_hits[text][0]; ex = re.sub(r"\s+", " ", h["text"]).strip()
+                parts.append(f"참고 문서 「{h['doc']}」 {h['page']}쪽에 따르면 \"{ex[:220]}{'…' if len(ex) > 220 else ''}\" (발췌 · 담당자 확인 후 다듬을 것)"); continue
             if len(sub):
                 dates = sorted(sub["base_date"].dropna().unique().tolist()); n_c = sub["center"].nunique()
                 when = f"{bd} 기준" if bd else (f"{dates[0]} ~ {dates[-1]} 기준({len(dates)}개 기준일)" if len(dates) > 1 else (f"{dates[0]} 기준" if dates else "기준일 미상"))
-                parts.append(f"{when} {ind} {n_c}개 센터 자료를 붙임 표와 같이 제출합니다.")
+                tag = f"(요구 항목에 맞춰 보유 자료 '{ind}'로 작성)" if (it.get("matched_by") or "").startswith("가진 자료 맞춤") else ""
+                parts.append(f"{when} {ind} {n_c}개 센터 자료를 붙임 표와 같이 제출합니다.{tag}")
             else: missing.append(ind or "지표 미인식")
         if missing: parts.append(f"[확인 필요 — {', '.join(missing)}: 확정 수치가 없어 별도 산출 후 제출]")
         lines.append(f"{i + 1}. {text}: " + " ".join(parts))
@@ -139,11 +146,11 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 회신 �
 원칙: 입력으로 받은 수치·사유·근거만 사용합니다. 수치를 새로 계산·요약·추정하지 않고(평균·증감도 계산하지 않음), 사유를 지어내지 않습니다.
 데이터가 없는 항목은 본문에 '[확인 필요]'로 남깁니다. 단정적 평가('우수', '개선됨')를 넣지 않습니다."""
 
-def llm_draft(req, items, values, reasons, provenance, checklist=None, tone: dict | None = None) -> dict:
-    """모델은 제목·본문만 쓴다. 값 행은 보내지 않고(표가 보여 준다) 항목별 요약·대조 건수·지표별 근거만 보낸다. 차이사유·산출근거 칸은 코드가 만든다. tone은 요청 주체 유형별 문체 지침."""
+def llm_draft(req, items, values, reasons, provenance, checklist=None, tone: dict | None = None, doc_hits: dict | None = None) -> dict:
+    """모델은 제목·본문만 쓴다. 값 행은 보내지 않고(표가 보여 준다) 항목별 요약·대조 건수·지표별 근거만 보낸다. 차이사유·산출근거 칸은 코드가 만든다. tone은 요청 주체 유형별 문체 지침, doc_hits는 설명 항목의 참고 문서 발췌."""
     prov_by_ind = provenance_by_indicator(values); tone = tone or {}
     payload = {"요구": pii.redact_obj({k: req.get(k) for k in ("requester", "received_date", "due_date", "title")}),
-               "요구 항목(번호·원문·가진 자료 요약)": pii.redact_obj(item_summaries(items, values)),
+               "요구 항목(번호·원문·가진 자료 요약)": pii.redact_obj(item_summaries(items, values, doc_hits)),
                "담당자가 입력한 차이 사유(원문 그대로 인용 가능)": pii.redact_obj({" ".join(k): v for k, v in reasons.items() if v}),
                "과거 제출값 대조(코드 판정, 건수)": compare_counts(checklist) or "대조 결과 없음 — 차이 유무를 언급하지 말 것",
                "산출 근거(지표별, 참고용)": prov_by_ind or provenance}
@@ -155,26 +162,29 @@ def llm_draft(req, items, values, reasons, provenance, checklist=None, tone: dic
               "수치는 '아래 표와 같습니다'로 안내하고 센터 이름·값·평균·건수 비교를 쓰지 않습니다(값은 보내지 않았고 표가 보여 줍니다). 기준일 범위와 센터 수는 요약에 있는 그대로만 적을 수 있습니다. "
               "자료가 없는 지표는 '[확인 필요]'로 남깁니다. 값이 0이거나 비어 있는 이유, 증감의 원인을 추측하지 않습니다. "
               "대조 결과는 건수만 언급할 수 있고('일치' 건수가 있을 때만 '일치'를 말함), '과거 제출값 없음'·'값 누락'은 언급하지 않습니다. 담당자 사유가 있으면 그 문구만 인용합니다. "
-              "'붙임', '끝.', 인사말('귀 기관의 요구에 따라…')은 쓰지 않습니다.\n\n"
+              "'붙임', '끝.', 인사말('귀 기관의 요구에 따라…')은 쓰지 않습니다. "
+              "'참고 문서 발췌'가 있는 설명 항목은 발췌 범위 안에서만 2~4문장으로 쓰고 문장 끝에 (출처: 문서명 p.쪽)을 붙이며 발췌에 없는 내용을 덧붙이지 않습니다. "
+              "'맞춤' 표시가 있는 지표는 요구 이름과 보유 자료 이름이 달라 맞춘 것이므로 '요구하신 ○○는 보유 자료 △△로 작성'이라고 한 번 밝힙니다.\n\n"
               + json.dumps(payload, ensure_ascii=False, default=str))
     schema = {"type": "object", "additionalProperties": False, "required": ["제목", "본문"], "properties": {"제목": {"type": "string"}, "본문": {"type": "string"}}}
     d = llm.ask_json(prompt, SYSTEM, 8000, purpose="회신 초안", schema=schema)
     return {"제목": str(d.get("제목", "") or ""), "본문": str(d.get("본문", "") or ""), "차이사유": reasons_text(reasons), "산출근거": provenance_text(prov_by_ind, provenance)}
 
-def make_draft(req, items, values, reasons, provenance, checklist=None, tone: dict | None = None) -> tuple[dict, str]:
+def make_draft(req, items, values, reasons, provenance, checklist=None, tone: dict | None = None, doc_hits: dict | None = None) -> tuple[dict, str]:
     if llm.available():
-        try: return llm_draft(req, items, values, reasons, provenance, checklist, tone), f"Claude API ({llm.model_label()})"
+        try: return llm_draft(req, items, values, reasons, provenance, checklist, tone, doc_hits), f"Claude API ({llm.model_label()})"
         except Exception as e:
-            d = rule_draft(req, items, values, reasons, provenance); d["_error"] = f"{type(e).__name__}: {e}"; return d, "규칙 기반(API 오류로 대체)"
-    return rule_draft(req, items, values, reasons, provenance), "규칙 기반(API 키 없음)"
+            d = rule_draft(req, items, values, reasons, provenance, doc_hits); d["_error"] = f"{type(e).__name__}: {e}"; return d, "규칙 기반(API 오류로 대체)"
+    return rule_draft(req, items, values, reasons, provenance, doc_hits), "규칙 기반(API 키 없음)"
 
-def coverage_check(items: list[dict], draft: dict, values: pd.DataFrame) -> pd.DataFrame:
-    """요구 항목 충족 검사(코드). 항목별: 초안 언급 여부, 기준일 언급 여부, 수치 존재 여부, 미확인 표시 여부"""
-    text = " ".join(str(v) for v in draft.values())
+def coverage_check(items: list[dict], draft: dict, values: pd.DataFrame, doc_hits: dict | None = None) -> pd.DataFrame:
+    """요구 항목 충족 검사(코드). 항목별: 초안 언급 여부, 기준일 언급 여부, 수치 존재 여부, 미확인 표시 여부. 설명 항목은 참고 문서 발췌가 초안에 들어갔으면 충족."""
+    text = " ".join(str(v) for v in draft.values()); doc_hits = doc_hits or {}
     rows = []
     for i, it in enumerate(items, 1):
         ind, bd = it.get("indicator"), it.get("base_date")
         has_val = bool(len(values) and ind and (((values["indicator"] == ind) & (values["base_date"] == bd)).any() if bd else (values["indicator"] == ind).any()))   # 기준일 없는 항목은 지표 값이 있으면 충족
+        if not ind and doc_hits.get(it.get("item_text")): has_val = any(h["doc"] in text for h in doc_hits[it["item_text"]])
         head = (it.get("item_text") or "")[:10]
         mentioned = bool(ind and ind in text) or (bool(head) and head in text)
         bd_ok = (bd in text) if bd else None

@@ -69,7 +69,14 @@ def plan_item(item: dict, anchor_date: str | None = None) -> dict:
     text = " ".join(str(item.get(k) or "") for k in ("item_text", "period", "unit"))
     out = {"indicator": ind, "base_date": bd, "mode": "none", "dates": [], "options": [], "source": None, "why": "", "n_rows": 0}
     if not ind:
-        out["mode"] = "unknown_indicator"; out["why"] = "지표를 인식하지 못해 자료를 찾을 수 없습니다. 항목 문구를 확인하거나 지표 사전에 추가하세요."; return out
+        try:
+            import refdocs
+            hits = refdocs.search(item.get("item_text", ""), 3)
+        except Exception: hits = []
+        if hits:                                                       # 수치 지표가 아닌 설명 항목('사업 필요성')은 참고 문서 문구로 초안을 쓴다
+            out.update(mode="docs", doc_hits=hits, why=f"수치 지표가 아닌 설명 항목으로 보여 참고 문서에서 관련 문구 {len(hits)}곳을 찾았습니다(「{hits[0]['doc']}」 {hits[0]['page']}쪽 등). 초안에 발췌와 출처를 넣으니 확인하고 다듬으세요.")
+            return out
+        out["mode"] = "unknown_indicator"; out["why"] = "지표를 인식하지 못했고 가진 자료·참고 문서에서도 맞는 것을 찾지 못했습니다. 항목 문구를 확인하거나 지표 사전에 추가하세요."; return out
     data_dates = sorted(db.data_dates_for(ind)); past_dates = sorted(db.past_dates_for(ind))
     source, options = ("data", data_dates) if data_dates else (("past", past_dates) if past_dates else (None, []))
     out["source"], out["options"] = source, options

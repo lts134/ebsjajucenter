@@ -38,7 +38,7 @@ def request_editor(r: dict):
         title = c4.text_input("제목", r["title"] or "", key=f"ed_ti_{r['id']}")
         its = pd.DataFrame(db.get_items(r["id"]), columns=["id", "request_id", "seq"] + extract.ITEM_FIELDS)[extract.ITEM_FIELDS]
         its = st.data_editor(its, num_rows="dynamic", width="stretch", key=f"ed_items_{r['id']}",
-                             column_config={"item_text": "항목 원문", "indicator": st.column_config.SelectboxColumn("지표명(정규화)", options=list(normalize.CANON), required=False),
+                             column_config={"item_text": "항목 원문", "indicator": st.column_config.SelectboxColumn("지표명(정규화)", options=list(dict.fromkeys(list(normalize.CANON) + [c["indicator"] for c in db.indicator_catalog()])), required=False),
                                             "base_date": "기준일", "period": "기간", "unit": "단위"})
         s1, s2, s3 = st.columns([1, 1, 3])
         cur_st = r.get("status") or "접수"

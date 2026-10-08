@@ -9,7 +9,7 @@
 from __future__ import annotations
 import datetime as dt, re
 import pandas as pd
-import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa
+import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa, match
 
 VAL_COLS = ["indicator", "center", "base_date", "value", "definition", "calc_period", "extract_date", "source_version"]
 SRC_COLS = ["source_file", "source_sheet", "source_row"]
@@ -43,12 +43,16 @@ def step_read(case: Case) -> dict:
     else:
         res, how = extract.extract(case["request_text"])
         items = normalize.normalize_items(res.get("items") or [])
-        res["items"] = items if how.startswith("Claude") else normalize.normalize_llm(items)                # 모델이 이미 지표를 분류했으면 다시 묻지 않는다(규칙 경로일 때만 보조 분류)
+        items = items if how.startswith("Claude") else normalize.normalize_llm(items)                       # 모델이 이미 지표를 분류했으면 다시 묻지 않는다(규칙 경로일 때만 보조 분류)
+        res["items"], notes = match.match_items(items)                                                    # 이름이 달라도 가진 자료에 맞춘다(관리인원↔현원, 투입 인력→코디네이터·행정지원)
+        case["match_notes"] = notes
     if res.get("requester"): res["requester"] = db.canonical_requester(res["requester"])                 # 요청 주체 사전 표기로
     case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = how; case["read_key"] = key
-    case.note(f"요구서 읽음: 항목 {len(res['items'])}건 ({how})")
+    case.note(f"요구서 읽음: 항목 {len(res['items'])}건 ({how})" + (f" · 자료 맞춤 {len(case.get('match_notes') or [])}건" if case.get("match_notes") else ""))
     return {"requester": res.get("requester"), "received_date": res.get("received_date"), "due_date": res.get("due_date"), "title": res.get("title"),
-            "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period")} for i, it in enumerate(res["items"])], "how": how}
+            "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period"), **({"matched_by": it["matched_by"]} if (it.get("matched_by") or "").startswith("가진 자료 맞춤") else {})} for i, it in enumerate(res["items"])],
+            "matched": case.get("match_notes") or [], "how": how,
+            "note": "matched는 요구 이름과 보유 자료 이름이 달라 코드가 맞춘 것 — 답에서 그 사실을 밝힌다. indicator가 null인 항목은 설명 항목이면 참고 문서로, 아니면 새로 산출."}
 
 def _clean_item(text: str) -> str:
     """말로 받은 항목에서 지시어를 뗀다: '센터별 등원율 요청이 들어왔어. 작성해줘' → '센터별 등원율'."""
@@ -69,7 +73,7 @@ def describe_request(case: Case, requester: str | None = None, received_date: st
     head = [f"요구 주체: {requester or '미기재'}", f"접수일: {received_date or '미기재'}", f"제출 기한: {due_date or '미기재'}", f"제목: {title or item_texts[0]}"]
     case["request_text"] = "\n".join(head + [f"{i}. {t}" for i, t in enumerate(item_texts, 1)]); case["request_name"] = name; case["described"] = True
     res = extract.rule_based(case["request_text"]); res.update(requester=requester, received_date=received_date, due_date=due_date, title=title or item_texts[0])
-    res["items"] = normalize.normalize_items(res["items"]); case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = "대화 입력(규칙)"
+    res["items"], case["match_notes"] = match.match_items(normalize.normalize_items(res["items"])); case["extracted"] = res; case["items"] = res["items"]; case["read_how"] = "대화 입력(규칙)"
     if case["request_id"]:
         db.update_request(case["request_id"], requester, received_date, due_date, res["title"]); db.replace_items(case["request_id"], res["items"]); case["items"] = db.get_items(case["request_id"])
     case.update(plans=[], choices={}, values=None, compare=None, draft=None, hwpx=None, coverage=None, foresee=None); case.bump()
@@ -77,7 +81,7 @@ def describe_request(case: Case, requester: str | None = None, received_date: st
     return {"requester": requester, "received_date": received_date, "due_date": due_date, "title": res["title"], "registered": case["request_id"],
             "items": [{"no": i + 1, "item_text": it["item_text"], "indicator": it.get("indicator"), "base_date": it.get("base_date"), "period": it.get("period"), "unit": it.get("unit")} for i, it in enumerate(res["items"])],
             "missing_header": [k for k, v in (("요청 주체", requester), ("접수일", received_date), ("기한", due_date)) if not v],
-            "unknown_indicator": [it["item_text"] for it in res["items"] if not it.get("indicator")]}
+            "matched": case.get("match_notes") or [], "unknown_indicator": [it["item_text"] for it in res["items"] if not it.get("indicator")]}
 
 def set_header(case: Case, requester=None, received_date=None, due_date=None, title=None) -> dict:
     """요청 주체·접수일·기한·제목만 고친다(항목·원문은 그대로). 등록돼 있으면 기록도 고친다. 초안·한글 파일은 다시 만들어야 반영된다."""
@@ -140,6 +144,7 @@ def step_plan(case: Case) -> dict:
     anchor = (case["extracted"] or {}).get("received_date")
     case["plans"] = plan.plan(case["items"], anchor)
     case["choices"] = {i: list(pl["dates"]) for i, pl in enumerate(case["plans"]) if pl["dates"]}
+    case["doc_hits"] = {case["items"][i]["item_text"]: pl["doc_hits"] for i, pl in enumerate(case["plans"]) if pl.get("mode") == "docs"}   # 설명 항목 → 참고 문서 발췌
     case.note("자료 계획 " + ", ".join(f"항목{i + 1}:{pl['mode']}" for i, pl in enumerate(case["plans"])))
     return {"items": [{"no": i + 1, "item_text": it["item_text"], "indicator": pl["indicator"], "requested_base_date": pl["base_date"], "mode": pl["mode"],
                        "proposed_dates": pl["dates"], "available_dates": pl["options"], "source": pl["source"], "why": pl["why"], "n_rows": pl["n_rows"]}
@@ -166,7 +171,7 @@ def step_pull(case: Case) -> dict:
     df = pd.DataFrame(rows)
     if len(df): df = df.drop_duplicates(subset=["indicator", "center", "base_date"], keep="last")        # 같은 지표를 묻는 항목이 둘이면 같은 행이 두 번 모인다
     case["values"] = df[VAL_COLS + SRC_COLS].reset_index(drop=True) if len(df) else None; case.bump()
-    missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if not pl["options"] or pl["mode"] in ("none", "unknown_indicator")]
+    missing = [case["items"][i]["item_text"] for i, pl in enumerate(case["plans"]) if (not pl["options"] and pl["mode"] != "docs") or pl["mode"] in ("none", "unknown_indicator")]
     case.note(f"값 {len(rows)}건 가져옴" + (f", 자료 없는 항목 {len(missing)}건" if missing else ""))
     return {"n_rows": len(rows), "indicators": sorted(df["indicator"].unique().tolist()) if len(df) else [],
             "base_dates": sorted(df["base_date"].unique().tolist()) if len(df) else [], "items_without_data": missing}
@@ -238,9 +243,9 @@ def step_draft(case: Case) -> dict:
     values = case["values"] if case["values"] is not None else pd.DataFrame(columns=VAL_COLS)
     prov = draft.provenance_by_indicator(values)                                                       # 지표별 근거(첫 행 하나만 쓰던 것을 대체)
     ck = compare.checklist(case["compare"], case["reasons"]).to_dict("records") if case["compare"] is not None else None
-    d, how = draft.make_draft(req, items, values, dict(case["reasons"]), prov, ck, tone)
+    d, how = draft.make_draft(req, items, values, dict(case["reasons"]), prov, ck, tone, case.get("doc_hits") or {})
     case["draft"], case["draft_how"], case["checklist"], case["prov"], case["draft_stale"] = d, how, ck, prov, False; case.bump()
-    cov = draft.coverage_check(items, d, values); case["coverage"] = cov
+    cov = draft.coverage_check(items, d, values, case.get("doc_hits") or {}); case["coverage"] = cov
     n_ok = int((cov["판정"] == "충족").sum()) if "판정" in cov else None
     case.note(f"초안 작성 ({how}) · 충족 {n_ok}/{len(cov)}")
     return {"how": how, "title": d.get("제목"), "body": d.get("본문"), "reasons_text": d.get("차이사유"), "provenance": d.get("산출근거"),
@@ -270,7 +275,8 @@ def step_hwpx(case: Case, template_bytes: bytes | None = None, dept_head: str = 
     else:
         tone = case.get("tone") or tone_for(case, req)
         out, kind = hwpx_build.build_reply(req, items, values, d, dict(case["reasons"]), case["compare"], dept_head=dept_head or case.get("dept_head", ""), phone=phone or case.get("phone", ""),
-                                           org=case.get("org") or "지역교육협력부", doc_label=tone.get("doc_label") or "답변자료", show_confirm=bool(tone.get("show_confirm", True))), f"{tone.get('doc_label') or '답변자료'} 양식"
+                                           org=case.get("org") or "지역교육협력부", doc_label=tone.get("doc_label") or "답변자료", show_confirm=bool(tone.get("show_confirm", True)),
+                                           doc_hits=case.get("doc_hits") or {}), f"{tone.get('doc_label') or '답변자료'} 양식"
         rows = values
     name = safe_filename(f"답변자료_{req.get('requester') or '요구'}_{dt.date.today()}" + (f"_요구{case['request_id']}" if case["request_id"] else "") + ".hwpx")
     case["hwpx"], case["hwpx_name"], case["hwpx_stale"] = out, name, False; case.note(f"HWPX 생성 {name} ({len(out) // 1024}KB, {kind})")
@@ -306,6 +312,7 @@ def autopilot(case: Case, template_bytes: bytes | None = None, register: bool = 
     """표준 순서로 끝까지. 각 단계의 한 줄 설명을 돌려준다(대화에 그대로 보여 줌). register=False면 기록 등록을 승인 때까지 미룬다."""
     lines = []
     r = step_read(case); lines.append(f"요구서를 읽었습니다. 요청 주체 {r['requester'] or '미기재'} · 접수 {r['received_date'] or '미기재'} · 기한 {r['due_date'] or '미기재'} · 요구 항목 {len(r['items'])}건.")
+    if case.get("match_notes"): lines.append("요구 이름과 보유 자료 이름이 달라 가진 자료에 맞춘 항목: " + " / ".join(case["match_notes"]) + ". 다르면 단계 화면에서 지표를 바꾸세요.")
     if register or case["request_id"]: case["no_register"] = False; step_register(case); lines.append(f"요구서 #{case['request_id']}로 기록했습니다.")
     else: case["no_register"] = True; lines.append("기록에는 등록하지 않았습니다(승인하면 그때 요구서·제출본으로 남습니다).")
     p = step_plan(case)
@@ -361,7 +368,7 @@ SYSTEM = """당신은 EBS 지역교육협력부의 대외 요구자료 담당자
 1. '작성해 줘' '처리해 줘' 같은 지시에는 run_all 하나로 시작합니다(읽기부터 한글 파일까지 포함하므로 read_request를 따로 먼저 부르지 않습니다). 끝나면 단계별로 짧게 설명합니다: 무엇을 읽었고, 어떤 자료를 어느 기준일로 넣었고, 과거 제출값과 어디가 다른지, 초안과 한글 파일을 만들었는지.
 2. 요구서 파일이 없어도 사용자가 말로 요구를 알려 주면("센터별 등원율 요청이 들어왔어", "25년 12월부터 26년 8월까지") 되묻지 말고 describe_request로 적은 뒤 바로 run_all을 합니다. 요청 기관·기한처럼 모르는 칸은 비워 두고, 결과 끝에 "알려 주시면 반영합니다"라고 한 줄만 덧붙입니다. 나중에 그 칸을 말하면 describe_request로 고치고 필요한 단계를 다시 합니다. 사용자가 "등록은 빼고 파일만" 하면 run_all(register=false)로 합니다(확정할 때 기록됩니다).
 3. 자료 계획에서 판단이 갈리는 항목(기준일이 없거나 요구 기준일 자료가 없음)은 제안 이유를 그대로 전하고, 다른 기준일을 원하면 set_dates → pull_values → compare_with_past → write_draft → make_hwpx 순으로 다시 합니다.
-4. 자료가 없는 항목은 '지표 데이터에 없음 → 새로 산출 필요'라고 분명히 말하고 지어내지 않습니다. 자료가 있는지는 상태줄의 '지표 데이터 보유'와 data_coverage로 봅니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
+4. 요구 이름과 보유 자료 이름이 달라도 뜻이 같거나 포괄하면 코드가 가진 자료에 맞춥니다(read_request·run_all 결과의 matched: '관리인원'↔'현원', '투입 인력 현황'→코디네이터·행정지원인력). 맞춘 사실을 답에 밝힙니다. 수치가 아닌 설명 항목(사업 필요성 등)은 참고 문서 발췌로 초안을 씁니다. 그래도 맞는 자료가 없는 항목만 '새로 산출 필요'라고 말하고, 그때도 data_coverage로 비슷한 지표가 없는지 먼저 확인해 제안합니다. 지어내지 않습니다. indicator_history·past_values_for는 과거에 **제출한** 이력일 뿐이라, 거기에 없어도 지표 데이터에 있으면 낼 수 있습니다. [첨부 처리] 줄에 "지표 데이터에 넣었습니다"가 있으면 그 파일 값은 이미 들어온 것입니다.
 5. 사용자가 사유나 문안을 말하면 set_reason / edit_draft로 반영한 뒤 write_draft(사유를 바꾼 경우) → make_hwpx를 다시 합니다.
 6. 과거 기록 질문은 기록 조회 도구로 조회한 결과만 근거로 답합니다. 조회되지 않은 것은 '기록에 없음'. 같은 지표·기준일의 제출값이 서로 다른 센터가 보이면 diff_reasons(center 지정)로 기록된 사유를 찾아 그대로 인용하고, 없으면 '사유 기록 없음'. 답에는 요구번호(#id)·제출본번호·제출일·요청 기관을 적습니다.
 7. 사업 자체에 대한 질문(이용 대상·비용·운영 시간·인원 구성·절차·근거 법령 등)은 search_docs로 참고 문서(지침·운영 매뉴얼)를 찾아 그 문구만 근거로 답하고 문서 이름과 쪽을 밝힙니다. 없으면 "참고 문서에 없습니다". 센터의 지역·유형·개소일·정원·주말 운영은 center_info / list_centers(센터 명부)로 답합니다.
