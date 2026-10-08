@@ -1,5 +1,4 @@
 """1차 권장 반영분: 조직 설정 영속화, 문구 서랍, 백업·복원, 머리 정보만 고치기(set_header), 메일 문안 발신 표기."""
-import os
 import agent, draft
 
 
@@ -148,8 +147,8 @@ def test_monthly_report(fresh_db):
     import report
     db = fresh_db
     r1 = db.add_request("감사실", "2026-09-02", "2026-09-10", "a", "원문", "f.txt", [{"item_text": "등원율", "indicator": "등원율", "base_date": "2026-06-30"}, {"item_text": "학생 수", "indicator": "등록 학생 수", "base_date": None}])
-    r2 = db.add_request("○○○ 의원실", "2026-09-20", "2026-09-25", "b", "원문", "f.txt", [{"item_text": "등원율", "indicator": "등원율", "base_date": None}])
-    r3 = db.add_request("교육부", "2026-08-15", "2026-08-20", "c", "원문", "f.txt", [])
+    db.add_request("○○○ 의원실", "2026-09-20", "2026-09-25", "b", "원문", "f.txt", [{"item_text": "등원율", "indicator": "등원율", "base_date": None}])
+    db.add_request("교육부", "2026-08-15", "2026-08-20", "c", "원문", "f.txt", [])
     s1 = db.add_submission(r1, "2026-09-05", "u", "f", "confirmed", "", [{"indicator": "등원율", "center": "A", "base_date": "2026-06-30", "value": 1.0}])
     did = db.add_draft(s1, r1, {"제목": "t", "본문": "b"}, None, status="approved"); db.add_dispatch(s1, did, "2026-09-07", "감사실", "메일", "u")
     assert "2026-09" in report.months_available() and report.months_available()[0] == "2026-09"

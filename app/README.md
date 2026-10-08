@@ -63,7 +63,8 @@
 ## 파일
 | 파일 | 역할 |
 |---|---|
-| `app.py` / `start.py` / `run.bat` | 화면 / 실행·모듈 설치 / 실행 배치 |
+| `app.py` / `screens/` / `start.py` / `run.bat` | 진입점(잠금·사이드바·라우팅) / 화면 모듈(common 공통, home 홈·검수, data 자료, process 단계, records 검토·기록·현황, settings 설정) / 실행·모듈 설치 / 실행 배치 |
+| `report.py` | 월간 리포트(접수·확정·발송·소요일 단순 집계, 요약문·엑셀) |
 | `llm.py` / `providers.py` | LLM 공통 호출(세션별 설정, 모델 자동 대체, 구조화 출력+텍스트 파싱 대체, 도구 루프, 호출 기록·비용) / 공급자 플러그인(기본 Anthropic, `provider_*.py` 자동 발견) |
 | `run_server.bat` / `run_server.sh` | 사내 PC 서버 모드 실행 |
 | `Dockerfile` / `start_cloud.sh` / `litestream.yml` / `deploy_cloudrun.sh`·`.ps1` | 클라우드(Cloud Run) 배포: 기록 DB 복원·복제 포함 |

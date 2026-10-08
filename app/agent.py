@@ -9,7 +9,7 @@
 from __future__ import annotations
 import datetime as dt, re
 import pandas as pd
-import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa, refdocs
+import db, extract, normalize, plan, compare, assist, draft, hwpx_out, hwpx_build, llm, pii, history_qa
 
 VAL_COLS = ["indicator", "center", "base_date", "value", "definition", "calc_period", "extract_date", "source_version"]
 SRC_COLS = ["source_file", "source_sheet", "source_row"]
@@ -52,7 +52,7 @@ def step_read(case: Case) -> dict:
 
 def _clean_item(text: str) -> str:
     """말로 받은 항목에서 지시어를 뗀다: '센터별 등원율 요청이 들어왔어. 작성해줘' → '센터별 등원율'."""
-    t = re.split(r"\s*(?:요청이|요구가|자료가|자료\s*요청이)?\s*(?:들어왔|왔어요|왔어|왔는데|왔습니다|작성해|처리해|만들어|준비해|회신해|해\s*줘|해줘|해\s*주세요|부탁)", text or "", 1)[0]
+    t = re.split(r"\s*(?:요청이|요구가|자료가|자료\s*요청이)?\s*(?:들어왔|왔어요|왔어|왔는데|왔습니다|작성해|처리해|만들어|준비해|회신해|해\s*줘|해줘|해\s*주세요|부탁)", text or "", maxsplit=1)[0]
     return re.sub(r"[\s,.。]+$", "", t).strip() or (text or "").strip()
 
 def describe_request(case: Case, requester: str | None = None, received_date: str | None = None, due_date: str | None = None, title: str | None = None,

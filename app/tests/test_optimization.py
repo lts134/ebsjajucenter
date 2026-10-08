@@ -2,7 +2,6 @@
 값 중복, 산출 근거의 nan, 답변자료 본문 번호·소수 표기·날짜 줄, 기간 표현, 대시보드 숫자, 대화 경계 요약, 메일 문안."""
 import datetime as dt
 import pandas as pd
-import pytest
 import db, compare, pii, agent, docread, draft, hwpx_build, plan, dashboard_import
 
 

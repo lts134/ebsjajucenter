@@ -45,7 +45,7 @@ def provenance_by_indicator(values: pd.DataFrame) -> dict:
     out = {}
     if values is None or not len(values): return out
     for ind, g in values.groupby("indicator"):
-        def vals(col):
+        def vals(col, g=g):
             return sorted({str(x).strip() for x in g[col].dropna().tolist() if str(x).strip().lower() not in ("", "none", "nan", "nat")}) if col in g.columns else []
         d = {}
         if vals("definition"): d["정의"] = " / ".join(vals("definition")[:2]) + (" 외" if len(vals("definition")) > 2 else "")
