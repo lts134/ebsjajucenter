@@ -71,6 +71,26 @@ CREATE TABLE IF NOT EXISTS reviews (        -- 팀장 검토 이력
     comment TEXT,
     created_at TEXT
 );
+CREATE TABLE IF NOT EXISTS data_batches (      -- 지표 데이터 적재 묶음(요구서와 무관하게 미리 넣어 두는 집계값)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    loaded_at TEXT,
+    loaded_by TEXT,
+    source TEXT,               -- 파일명·시스템명
+    note TEXT,
+    n_rows INTEGER
+);
+CREATE TABLE IF NOT EXISTS indicator_data (    -- 지표 데이터(센터×지표×기준일 값 + 산출 근거). 같은 키는 최신 적재가 대체
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER,
+    indicator TEXT,
+    center TEXT,
+    base_date TEXT,
+    value REAL,
+    definition TEXT, calc_period TEXT, extract_date TEXT, source_version TEXT,
+    source_file TEXT, source_sheet TEXT, source_row INTEGER,
+    FOREIGN KEY(batch_id) REFERENCES data_batches(id)
+);
+CREATE INDEX IF NOT EXISTS idx_indicator_data_key ON indicator_data(indicator, base_date);
 CREATE TABLE IF NOT EXISTS diff_reasons (      -- 차이 사유(담당자 입력)
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     submission_id INTEGER,
@@ -321,6 +341,50 @@ def all_values_sample(limit=2000):
     con = connect()
     rows = con.execute("SELECT indicator, center, base_date FROM submission_values ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     con.close(); return [dict(r) for r in rows]
+
+# ---------- 지표 데이터(미리 넣어 두는 집계값) ----------
+def add_data_batch(values, loaded_by, source, note="") -> tuple[int, int]:
+    """집계값 묶음 적재. 같은 지표·센터·기준일이 이미 있으면 새 값으로 대체(이전 행 삭제). (batch_id, 저장 건수) 반환."""
+    con = connect()
+    rows = [v for v in values if _s(v.get("indicator")) and _s(v.get("center")) and _s(v.get("base_date")) and v.get("value") is not None and v.get("value") == v.get("value")]
+    cur = con.execute("INSERT INTO data_batches(loaded_at,loaded_by,source,note,n_rows) VALUES(?,?,?,?,?)", (now(), loaded_by, source, note, len(rows)))
+    bid = cur.lastrowid
+    con.executemany("DELETE FROM indicator_data WHERE indicator=? AND center=? AND base_date=?", [(_s(v["indicator"]), _s(v["center"]), _s(v["base_date"])) for v in rows])
+    con.executemany("INSERT INTO indicator_data(batch_id,indicator,center,base_date,value,definition,calc_period,extract_date,source_version,source_file,source_sheet,source_row) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    [(bid, _s(v["indicator"]), _s(v["center"]), _s(v["base_date"]), float(v["value"]), _s(v.get("definition")), _s(v.get("calc_period")), _s(v.get("extract_date")),
+                      _s(v.get("source_version")), _s(v.get("source_file")), _s(v.get("source_sheet")), _int_or_none(v.get("source_row"))) for v in rows])
+    con.commit(); con.close(); return bid, len(rows)
+
+def data_values_for(indicator, base_date):
+    con = connect()
+    rows = con.execute("SELECT d.*, b.loaded_at, b.source FROM indicator_data d JOIN data_batches b ON b.id=d.batch_id WHERE d.indicator=? AND d.base_date=? ORDER BY d.center", (indicator, base_date)).fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def data_coverage():
+    """지표 × 기준일별 건수와 최근 적재일(화면의 '무엇이 들어 있나' 표)."""
+    con = connect()
+    rows = con.execute("""SELECT d.indicator, d.base_date, COUNT(*) AS n_centers, MAX(b.loaded_at) AS loaded_at, MAX(b.source) AS source
+                          FROM indicator_data d JOIN data_batches b ON b.id=d.batch_id GROUP BY d.indicator, d.base_date ORDER BY d.indicator, d.base_date DESC""").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def data_dates_for(indicator):
+    con = connect()
+    rows = con.execute("SELECT DISTINCT base_date FROM indicator_data WHERE indicator=? ORDER BY base_date DESC", (indicator,)).fetchall()
+    con.close(); return [r[0] for r in rows]
+
+def list_data_batches():
+    con = connect()
+    rows = con.execute("SELECT b.*, (SELECT COUNT(*) FROM indicator_data d WHERE d.batch_id=b.id) AS n_live FROM data_batches b ORDER BY b.id DESC").fetchall()
+    con.close(); return [dict(r) for r in rows]
+
+def delete_data_batch(batch_id) -> int:
+    con = connect()
+    n = con.execute("DELETE FROM indicator_data WHERE batch_id=?", (batch_id,)).rowcount
+    con.execute("DELETE FROM data_batches WHERE id=?", (batch_id,))
+    con.commit(); con.close(); return n
+
+def data_count() -> int:
+    con = connect(); n = con.execute("SELECT COUNT(*) FROM indicator_data").fetchone()[0]; con.close(); return n
 
 # ---------- 통계 ----------
 def request_overview():

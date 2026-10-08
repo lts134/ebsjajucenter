@@ -21,7 +21,11 @@ def suggest(item: dict) -> dict:
     src, owner = CATALOG.get(ind, ("[확인 필요]", "[확인 필요]"))
     out["데이터 출처"], out["담당"] = src, owner
     past = db.past_values_for(ind, bd) if bd else []
-    if past:
+    data = db.data_values_for(ind, bd) if bd and hasattr(db, "data_values_for") else []
+    if data:
+        out["과거 제출"] = f"{past[0]['submitted_date']} {past[0]['requester']} ({len(past)}건)" if past else "없음"
+        out["판단"] = f"지표 데이터에 있음({len(data)}건) → 2단계에서 자동으로 채움" + (", 과거 제출값과 대조" if past else "")
+    elif past:
         out["과거 제출"] = f"{past[0]['submitted_date']} {past[0]['requester']} ({len(past)}건)"
         out["판단"] = "과거 제출값 있음 → 새 집계값과 대조 후 재사용"
     elif bd:

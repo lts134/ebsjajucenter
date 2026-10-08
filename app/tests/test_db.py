@@ -54,3 +54,16 @@ def test_edit_and_delete_cascade(fresh_db):
     info = db.delete_request(rid); assert info["submissions"] == 1 and info["drafts"] == 1 and info["values"] == 1 and info["items"] == 2
     assert [r["id"] for r in db.list_requests()] == [rid2] and db.get_items(rid) == [] and db.list_submissions() == [] and db.list_drafts() == []
     assert db.past_values_for("등원율", "2026-06-30") == []
+
+def test_indicator_data_store(fresh_db):
+    db = fresh_db
+    v = lambda c, val, bd="2026-06-30": {"indicator": "등원율", "center": c, "base_date": bd, "value": val, "definition": "d"}
+    bid, n = db.add_data_batch([v("센터A", 60.3), v("센터B", 59.4), {"indicator": "", "center": "x", "base_date": "y", "value": 1}, v("센터C", None)], "홍", "6월집계.xlsx", "메모")
+    assert n == 2 and [r["center"] for r in db.data_values_for("등원율", "2026-06-30")] == ["센터A", "센터B"]
+    # 같은 키 재적재 → 새 값으로 대체, 다른 기준일은 추가
+    bid2, n2 = db.add_data_batch([v("센터A", 61.0), v("센터A", 70.0, "2026-07-31")], "홍", "7월집계.xlsx")
+    rows = db.data_values_for("등원율", "2026-06-30"); assert len(rows) == 2 and {r["center"]: r["value"] for r in rows} == {"센터A": 61.0, "센터B": 59.4}
+    assert db.data_dates_for("등원율") == ["2026-07-31", "2026-06-30"] and db.data_count() == 3
+    cov = db.data_coverage(); assert [(c["indicator"], c["base_date"], c["n_centers"]) for c in cov] == [("등원율", "2026-07-31", 1), ("등원율", "2026-06-30", 2)]
+    bl = db.list_data_batches(); assert bl[0]["id"] == bid2 and bl[0]["n_rows"] == 2 and bl[1]["n_live"] == 1   # 첫 묶음의 센터A는 대체돼 1건만 남음
+    assert db.delete_data_batch(bid2) == 2 and db.data_count() == 1 and db.data_values_for("등원율", "2026-06-30")[0]["center"] == "센터B"

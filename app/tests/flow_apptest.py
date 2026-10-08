@@ -68,6 +68,12 @@ next(c for c in at.checkbox if c.key == f"del_req_{tmp}_ok").check().run()
 next(b for b in at.button if b.key == f"del_req_{tmp}_go").click().run(); assert not at.exception
 assert _db.get_request(tmp) is None and _db.get_request(1) is not None; print("이력 조회 수정·삭제 OK")
 
+# 지표 데이터: 9월 재산출 집계를 미리 넣어 둠 → 2단계에서 '지표 데이터'로 찾혀 자동으로 채워짐
+at = app("지표 데이터")
+ms_pick(at, "data_in_demo", "9월")
+button(at, "지표 데이터에 저장"); assert any("묶음 #1, 12건" in x.value for x in at.success), [x.value for x in at.success]
+assert any("등원율" in str(v) for v in at.dataframe[-1].value["지표"].tolist()) if len(at.dataframe) else True; print("지표 데이터 저장 OK")
+
 # 새 요구서 처리 1단계: 시연 새 요구서 → 읽기 → 등록(2단계로)
 at = app("새 요구서 처리", 1)
 s = sb(at, "new_demo"); s.select(next(o for o in s.options if "새요구서_의원실" in str(o))).run(); assert not at.exception
@@ -79,7 +85,7 @@ assert at.session_state["step"] == 2 and at.session_state.get("target_request");
 keep = {k: at.session_state[k] for k in ("target_request", "new_registered")}
 at = app("새 요구서 처리", 2, keep)
 # 기록에서 찾기: '6/30 기준 등원율'은 제출본 #1에 있음 → 가져오기 → 시연 9월 파일(자동 선택)이 겹치는 값을 덮어 차이 3 유지
-assert any("제출본 #1" in str(v) for v in at.dataframe[0].value["기록"].tolist()), at.dataframe[0].value
+where = at.dataframe[0].value["어디에 있나"].tolist(); assert any("지표 데이터" in str(v) for v in where), where
 button(at, "기록의 값 가져오기")
 assert any("기록에서 12건" in c.value for c in at.caption), [c.value for c in at.caption if "준비됨" in c.value]
 print("2단계 metric:", [(m.label, m.value) for m in at.metric])

@@ -18,3 +18,6 @@ def test_suggest_logic(fresh_db):
     db.add_submission(rid, "2026-05-20", "u", "f", "confirmed", "n", [{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 1}])
     s = suggest.suggest({"indicator": "등원율", "base_date": "2026-06-30"})
     assert "재사용" in s["판단"] and "감사실" in s["과거 제출"]
+    db.add_data_batch([{"indicator": "등원율", "center": "센터A", "base_date": "2026-06-30", "value": 2}], "u", "집계.xlsx")
+    s = suggest.suggest({"indicator": "등원율", "base_date": "2026-06-30"})
+    assert s["판단"].startswith("지표 데이터에 있음(1건)") and "대조" in s["판단"] and "감사실" in s["과거 제출"]

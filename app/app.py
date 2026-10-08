@@ -45,7 +45,7 @@ llm.configure(st.session_state["llm_cfg"], st.session_state["llm_state"], st.ses
 HAS_API = llm.available()
 
 NAV = [("업무", [("홈", "home"), ("새 요구서 처리", "description"), ("검토·승인", "task_alt")]),
-       ("기록", [("과거 답변 등록", "library_add"), ("이력 조회", "search"), ("현황", "monitoring"), ("이력에 묻기", "forum")]),
+       ("기록", [("지표 데이터", "database"), ("과거 답변 등록", "library_add"), ("이력 조회", "search"), ("현황", "monitoring"), ("이력에 묻기", "forum")]),
        ("", [("설정", "settings")])]
 PAGE_NAMES = [n for _, items in NAV for n, _ in items]
 
@@ -273,6 +273,44 @@ def page_home():
                  [["번호", "상태", "D-day", "요청 주체", "접수일", "제출기한", "제목", "확정 제출본"]], width="stretch", hide_index=True)
     if pending and st.button("검토 대기 초안 보기"): go("검토·승인")
 
+# ================= 지표 데이터 =================
+def page_data():
+    ui.page_title("지표 데이터", "자주 요구되는 지표의 집계값을 요구서와 상관없이 미리 넣어 둡니다. 새 요구서가 오면 같은 지표·기준일의 값이 2단계에서 자동으로 채워집니다.", "기록")
+    cov = db.data_coverage()
+    c1, c2 = st.columns([1.1, 1])
+    with c1:
+        st.markdown("### 넣기")
+        st.caption("월별 집계 엑셀, 실적표, 집계 시스템에서 내려받은 표를 그대로 올리면 됩니다. 같은 지표·센터·기준일이 이미 있으면 새 값으로 바뀝니다.")
+        vdf, vname = value_sources("data_in", "집계값", demo_files=sorted(SAMPLE.glob("등원율_*.xlsx")) + sorted(SAMPLE.glob("실적표_*.xlsx")))
+        note = st.text_input("출처 메모 (선택)", placeholder="예: 학사시스템 월 집계, 2026-07-03 추출", key="data_note")
+        if vdf is not None:
+            st.dataframe(vdf[VAL_COLS].rename(columns=VAL_KO), height=200, width="stretch")
+            inds = sorted(vdf["indicator"].unique()); dates = sorted(vdf["base_date"].unique())
+            st.caption(f"{len(vdf)}건 · 지표 {', '.join(inds[:6])} · 기준일 {', '.join(dates[:4])}" + (" …" if len(dates) > 4 else ""))
+            if st.button("지표 데이터에 저장", type="primary", key="data_save", icon=":material/database:"):
+                bid, n = db.add_data_batch(vdf.to_dict("records"), USER, vname, note.strip())
+                st.session_state["data_last"] = (bid, n); st.rerun()
+        if st.session_state.get("data_last"):
+            bid, n = st.session_state["data_last"]
+            a, b = st.columns([4, 1.4])
+            a.success(f"저장했습니다. 묶음 #{bid}, {n}건. 이제 새 요구서 2단계에서 같은 지표·기준일은 자동으로 채워집니다.")
+            if b.button("되돌리기", key="data_undo", icon=":material/undo:"):
+                db.delete_data_batch(bid); st.session_state.pop("data_last"); st.rerun()
+    with c2:
+        st.markdown("### 들어 있는 것")
+        if not cov:
+            st.info("아직 없습니다. 왼쪽에서 집계 파일을 올려 저장하면 지표 × 기준일 표가 여기 나타납니다.")
+        else:
+            st.dataframe(pd.DataFrame(cov).rename(columns={"indicator": "지표", "base_date": "기준일", "n_centers": "건수(센터)", "loaded_at": "최근 적재", "source": "출처"}), width="stretch", hide_index=True, height=min(60 + 35 * len(cov), 420))
+            st.caption(f"지표 {len({c['indicator'] for c in cov})}개 · 기준일 {len({c['base_date'] for c in cov})}개 · 값 {db.data_count()}건")
+        with st.expander("적재 묶음 (지우기)"):
+            for b in db.list_data_batches():
+                a, d = st.columns([5, 1])
+                a.caption(f"#{b['id']} · {b['loaded_at'][:16]} · {b['loaded_by']} · {b['source']} · {b['n_rows']}건(남은 {b['n_live']}건)" + (f" · {b['note']}" if b['note'] else ""))
+                if d.button("지우기", key=f"data_del_{b['id']}", type="tertiary", icon=":material/delete:"):
+                    db.delete_data_batch(b["id"]); st.rerun()
+        st.caption("[계획] 사내 집계 시스템·DB와 직접 연결(읽기 전용 조회)하면 이 화면에 올리는 일도 없어집니다. 연결 방식은 전산 부서와 협의 필요 [확인 필요].")
+
 # ================= 과거 답변 등록 =================
 def page_register():
     ui.page_title("과거 답변 등록", "예전 요구서와 그때 보낸 값을 넣어 두면, 다음에 같은 수치를 물을 때 '언제 누구에게 얼마로 답했는지'가 자동으로 붙습니다.", "기록")
@@ -356,6 +394,8 @@ def step_read():
             st.caption(f"지표 {it.get('indicator') or '사전에 없음'}{mb} · 기준일 {it.get('base_date') or '없음'} · 기간 {it.get('period') or '-'} · 단위 {it.get('unit') or '-'}")
             sg = suggest.suggest(it)
             st.markdown(f"→ **{sg['판단']}**  \n<span class='small-muted'>출처 {sg['데이터 출처']} · 담당 {sg['담당']} · 과거 제출 {sg['과거 제출']}</span>", unsafe_allow_html=True)
+            if it.get("indicator") and it.get("base_date") and (dv := db.data_values_for(it["indicator"], it["base_date"])):
+                st.markdown(f"지표 데이터에 있음: **{len(dv)}건** · 적재 {dv[0]['loaded_at'][:10]} · {dv[0]['source']} → 2단계에서 자동으로 채워짐")
             if it.get("indicator") and it.get("base_date"):
                 past = db.past_values_for(it["indicator"], it["base_date"])
                 subs = {}
@@ -386,21 +426,29 @@ def step_compare():
     target = st.selectbox("이번에 회신할 요구서", reqs, index=tgt_default, format_func=req_label)
     items = db.get_items(target["id"])
     # 1) 기록에서 먼저 찾는다: 항목의 지표·기준일이 이미 낸 값과 같으면 그 값을 쓰면 된다(새로 만들 필요 없음)
-    found, missing, hit_sids = {}, [], {}
+    found, missing, hit_sids, where = {}, [], {}, {}
     for it in items:
-        if it.get("indicator") and it.get("base_date"):
-            past = db.past_values_for(it["indicator"], it["base_date"])
+        k = (it.get("indicator"), it.get("base_date"))
+        if k[0] and k[1]:
+            data = db.data_values_for(*k)                       # 1순위: 미리 넣어 둔 지표 데이터(부서의 현재 집계)
+            if data:
+                found[k] = (data, None); where[k] = f"지표 데이터 · 적재 {data[0]['loaded_at'][:10]} · {data[0]['source']} · {len(data)}건"
+                for p_ in db.past_values_for(*k)[:1]: hit_sids[p_["submission_id"]] = hit_sids.get(p_["submission_id"], 0) + 1
+                continue
+            past = db.past_values_for(*k)                         # 2순위: 과거에 낸 값
             if past:
                 latest_sid = past[0]["submission_id"]; rows = [v for v in past if v["submission_id"] == latest_sid]
-                found[(it["indicator"], it["base_date"])] = (rows, past[0]); hit_sids[latest_sid] = hit_sids.get(latest_sid, 0) + 1; continue
+                found[k] = (rows, past[0]); where[k] = f"과거 제출본 #{latest_sid} · {past[0]['submitted_date']} · {past[0]['requester']} · {len(rows)}건"
+                hit_sids[latest_sid] = hit_sids.get(latest_sid, 0) + 1; continue
         missing.append(it)
     hist_key = ("cmp_hist", target["id"])
     with st.container(border=True):
-        st.markdown("**기록에서 찾기** — 이 요구서의 항목 중 이미 낸 적이 있는 지표·기준일은 그 값을 그대로 가져옵니다. 새로 만들 것은 아래에만 올리면 됩니다.")
+        st.markdown("**기록에서 찾기** — 항목의 지표·기준일이 '지표 데이터'에 있으면 그 값을, 없으면 과거에 낸 값을 가져옵니다. 새로 만들 것은 아래에만 올리면 됩니다.")
         if items:
             rows_tbl = [{"항목": it["item_text"], "지표": it.get("indicator") or "-", "기준일": it.get("base_date") or "-",
-                         "기록": (f"제출본 #{found[k][1]['submission_id']} · {found[k][1]['submitted_date']} · {found[k][1]['requester']} · {len(found[k][0])}건" if (k := (it.get("indicator"), it.get("base_date"))) in found
-                                 else ("기준일이 없어 찾을 수 없음" if not it.get("base_date") else ("지표를 모름" if not it.get("indicator") else "없음 → 새로 산출")))} for it in items]
+                         "어디에 있나": where.get((it.get("indicator"), it.get("base_date")),
+                                             "기준일이 없어 찾을 수 없음" if not it.get("base_date") else ("지표를 모름" if not it.get("indicator") else
+                                             (f"없음 → 새로 산출 (지표 데이터에 있는 기준일: {', '.join(db.data_dates_for(it['indicator'])[:3])})" if db.data_dates_for(it["indicator"]) else "없음 → 새로 산출")))} for it in items]
             st.dataframe(pd.DataFrame(rows_tbl), width="stretch", hide_index=True)
         else: st.caption("이 요구서에 항목이 없습니다. 이력 조회에서 항목을 넣거나 1단계에서 다시 읽으세요.")
         b1, b2, b3 = st.columns([2.4, 1.3, 2.6])
@@ -408,7 +456,8 @@ def step_compare():
         if found and b1.button(f"기록의 값 가져오기 ({len(found)}개 항목 · {n_found}건)", type="primary", key="cmp_pull", icon=":material/history:"):
             parts = []
             for rows, meta in found.values():
-                df = pd.DataFrame(rows)[VAL_COLS].copy(); df["source_file"] = f"기록 제출본 #{meta['submission_id']} ({meta['submitted_date']} {meta['requester']})"; df["source_sheet"] = ""; df["source_row"] = None
+                df = pd.DataFrame(rows)[VAL_COLS].copy(); df["source_sheet"] = ""; df["source_row"] = None
+                df["source_file"] = f"기록 제출본 #{meta['submission_id']} ({meta['submitted_date']} {meta['requester']})" if meta else f"지표 데이터 ({rows[0]['source']}, 적재 {rows[0]['loaded_at'][:10]})"
                 parts.append(df)
             st.session_state[hist_key] = pd.concat(parts, ignore_index=True); st.rerun()
         if st.session_state.get(hist_key) is not None and b2.button("가져온 값 비우기", key="cmp_pull_clear"):
@@ -806,7 +855,7 @@ def page_settings():
             except FileNotFoundError:
                 st.info("서식 원본이 상위 폴더에 없어 templates/의 기존 샘플을 그대로 씁니다.")
 
-PAGES = {"홈": page_home, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register,
+PAGES = {"홈": page_home, "새 요구서 처리": page_process, "검토·승인": page_review, "과거 답변 등록": page_register, "지표 데이터": page_data,
          "이력 조회": page_history, "현황": page_status, "이력에 묻기": page_ask, "설정": page_settings}
 if not HAS_API and page != "설정": ui.ai_banner(lambda: go("설정"))
 PAGES[page]()
