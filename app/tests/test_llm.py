@@ -34,7 +34,7 @@ def use(monkeypatch, fake): monkeypatch.setattr(llm, "_provider", lambda: fake);
 def test_structured_output_used_and_recorded(monkeypatch):
     f = use(monkeypatch, Fake(['{"a": 1}']))
     assert llm.ask_json("p", schema={"type": "object"}) == {"a": 1}
-    assert f.calls[0]["schema"] is not None and llm.LAST["structured"] is True and llm.LAST["cost_usd"] == 0.0075
+    assert f.calls[0]["schema"] is not None and llm.LAST["structured"] is True and llm.LAST["cost_usd"] == 0.01
 
 def test_400_on_output_config_falls_back_to_text_and_remembers(monkeypatch):
     f = use(monkeypatch, Fake([err(anthropic.BadRequestError, 400, "output_config: extra inputs"), '```json\n{"a": 2}\n```', '{"a": 3}']))
@@ -64,7 +64,7 @@ def test_usage_summary_and_pricing_unknown(monkeypatch):
     use(monkeypatch, Fake(['{"a":1}', '{"a":1}']))
     llm.ask("p"); monkeypatch.setenv("CLAUDE_MODEL", "claude-unknown-9"); llm._GLOBAL_STATE["resolved"] = None; llm.ask("p")
     u = llm.usage_summary()
-    assert u["calls"] == 2 and u["cost_unknown_calls"] == 1 and u["cost_usd"] == 0.0075
+    assert u["calls"] == 2 and u["cost_unknown_calls"] == 1 and u["cost_usd"] == 0.01
 
 def test_explain_error_messages():
     assert "401" in llm.explain_error(err(anthropic.AuthenticationError, 401, "x"))
@@ -99,4 +99,4 @@ def test_progress_callback_receives_call_stages(monkeypatch):
 
 def test_timeout_scales_with_max_tokens():
     import providers
-    assert providers.AnthropicProvider.timeout_for(2000) == 130 and providers.AnthropicProvider.timeout_for(6000) == 210 and providers.AnthropicProvider.timeout_for(100000) == 600
+    assert providers.AnthropicProvider.timeout_for(2000) == 130 and providers.AnthropicProvider.timeout_for(6000) == 210 and providers.AnthropicProvider.timeout_for(100000) == 900

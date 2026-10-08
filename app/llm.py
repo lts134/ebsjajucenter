@@ -92,7 +92,7 @@ def _record(msg, model: str, t0: float, purpose: str, structured: bool) -> str:
     LAST.clear(); LAST.update(info); log().append(info)
     return text
 
-MAX_TOKENS_CAP = 16000          # 잘림 재시도 때 늘릴 수 있는 상한(비스트리밍 호출 10분 제한 안)
+MAX_TOKENS_CAP = 32000          # 잘림 재시도 때 늘릴 수 있는 상한. 추론 모델(Opus 5.5·Fable)은 생각 토큰도 이 한도에 들어가므로 넉넉히 둔다(한도는 상한일 뿐 쓴 만큼만 과금)
 
 class Truncated(RuntimeError):
     """응답이 max_tokens에 잘렸다(stop_reason=max_tokens). JSON이면 해석 불가이므로 더 큰 한도로 다시 시도해야 한다."""
@@ -114,7 +114,9 @@ def _notify(text: str):
         try: fn(text)
         except Exception: pass
 
-def ask(prompt: str, system: str | None = None, max_tokens: int = 2000, purpose: str = "", schema: dict | None = None) -> str:
+DEFAULT_MAX_TOKENS = 8000       # 호출 기본 출력 한도. 추론 모델은 답 앞에 생각 토큰을 쓰므로 2,000으로는 JSON이 잘렸다
+
+def ask(prompt: str, system: str | None = None, max_tokens: int = DEFAULT_MAX_TOKENS, purpose: str = "", schema: dict | None = None) -> str:
     """텍스트 응답. 모델 없음이면 다음 후보로. schema가 있으면 구조화 출력, 모델이 거부하면 그 모델은 이후 텍스트 방식.
     응답이 max_tokens에 잘리면 Truncated(잘린 본문 포함)를 올린다."""
     prov, state = _provider(), _state()
@@ -152,7 +154,7 @@ def parse_json(raw: str, expect: str = "object"):
     if i < 0 or j < 0: raise ValueError(f"응답에 JSON {expect}가 없음: {raw[:120]!r}")
     return json.loads(s[i:j + 1])
 
-def ask_json(prompt: str, system: str | None = None, max_tokens: int = 2000, expect: str = "object", purpose: str = "", schema: dict | None = None):
+def ask_json(prompt: str, system: str | None = None, max_tokens: int = DEFAULT_MAX_TOKENS, expect: str = "object", purpose: str = "", schema: dict | None = None):
     """JSON 응답. schema(JSON Schema, 객체 루트)가 있으면 구조화 출력을 쓴다. expect="array"면 schema 없이 텍스트 파싱."""
     sys_ = (system + "\n\n" if system else "") + "출력은 JSON만. 설명·코드펜스·주석을 붙이지 말 것."
     sch = schema if expect == "object" else None
@@ -190,7 +192,7 @@ def test_connection() -> dict:
         res["models_error"] = explain_error(e)
     try:
         before = len(log())
-        txt = ask('다음을 JSON으로만 답하세요: {"ok": true}', max_tokens=400, purpose="연결 테스트")      # 추론 모델은 생각 토큰도 한도에 들어가 20으로는 잘린다
+        txt = ask('다음을 JSON으로만 답하세요: {"ok": true}', max_tokens=1000, purpose="연결 테스트")     # 추론 모델은 생각 토큰도 한도에 들어가 20으로는 잘린다
         info = log()[-1] if len(log()) > before else {}
         res.update(ok=True, model=info.get("model"), latency_s=info.get("latency_s"), reply=txt.strip()[:60])
     except Exception as e:
@@ -207,12 +209,12 @@ def usage_summary() -> dict:
             "cost_unknown_calls": sum(1 for c in costs if c is None),
             "structured_calls": sum(1 for x in L if x.get("structured"))}
 
-def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = 2000, purpose: str = "도구 질의") -> dict:
+def run_tools(prompt: str, system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = DEFAULT_MAX_TOKENS, purpose: str = "도구 질의") -> dict:
     """도구 호출 루프(수동). 모델이 tools 중 하나를 고르면 handlers[name](**input)을 실행해 결과를 돌려주고, 더 이상 호출이 없으면 최종 답을 반환.
     반환: {"text": 최종 답, "trace": [{"tool", "input", "result", "rows"}...], "turns": n}. 모델 없음이면 다음 후보로."""
     return run_tools_conv([{"role": "user", "content": prompt}], system, tools, handlers, max_turns, max_tokens, purpose)
 
-def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = 2000,
+def run_tools_conv(messages: list[dict], system: str, tools: list[dict], handlers: dict, max_turns: int = 8, max_tokens: int = DEFAULT_MAX_TOKENS,
                    purpose: str = "도구 질의", on_tool=None) -> dict:
     """이어지는 대화용 도구 호출 루프. messages(이전 대화 + 이번 사용자 메시지)를 받아 모델이 도구를 다 쓸 때까지 돌고,
     새 메시지들을 덧붙인 전체 대화를 "messages"로 돌려준다(다음 턴에 그대로 넘기면 기억이 이어짐).

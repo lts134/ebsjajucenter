@@ -21,7 +21,7 @@
 내장 공급자: Anthropic Claude(기본, 공식 SDK) · OpenAI 호환(provider_openai.py: OpenAI·Azure·호환 게이트웨이, HTTP) · Google Gemini(provider_gemini.py, HTTP) · 사용 안 함.
 예시 플러그인 골격은 docs/provider_template.py 참고."""
 from __future__ import annotations
-import importlib, inspect, os, pkgutil
+import importlib, inspect, os, pkgutil, re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -116,16 +116,19 @@ class AnthropicProvider(Provider):
     fields = [
         {"key": "api_key", "label": "API 키", "secret": True, "required": True, "env": "ANTHROPIC_API_KEY"},
         {"key": "workspace_id", "label": "워크스페이스 ID(wrkspc_…) — 키가 워크스페이스에 묶여 있지 않을 때만", "secret": True, "required": False, "env": "ANTHROPIC_WORKSPACE_ID"},
+        {"key": "effort", "label": "추론 강도(effort) — low·medium·high·xhigh·max. 비우면 모델 기본(Opus 5.5는 medium). 추출만 빨리 하려면 low", "secret": False, "required": False, "env": "LLM_EFFORT"},
     ]
-    # 2026-09-28 API 모델 목록 조회로 확인한 실존 ID. 설정 화면 '연결 테스트'에서 다시 조회해 고를 수 있다.
-    default_models = ["claude-sonnet-4-6", "claude-sonnet-5", "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001"]
-    # USD / 100만 토큰(입력, 출력). 출처: Anthropic 공개 가격표(2026-09-25 기준 캐시). 실제 청구는 콘솔 확인 [확인 필요].
+    # 기본 후보 순서: 현 세대 최상위(Opus 5.5) → 현 세대 Sonnet → 검증된 이전 세대(Sonnet 4.6, 추출 25/25) → 소형. 설정 화면 '연결 테스트'에서 실제 목록을 조회해 고를 수 있다.
+    default_models = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5"]
+    # USD / 100만 토큰(입력, 출력). 출처: Anthropic 공개 가격표(2026-10-06 기준 캐시). 실제 청구는 콘솔 확인 [확인 필요].
     pricing = {
-        "claude-sonnet-4-6": (3.00, 15.00), "claude-sonnet-5": (2.00, 10.00), "claude-sonnet-5-5": (2.00, 10.00),
-        "claude-haiku-4-5-20251001": (1.00, 5.00), "claude-haiku-4-5": (1.00, 5.00),
+        "claude-fable-5-1": (10.00, 50.00), "claude-fable-5": (10.00, 50.00),
         "claude-opus-5-5": (4.00, 20.00), "claude-opus-5": (5.00, 25.00), "claude-opus-4-8": (5.00, 25.00),
         "claude-opus-4-7": (5.00, 25.00), "claude-opus-4-6": (5.00, 25.00),
+        "claude-sonnet-5-5": (2.00, 10.00), "claude-sonnet-5": (2.00, 10.00), "claude-sonnet-4-6": (3.00, 15.00),
+        "claude-haiku-5-5": (0.10, 0.50), "claude-haiku-4-5-20251001": (1.00, 5.00), "claude-haiku-4-5": (1.00, 5.00),
     }
+    FALLBACK_BETA = "server-side-fallback-2026-07-01"          # 5.x 모델이 안전 분류로 거절하면 서버가 정해 둔 대체 모델로 다시 시도(fallbacks="default")
     docs_url = "https://console.anthropic.com"
 
     def _client(self):
@@ -141,16 +144,35 @@ class AnthropicProvider(Provider):
 
     @staticmethod
     def timeout_for(max_tokens: int) -> float:
-        """출력 한도에 비례한 요청 타임아웃: 기본 90초 + 1,000토큰당 20초(느린 모델이 긴 JSON을 쓸 때 끊기지 않게), 최대 600초."""
-        return float(min(600, TIMEOUT_S + max_tokens / 1000 * 20))
+        """출력 한도에 비례한 요청 타임아웃: 기본 90초 + 1,000토큰당 20초(추론 모델은 생각 토큰까지 한도에 들어가 길어질 수 있다), 최대 900초."""
+        return float(min(900, TIMEOUT_S + max_tokens / 1000 * 20))
 
-    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None):
-        client = self._client()
-        kw = dict(model=model, max_tokens=max_tokens, messages=messages, timeout=self.timeout_for(max_tokens), **self._ws_kwargs(client.messages.create))
+    @staticmethod
+    def wants_fallback(model: str) -> bool:
+        """서버 측 거절 대체(fallbacks)를 붙일 모델: Opus 5.x · Sonnet 5.5 · Fable 5.x. Haiku 5.5·4.x 세대는 지원하지 않는다."""
+        return bool(re.match(r"claude-(opus-5|sonnet-5-5|fable-5)", model or ""))
+
+    def request_kwargs(self, *, model, max_tokens, messages, system=None, tools=None, schema=None) -> dict:
+        """SDK에 넘길 인자(테스트에서 그대로 검사). 추론 강도(effort)는 설정에 있을 때만 output_config에 넣는다(지원 안 하는 구형 모델에 보내면 400)."""
+        kw = dict(model=model, max_tokens=max_tokens, messages=messages, timeout=self.timeout_for(max_tokens))
         if system: kw["system"] = system
         if tools: kw["tools"] = tools
-        if schema is not None: kw["output_config"] = {"format": {"type": "json_schema", "schema": schema}}
-        return client.messages.create(**kw)
+        oc = {}
+        if schema is not None: oc["format"] = {"type": "json_schema", "schema": schema}
+        if self.value("effort"): oc["effort"] = self.value("effort").lower()
+        if oc: kw["output_config"] = oc
+        return kw
+
+    def create_message(self, *, model, max_tokens, messages, system=None, tools=None, schema=None):
+        import anthropic
+        client = self._client()
+        kw = self.request_kwargs(model=model, max_tokens=max_tokens, messages=messages, system=system, tools=tools, schema=schema)
+        if self.wants_fallback(model):
+            try:
+                return client.beta.messages.create(**kw, betas=[self.FALLBACK_BETA], fallbacks="default", **self._ws_kwargs(client.beta.messages.create))
+            except anthropic.BadRequestError as e:
+                if "fallback" not in str(e).lower() and "beta" not in str(e).lower(): raise      # 대체 기능 자체를 거부한 경우만 일반 호출로
+        return client.messages.create(**kw, **self._ws_kwargs(client.messages.create))
 
     def list_models(self) -> list[dict]:
         client = self._client()
@@ -182,7 +204,7 @@ class AnthropicProvider(Provider):
                 return "API 크레딧 잔액이 부족합니다. 콘솔(Plans & Billing)에서 충전한 뒤 다시 시도하세요. 키·워크스페이스 설정은 정상입니다."
             return f"요청 형식 오류(400): {m[:200]}"
         if isinstance(e, anthropic.APIStatusError) and e.status_code >= 500: return f"Anthropic 서버 오류({e.status_code}). 자동 재시도 후에도 실패했습니다. 잠시 후 다시 시도하세요."
-        if isinstance(e, anthropic.APITimeoutError): return "응답 시간 초과. 네트워크 상태를 확인하거나, 더 빠른 모델(예: claude-sonnet-4-6)을 고르거나, 요구서를 나누어 올리세요."
+        if isinstance(e, anthropic.APITimeoutError): return "응답 시간 초과. 네트워크 상태를 확인하거나, 더 빠른 모델(예: claude-sonnet-5-5)이나 낮은 추론 강도(effort=low)를 고르거나, 요구서를 나누어 올리세요."
         if isinstance(e, anthropic.APIConnectionError): return "API 서버에 연결하지 못했습니다. 사내망 프록시·방화벽에서 api.anthropic.com 허용 여부를 확인하세요."
         return None
 

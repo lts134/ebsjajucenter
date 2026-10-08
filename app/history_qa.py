@@ -69,7 +69,7 @@ def ask(question: str) -> dict:
     if not llm.available():
         return {"text": None, "trace": [], "turns": 0, "how": "키 없음 — 키워드 검색"}
     try:
-        r = llm.run_tools(question, SYSTEM, TOOLS, HANDLERS, max_turns=8, max_tokens=1500, purpose="이력 질의")
+        r = llm.run_tools(question, SYSTEM, TOOLS, HANDLERS, max_turns=8, max_tokens=6000, purpose="이력 질의")
         r["how"] = f"Claude({llm.model_label()}) 도구 호출 {len(r['trace'])}회"; return r
     except Exception as e:
         return {"text": None, "trace": [], "turns": 0, "how": f"Claude 오류: {llm.explain_error(e)}"}

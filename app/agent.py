@@ -345,7 +345,7 @@ def chat_turn(case: Case, messages: list[dict], user_text: str, template_bytes: 
     """Claude 경로 한 턴. messages는 이전 대화(도구 호출 포함). notes는 이번 턴 첨부 파일 처리 결과(모델도 알아야 한다). 반환: run_tools_conv 결과(text·trace·messages)."""
     ctx = status_line(case) + ("".join(f"\n[첨부 처리] {n}" for n in notes) if notes else "")
     msgs = list(messages) + [{"role": "user", "content": f"{ctx}\n\n{user_text}"}]
-    return llm.run_tools_conv(msgs, SYSTEM, TOOLS, handlers(case, template_bytes), max_turns=12, max_tokens=3000, purpose="대화 처리", on_tool=on_tool)
+    return llm.run_tools_conv(msgs, SYSTEM, TOOLS, handlers(case, template_bytes), max_turns=12, max_tokens=12000, purpose="대화 처리", on_tool=on_tool)
 
 def is_do_it(text: str) -> bool:
     """규칙 경로에서 '전부 처리' 지시로 볼 문장."""

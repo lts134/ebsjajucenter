@@ -396,7 +396,7 @@ def suggest_mapping(grid: Grid, info: TableInfo) -> dict:
     payload = {"title": info.title, "notes": info.notes[:3], "columns": head, "rows": sample}
     prompt = ("다음 표의 구조를 판단해 JSON으로 답하세요. center_col은 센터·시군구 같은 행 이름 열 번호, value_cols는 값 열 번호와 지표명, "
               "base_date는 제목·주석에 적힌 기준일.\n" + str(pii.redact_obj(payload)))
-    res = llm.ask_json(prompt, MAP_SYSTEM % ", ".join(normalize.CANON), 800, purpose="표 열 매핑 제안", schema=MAP_SCHEMA)
+    res = llm.ask_json(prompt, MAP_SYSTEM % ", ".join(normalize.CANON), 4000, purpose="표 열 매핑 제안", schema=MAP_SCHEMA)
     w = grid.width()
     out = {"center_col": res.get("center_col") if isinstance(res.get("center_col"), int) and 0 <= res.get("center_col") < w else None,
            "value_cols": [(v["col"], v["indicator"]) for v in res.get("value_cols") or []

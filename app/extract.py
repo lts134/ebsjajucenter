@@ -123,7 +123,7 @@ def schema() -> dict:
             "required": ["requester", "received_date", "due_date", "title", "items"]}
 
 def llm_based(text: str) -> dict:
-    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), today().isoformat(), text), SYSTEM, 6000, purpose="요구서 추출", schema=schema())
+    res = llm.ask_json(PROMPT % (", ".join(INDICATORS), today().isoformat(), text), SYSTEM, 12000, purpose="요구서 추출", schema=schema())
     items = []
     for it in res.get("items") or []:
         if not isinstance(it, dict) or not it.get("item_text"): continue

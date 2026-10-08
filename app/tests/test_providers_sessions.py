@@ -26,9 +26,9 @@ def test_two_threads_keep_separate_keys_models_and_logs(monkeypatch):
         llm.configure({"provider": "anthropic", "api_key": key, "model": model}, st, log)
         import time; time.sleep(0.05)
         seen[name] = (llm._provider().value("api_key"), llm.model_label(), llm.log() is log, llm._state() is st)
-    t1 = threading.Thread(target=worker, args=("A", "sk-A", "claude-sonnet-4-6")); t2 = threading.Thread(target=worker, args=("B", "sk-B", "claude-haiku-4-5-20251001"))
+    t1 = threading.Thread(target=worker, args=("A", "sk-A", "claude-sonnet-4-6")); t2 = threading.Thread(target=worker, args=("B", "sk-B", "claude-haiku-5-5"))
     t1.start(); t2.start(); t1.join(); t2.join()
-    assert seen["A"] == ("sk-A", "claude-sonnet-4-6", True, True) and seen["B"] == ("sk-B", "claude-haiku-4-5-20251001", True, True)
+    assert seen["A"] == ("sk-A", "claude-sonnet-4-6", True, True) and seen["B"] == ("sk-B", "claude-haiku-5-5", True, True)
     assert llm.available() is False            # 메인 스레드에는 아무 설정도 새지 않음
 
 def test_state_dict_persists_resolved_model_across_configures():
@@ -58,3 +58,16 @@ def test_simple_message_shape_works_with_record():
     msg = providers.SimpleMessage(content=[providers.TextBlock("안녕")], usage=providers.SimpleUsage(10, 5))
     assert llm._record(msg, "x-model", 0.0, "t", False) == "안녕" and llm.LAST["input_tokens"] == 10 and llm.LAST["cost_usd"] is None
     llm.reset()
+
+
+def test_anthropic_request_kwargs_effort_fallback_and_defaults():
+    p = providers.AnthropicProvider({"api_key": "k"})
+    kw = p.request_kwargs(model="claude-opus-5-5", max_tokens=8000, messages=[{"role": "user", "content": "x"}], system="s", schema={"type": "object"})
+    assert kw["output_config"] == {"format": {"type": "json_schema", "schema": {"type": "object"}}} and kw["timeout"] == 90 + 8000 / 1000 * 20 and "thinking" not in kw and "temperature" not in kw
+    p2 = providers.AnthropicProvider({"api_key": "k", "effort": "Low"})
+    kw2 = p2.request_kwargs(model="claude-opus-5-5", max_tokens=100, messages=[])
+    assert kw2["output_config"] == {"effort": "low"}
+    assert providers.AnthropicProvider.wants_fallback("claude-opus-5-5") and providers.AnthropicProvider.wants_fallback("claude-fable-5-1") and providers.AnthropicProvider.wants_fallback("claude-sonnet-5-5")
+    assert not providers.AnthropicProvider.wants_fallback("claude-haiku-5-5") and not providers.AnthropicProvider.wants_fallback("claude-sonnet-4-6")
+    assert providers.AnthropicProvider.default_models[0] == "claude-opus-5-5" and providers.AnthropicProvider.pricing["claude-fable-5-1"] == (10.0, 50.0)
+    assert providers.AnthropicProvider.timeout_for(32000) == 730 and llm.MAX_TOKENS_CAP == 32000 and llm.DEFAULT_MAX_TOKENS == 8000

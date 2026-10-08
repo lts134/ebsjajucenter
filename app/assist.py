@@ -48,7 +48,7 @@ def reason_candidates(diff_rows: list[dict]) -> tuple[dict, str]:
                      "properties": {"key": {"type": "string"}, "candidates": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["문구", "근거"],
                         "properties": {"문구": {"type": "string"}, "근거": {"type": "string"}}}}}}}}}
         res = llm.ask_json("각 차이 행에 대해 사유 문구 후보를 1~3개씩 제안하세요. 근거에는 '대조 단서: …' 또는 '과거 입력 사유(입력일, 요청 주체, 센터)'를 적습니다.\n" + json.dumps(payload, ensure_ascii=False, default=str),
-                           SYSTEM_REASON, 2000, purpose="사유 후보", schema=schema)
+                           SYSTEM_REASON, 8000, purpose="사유 후보", schema=schema)
         out = {}
         for row in res.get("rows", []):
             parts = str(row.get("key", "")).split("|")
@@ -107,7 +107,7 @@ def foresee(req: dict, items: list[dict], values: pd.DataFrame, reasons: dict, c
                   "properties": {"questions": {"type": "array", "items": {"type": "object", "additionalProperties": False, "required": ["질문", "근거", "준비할 자료", "가능성"],
                      "properties": {"질문": {"type": "string"}, "근거": {"type": "string"}, "준비할 자료": {"type": "string"}, "가능성": {"type": "string", "enum": ["높음", "중간", "낮음"]}}}}}}
         res = llm.ask_json("요구 주체가 이 회신을 받고 던질 법한 후속 질문 3~6개를 가능성 높은 순으로 제안하세요.\n" + json.dumps(payload, ensure_ascii=False, default=str),
-                           SYSTEM_FORESEE, 2000, purpose="후속 질문 예측", schema=schema)
+                           SYSTEM_FORESEE, 8000, purpose="후속 질문 예측", schema=schema)
         qs = [q for q in res.get("questions", []) if q.get("질문")]
         return (qs or rule), f"Claude({llm.model_label()})" if qs else "규칙(Claude 응답 없음)"
     except Exception as e:

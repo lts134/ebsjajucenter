@@ -65,7 +65,7 @@ def llm_draft(req, items, values, reasons, provenance, checklist=None) -> dict:
               + json.dumps(payload, ensure_ascii=False, default=str))
     schema = {"type": "object", "additionalProperties": False, "required": ["제목", "본문", "차이사유", "산출근거"],
               "properties": {k: {"type": "string"} for k in ("제목", "본문", "차이사유", "산출근거")}}
-    d = llm.ask_json(prompt, SYSTEM, 2500, purpose="회신 초안", schema=schema)
+    d = llm.ask_json(prompt, SYSTEM, 8000, purpose="회신 초안", schema=schema)
     return {k: str(d.get(k, "") or "") for k in ("제목", "본문", "차이사유", "산출근거")}
 
 def make_draft(req, items, values, reasons, provenance, checklist=None) -> tuple[dict, str]:
@@ -104,6 +104,6 @@ def coverage_check_llm(items, draft, values: pd.DataFrame | None = None, checkli
                      json.dumps(compare_summary(checklist) or "없음", ensure_ascii=False),
                      json.dumps({" ".join(k): v for k, v in (reasons or {}).items() if v}, ensure_ascii=False),
                      json.dumps(provenance or {}, ensure_ascii=False, default=str), json.dumps(draft, ensure_ascii=False)))
-        return llm.ask(prompt, "당신은 공공기관 회신 문서 검토자입니다. 지적은 구체적으로, 근거 없는 추측은 하지 않습니다.", 800, purpose="초안 점검")
+        return llm.ask(prompt, "당신은 공공기관 회신 문서 검토자입니다. 지적은 구체적으로, 근거 없는 추측은 하지 않습니다.", 4000, purpose="초안 점검")
     except Exception as e:
         return f"(Claude 점검 실패: {type(e).__name__}: {e})"
